@@ -51,7 +51,7 @@
 
 ## 常用命令
 
-- `/resume` —— 召回项目上下文（读 STATUS + README + 当前 milestone + 最近 5 个开放 issue）
+- `/resumex` —— 召回项目上下文（读 STATUS + README + 当前 milestone + 最近 5 个开放 issue）
 - `/new-task <描述>` —— 从对话创建 GitHub issue（自动推断 type/module label + 反向链接）
 - `/sync-status` —— session 末同步：关闭已完成 issue + 更新 STATUS.md
 - 文档术语查询 → `docs/GLOSSARY.md`

@@ -127,7 +127,7 @@ GitHub 原生 milestones 对应路线图 M1-M5：
 
 | 命令 | 用途 |
 |---|---|
-| `/resume` | 召回项目上下文（读 STATUS + 当前 milestone + 最近 5 个开放 issue） |
+| `/resumexx` | 召回项目上下文（读 STATUS + 当前 milestone + 最近 5 个开放 issue） |
 | `/new-task` | 从对话创建 issue（自动推断 type/module label，写反向链接） |
 | `/sync-status` | session 末同步：关闭已完成 issue + 更新 STATUS |
 
@@ -140,7 +140,7 @@ GitHub 原生 milestones 对应路线图 M1-M5：
 ### 7.1 开始新 session
 
 ```
-/resume
+/resumex
 ```
 
 Claude 会读 STATUS + 最近开放 issue + 当前 milestone 章节，回报状态。

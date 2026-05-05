@@ -145,7 +145,7 @@ session 结束前对 Claude 说：「更新 STATUS.md」。它会按结构改：
 
 ### 8.4 新 session 怎么入场
 
-打开新 session 后输入 `/resume`，Claude 会读 STATUS + README + 当前 milestone 章节，回报状态。
+打开新 session 后输入 `/resumex`，Claude 会读 STATUS + README + 当前 milestone 章节，回报状态。
 
 或直接对 Claude 说：「读 docs/STATUS.md 然后告诉我现在该做什么」。
 
@@ -167,7 +167,7 @@ session 结束前对 Claude 说：「更新 STATUS.md」。它会按结构改：
 
 | 场景 | 命令 |
 |---|---|
-| 开始 session | `/resume`（读 STATUS + 最近 5 个开放 issue） |
+| 开始 session | `/resumex`（读 STATUS + 最近 5 个开放 issue） |
 | 接到新任务 | `/new-task <一句话描述>` |
 | Session 结束 | `/sync-status`（关闭完成的 issue + 更新 STATUS） |
 

@@ -4,7 +4,7 @@
 - 适用阶段：**MVP 实施期**（M1-M5，10 周）
 
 > **新人路径**：先读本页 §一句话定位 → §五份对齐文档 → 路线图，5 分钟可入场。
-> **实施期入场**：直接读 [STATUS.md](STATUS.md)（当前进度 / 下一步 / 阻塞）；新 session 用 `/resume` 召回上下文。
+> **实施期入场**：直接读 [STATUS.md](STATUS.md)（当前进度 / 下一步 / 阻塞）；新 session 用 `/resumex` 召回上下文。
 > **任务跟踪**：GitHub Issues（详见 [github-workflow.md](github-workflow.md)）；用 `/new-task` 与 `/sync-status` 维护。
 > **工作约定**：见 [WORKFLOW.md](WORKFLOW.md)；术语解释见 [GLOSSARY.md](GLOSSARY.md)；决策记录见 [decisions.md](decisions.md)。
 

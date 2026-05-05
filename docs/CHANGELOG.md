@@ -22,7 +22,7 @@ related:
 - 新增 `docs/STATUS.md` —— 当前进度快照（任务级清单交给 GitHub Issues）。
 - 新增 `docs/github-workflow.md` —— Labels 体系（type/module/priority/status）+ Milestones（M1-M5/P1）+ 命名约定 + 接入步骤。
 - 新增 `docs/templates/status-template.md`、`.github/ISSUE_TEMPLATE/{feat,spike,fix}.yml`、`.gitignore`。
-- 新增 3 个自定义 slash 命令：`/resume`（升级，加读最近 5 个开放 issue）、`/new-task`（创建 issue）、`/sync-status`（关闭完成 issue + 更新 STATUS）。
+- 新增 3 个自定义 slash 命令：`/resumex`（加读最近 5 个开放 issue）、`/new-task`（创建 issue）、`/sync-status`（关闭完成 issue + 更新 STATUS）。
 - 修改 `WORKFLOW.md`（加 §8 Session 进度管理 + §9 GitHub Issues 工作流）、`README.md`（新人路径加任务跟踪指引）。
 - **远端仓库未接入**（先做设计，接入推迟到用户决定时机）。
 

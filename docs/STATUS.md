@@ -33,7 +33,7 @@ related:
 - 6 份基线文档归档（PRD / 架构 / flows / UAT / 人格 / 路线图）
 - 立项档案：[research/competitor-research.md](research/competitor-research.md)
 - 文档工程化重构 + 单人化简化（详见 [CHANGELOG.md](CHANGELOG.md) 同期条目）
-- 项目记忆系统 + GitHub Issues 工作流设计（CLAUDE.md / STATUS.md / `/resume` `/new-task` `/sync-status` / `.github/ISSUE_TEMPLATE/` / `.gitignore`）
+- 项目记忆系统 + GitHub Issues 工作流设计（CLAUDE.md / STATUS.md / `/resumex` `/new-task` `/sync-status` / `.github/ISSUE_TEMPLATE/` / `.gitignore`）
 
 ---
 
@@ -43,8 +43,8 @@ related:
 
 1. **文档工程化重构**：文件夹改名（中文 → 英文）、统一 YAML frontmatter（3 字段）、删悬空引用、新增 6 份工程标准件。详见 [CHANGELOG.md](CHANGELOG.md)。
 2. **单人化简化**：删 M0 决策周设定、ADR 折叠到 `decisions.md` 单文件、删 KPI 阈值门禁、roadmap 删多层任务粒度。
-3. **项目记忆系统**：建 `CLAUDE.md` / `STATUS.md` / `/resume` 命令 / `templates/status-template.md`；WORKFLOW.md 加 §8。
-4. **GitHub Issues 工作流设计**：建 `docs/github-workflow.md`（labels / milestones / 命名约定 / 接入步骤）；建 `.github/ISSUE_TEMPLATE/{feat,spike,fix}.yml`；新增 `/new-task` 与 `/sync-status` 命令；升级 `/resume` 让它读最近 5 个开放 issue；新增 `.gitignore`。**未接入远端仓库**（待用户决定时机）。
+3. **项目记忆系统**：建 `CLAUDE.md` / `STATUS.md` / `/resumex` 命令 / `templates/status-template.md`；WORKFLOW.md 加 §8。
+4. **GitHub Issues 工作流设计**：建 `docs/github-workflow.md`（labels / milestones / 命名约定 / 接入步骤）；建 `.github/ISSUE_TEMPLATE/{feat,spike,fix}.yml`；新增 `/new-task` 与 `/sync-status` 命令；升级 `/resumex` 让它读最近 5 个开放 issue；新增 `.gitignore`。**远端仓库已接入** https://github.com/tl0502/APET（commit 4afbae8）。
 
 ---
 
