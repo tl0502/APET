@@ -12,7 +12,7 @@ related:
 
 > 每个 session 末由 Claude 更新（建议用 `/sync-status` 命令）。新 session 入场先读这个文件。
 >
-> **任务级清单在 GitHub Issues**（待接入，详见 [github-workflow.md](github-workflow.md)）。本文件只保留当前状态快照与历史里程碑摘要。
+> **任务级清单在 GitHub Issues**（[https://github.com/tl0502/APET/issues](https://github.com/tl0502/APET/issues)）。本文件只保留当前状态快照与历史里程碑摘要。
 
 ---
 
@@ -34,6 +34,7 @@ related:
 - 立项档案：[research/competitor-research.md](research/competitor-research.md)
 - 文档工程化重构 + 单人化简化（详见 [CHANGELOG.md](CHANGELOG.md) 同期条目）
 - 项目记忆系统 + GitHub Issues 工作流设计（CLAUDE.md / STATUS.md / `/resumex` `/new-task` `/sync-status` / `.github/ISSUE_TEMPLATE/` / `.gitignore`）
+- 远端仓库接入完成（https://github.com/tl0502/APET，6 milestones M1-M5 + P1，27 labels）
 
 ---
 
@@ -44,17 +45,5 @@ related:
 1. **文档工程化重构**：文件夹改名（中文 → 英文）、统一 YAML frontmatter（3 字段）、删悬空引用、新增 6 份工程标准件。详见 [CHANGELOG.md](CHANGELOG.md)。
 2. **单人化简化**：删 M0 决策周设定、ADR 折叠到 `decisions.md` 单文件、删 KPI 阈值门禁、roadmap 删多层任务粒度。
 3. **项目记忆系统**：建 `CLAUDE.md` / `STATUS.md` / `/resumex` 命令 / `templates/status-template.md`；WORKFLOW.md 加 §8。
-4. **GitHub Issues 工作流设计**：建 `docs/github-workflow.md`（labels / milestones / 命名约定 / 接入步骤）；建 `.github/ISSUE_TEMPLATE/{feat,spike,fix}.yml`；新增 `/new-task` 与 `/sync-status` 命令；升级 `/resumex` 让它读最近 5 个开放 issue；新增 `.gitignore`。**远端仓库已接入** https://github.com/tl0502/APET（commit 4afbae8）。
-
----
-
-## 接入远端 GitHub 后要做的事
-
-> 远端：https://github.com/tl0502/APET（待首次 push）。详见 [github-workflow.md §8 接入步骤](github-workflow.md)。
-
-- [ ] 配置代理（如网络拦截）：`export HTTPS_PROXY=http://127.0.0.1:7890` 或 `git config --global http.proxy ...`
-- [ ] `git init` + `git add .` + 首次 commit
-- [ ] `git remote add origin https://github.com/tl0502/APET.git` + `git push -u origin main`
-- [ ] 建 6 个 milestones（M1-M5 + P1，命令见 [github-workflow.md §8.1](github-workflow.md)）
-- [ ] 跑 `bash docs/scripts/init-labels.sh` 创建 27 个 label
-- [ ] 完成后 `/sync-status` 把本节移到「已完成」区
+4. **GitHub Issues 工作流设计**：建 `docs/github-workflow.md`（labels / milestones / 命名约定 / 接入步骤）；建 `.github/ISSUE_TEMPLATE/{feat,spike,fix}.yml`；新增 `/new-task` 与 `/sync-status` 命令；升级 `/resumex` 让它读最近 5 个开放 issue；新增 `.gitignore`。
+5. **GitHub 仓库接入**：commit `13ab823` / `4afbae8` 已 push 到 https://github.com/tl0502/APET ；建 6 milestones + 27 labels；接入完成。
