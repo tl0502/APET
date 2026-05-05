@@ -1,0 +1,66 @@
+name: Feature
+description: 新功能（PRD 模块功能）
+title: "<module-letter>: <subject>"
+labels: ["type:feat"]
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: 模块
+      description: 对应 PRD §7 的 A-Q 模块
+      options:
+        - A-shell（桌宠壳层）
+        - B-chat（对话）
+        - C-reminder（提醒）
+        - D-pomodoro（番茄钟）
+        - E-todo（待办）
+        - F-memory（记忆）
+        - G-settings（设置）
+        - H-persona（人格系统）
+        - I-living（生命感）
+        - J-care（情境关心）
+        - K-bosskey（摸鱼模式）
+        - L-filedrop（文件拖入）
+        - M-pledge（灵魂宣誓）
+        - N-interact（物理交互）
+        - O-wardrobe（装扮）
+        - P-voice（声音表情）
+        - Q-game（小游戏）
+        - infra（基础设施）
+    validations:
+      required: true
+
+  - type: textarea
+    id: refs
+    attributes:
+      label: 反向链接
+      description: 指回基线文档对应章节
+      placeholder: "Refs: docs/requirements/prd.md §B.3.a"
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 做什么
+      description: 一段话描述本次实现的范围
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 复选框列表，每条可单独勾选完成
+      value: |
+        - [ ] 功能跑通
+        - [ ] 关键路径手测通过
+        - [ ] 影响的文档已同步（若有）
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 备注（可选）
+      description: 风险 / 依赖 / 设计决策草稿

@@ -1,0 +1,45 @@
+name: Spike
+description: 调研 / 验证 / 选型（不交付功能）
+title: "<module-letter>: spike - <subject>"
+labels: ["type:spike"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 要回答什么问题
+      description: 一句话描述要决定的事
+      placeholder: "Naive UI vs Element Plus 哪个更适合本项目？"
+    validations:
+      required: true
+
+  - type: textarea
+    id: criteria
+    attributes:
+      label: 通过标准
+      description: 怎么算 spike 通过 / 失败
+      placeholder: |
+        通过：组件覆盖度 + 主题定制 + 体积 三项均满足
+        失败：任一项严重不达标 → 切换到另一个候选
+    validations:
+      required: true
+
+  - type: textarea
+    id: fallback
+    attributes:
+      label: 失败降级方案
+      description: spike 失败时的降级路线
+      placeholder: 默认 Naive UI
+
+  - type: input
+    id: budget
+    attributes:
+      label: 时间预算
+      placeholder: "0.5 天"
+    validations:
+      required: true
+
+  - type: textarea
+    id: refs
+    attributes:
+      label: 反向链接
+      placeholder: "Refs: docs/roadmap/development-roadmap.md §4.1"

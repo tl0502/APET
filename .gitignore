@@ -1,0 +1,57 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Node / 前端
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Rust / Tauri
+src-tauri/target/
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Tauri 构建产物
+src-tauri/Cargo.lock
+src-tauri/gen/
+src-tauri/WixTools/
+
+# 日志 / 临时
+*.log
+*.tmp
+*.bak
+.cache/
+
+# 个人 secrets / 测试数据
+.env
+.env.local
+.env.*.local
+secrets/
+*.pem
+*.key
+
+# Claude Code 本地状态（按需保留 commands/ 提交）
+.claude/settings.local.json
+.claude/cache/
+.claude/.last_session
+
+# Python（验证脚本用）
+__pycache__/
+*.pyc
+.venv/

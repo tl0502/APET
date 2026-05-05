@@ -1,0 +1,61 @@
+name: Bug
+description: 修一个明确的 bug
+title: "<module-letter>: <symptom>"
+labels: ["type:fix"]
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: 模块
+      options:
+        - A-shell
+        - B-chat
+        - C-reminder
+        - D-pomodoro
+        - E-todo
+        - F-memory
+        - G-settings
+        - H-persona
+        - I-living
+        - J-care
+        - K-bosskey
+        - L-filedrop
+        - M-pledge
+        - N-interact
+        - O-wardrobe
+        - P-voice
+        - Q-game
+        - infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 症状
+      description: 看到了什么 / 期待是什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境
+      placeholder: "Win 11 26200 / Tauri 2.x / Node ?"
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 备注（可选）
+      description: 已知 root cause / 相关 issue / 临时绕过
