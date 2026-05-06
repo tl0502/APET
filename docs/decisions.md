@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 决策记录
-updated: 2026-05-05
+updated: 2026-05-06
 related:
   - README.md
   - WORKFLOW.md
@@ -111,10 +111,22 @@ related:
 - **选了什么**：**3 形态共存**（hub 总面板 + 磁吸浮窗 + 漫画气泡） + ConversationStore 共享数据层。三形态共享同一 conversation 数据，仅视图不同。M1 极简（B.3.a）→ M2 完整（B.3.c）→ M4 hub（B.3.e）→ M5 气泡（B.3.f）。
 - **代价**：原 PRD §7.2 整段重写；ChatService 拆 B.3.a-f 跨 M1-M5；增加控制按钮区（模块 A 延伸）。
 
+### ADR-016 项目脚手架决策
+
+- **为什么**：M1 D1 起步需要确定 Tauri + Vue 工具链与工程化基线；旧项目 `D:\Project\ai桌宠` 已有完整可参考实现，但需按 15 项 ADR 重新审计后手写到新仓库（不复制粘贴），避免把旧项目的偶然选择带入。
+- **选了什么**：**Tauri 2 + Vue 3.5 + TS 5.6 + Pinia 2.2 + Vite 7.x + pnpm**；ESLint 9 flat config + `eslint-config-prettier` 关冲突；`vite.config.ts` 用 `fileURLToPath` 绝对路径写法防中文目录踩雷；`src-tauri/Cargo.toml` 先只装 tauri 2 + serde + thiserror + chrono + windows(DPAPI)，其它依赖按 STATUS 节奏后置；release profile `lto=true / panic=abort / strip=true`。**与旧项目偏离**：① 不装 commitlint + husky（CLAUDE.md 写"commit 风格自由不强制"，单人 vibecoding 不需要门禁）；② 不装独立 prettier 配置（用 `eslint-config-prettier` 关冲突即可）；③ Vite 5.4 → 7.x 跟最新版。
+- **代价**：Vite 7 vs 5 有少量 API 变动（`server.fs.allow` 默认更严格），首次启动需验；不装 husky 意味着提交期没格式 / lint 自动门禁，依赖 CI 或开发自觉。
+
+### ADR-017 组件库选型 — 全量 Element Plus
+
+- **为什么**：ADR-001 当时把组件库选型推到 M1 W1 试用再定。M1 D1 复盘：①桌宠 M1-M5 涉及 ChatPanel / Onboarding / 设置面板 / 装扮选择器 / 小游戏 UI 等 ≥ 15 个组件场景，自封工作量 > 学习一个成熟库；② Element Plus 全量 import min+gzip ~314 KB（CSS ~80 KB），估算 Tauri release 二进制 ~7-9 MB，PRD §10 总安装包预算 80MB 占比 < 12%，体积非决定性约束；③ 全量 import 比 `unplugin-vue-components` 按需配置维护成本低，单人项目省心。
+- **选了什么**：**Element Plus 2.13+ 全量 import** + `@element-plus/icons-vue` + 暗色 `theme-chalk/dark/css-vars.css` + 中文 locale `zhCn`。**主题策略**：默认跟随系统（`prefers-color-scheme` 监听）+ 系统托盘菜单可手动切换 `[跟随系统 / 亮色 / 暗色]`，状态走 Pinia `useThemeStore`，先 localStorage 持久化、M3 G 模块时挪到 SQLite `settings` 表。不做按需 import；不引 Naive UI；不走旧项目"原生 + 自封"路线。
+- **代价**：产物多 ~250 KB（接受）；所有 EP 组件 CSS 启动即载（透明窗口下视觉无影响）；锁定 EP 设计语言（若 M5 末实测冷启动 > 5s 预算超支，回滚到 `unplugin-vue-components` 按需 import，评估 0.5 天）。**Supersedes**：ADR-001 中"Naive UI 或 Element Plus，M1 W1 试一下再定"悬而未决项。
+
 ---
 
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-016**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-018**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。
