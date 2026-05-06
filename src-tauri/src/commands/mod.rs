@@ -1,0 +1,3 @@
+// IPC commands 总入口（#4 起）。按 milestone 节奏在此挂载子模块：
+// system（健康检查）/ persona / memory / chat / ...
+pub mod system;
