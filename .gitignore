@@ -50,6 +50,7 @@ secrets/
 .claude/settings.local.json
 .claude/cache/
 .claude/.last_session
+CLAUDE.md
 
 # Python（验证脚本用）
 __pycache__/

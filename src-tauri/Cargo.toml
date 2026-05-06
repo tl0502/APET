@@ -1,0 +1,37 @@
+[package]
+name = "aipet"
+version = "0.0.0"
+description = "AI 桌宠 — 由你亲手塑造、会主动关心你、能和你一起玩的 AI 桌宠"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "aipet_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# M1-D1 最小依赖：仅 tauri 核心 + 序列化 + 错误处理 + 时间 + windows DPAPI 占位。
+# 业务依赖（reqwest / sqlx / gray_matter / ulid / tokio-util / global-shortcut / plugin-sql 等）
+# 按 milestone 节奏后置：B.1 LLM Provider / F.1 Memory / H.1 Persona。
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

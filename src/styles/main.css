@@ -1,0 +1,17 @@
+/* 全局透明背景：配合 Tauri pet 窗口 transparent:true / decorations:false。 */
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+/* 桌宠窗口默认无文字光标，特定输入区在子组件局部覆盖。 */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
