@@ -10,6 +10,13 @@ body,
   overflow: hidden;
 }
 
+/* 暗色模式：保持窗口本身透明（Element Plus 暗色 css-vars 默认会给 body 上深色背景，会破坏 Tauri 透明效果）。 */
+html.dark,
+html.dark body,
+html.dark #app {
+  background: transparent;
+}
+
 /* 桌宠窗口默认无文字光标，特定输入区在子组件局部覆盖。 */
 body {
   user-select: none;

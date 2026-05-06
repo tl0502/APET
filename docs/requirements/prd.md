@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 需求文档（PRD）
-updated: 2026-05-05
+updated: 2026-05-06
 related:
   - ../research/competitor-research.md
   - ../persona/persona-design.md
@@ -99,7 +99,7 @@ AI 桌宠定位在三者交集:**形态拉新、自主人格塑造留存、轻�
 ### 2.6 M0 ADR 决策(21-34)
 
 21. **前端框架(ADR-001)**:Vue 3 + TypeScript + Pinia + Vite。组件库 Naive UI 或 Element Plus(M1 第一天 spike 后定)。
-22. **桌宠资源管线(ADR-002,Superseded)**:**VRM 3D**(Three.js + `@pixiv/three-vrm`)。原 Live2D Cubism 4 路线 M0 末废止(Cubism Core 6 ABI 不兼容 + 上游停更)。M1 spike:启动 < 1500ms / 内存 < 150MB / 配饰附着点(humanoid bone)可行。
+22. **桌宠资源管线(ADR-002,Superseded)**:**VRM 3D**(Three.js + `@pixiv/three-vrm`)。原 Live2D Cubism 4 路线 M0 末废止(Cubism Core 6 ABI 不兼容 + 上游停更)。M1 spike:配饰附着点(humanoid bone)可行;启动/内存预算推到 M5 自测期统一压测(详 §10 性能预算)。
 23. **配饰美术管线(ADR-003,Superseded)**:VRM humanoid bone attach + VRMC_node_constraint。每个 VRM 模型预留 head / neck / leftEye 等标准 bone 作为配饰挂载点;配饰为独立 .glb 节点(含 transform / scale / 父骨骼字段)。切换 < 500ms。
 24. **物理交互动作清单(ADR-004)**:12 个核心动作 ID — `head_pat / tilt_head / tail_wiggle / lean_in / surprised / fall_asleep / stretch / yawn / dizzy / protest / cheer / rub_eyes`。默认 reaction_table 详见 ADR-004,`.soul.md` 的 `# 反应配置` 区段可覆盖。
 25. **默认 LLM Provider(ADR-005)**:零默认 + 引导链接。Onboarding Step 6 不强制 API Key,首启 5 个本地能力(提醒/番茄/待办/摸鱼/物理交互)即可使用。设置中 6 个 preset:OpenAI / DeepSeek / Moonshot / 通义千问 / 本地 Ollama / 自定义。兼容矩阵:OpenAI 协议 100%(P0);Anthropic P1-R1;Gemini P1-R2。

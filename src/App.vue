@@ -1,15 +1,16 @@
 <script setup lang="ts">
-// M1-D1 脚手架占位：Issue #1 验收标准明确"暂显空白"。
-// PetCanvas / 路由分支等留给 D-1 PM 与后续任务。
+// 角色窗主壳：保持透明（PRD §7.2 角色窗）。VRM 渲染 / 物理交互 / 容器布局后续 task 接入。
+// 主题（ADR-017）已在 main.ts 通过 useThemeStore().init() 启动；本组件不渲染任何控件。
 </script>
 
 <template>
-  <div class="app-shell" />
+  <div class="pet-shell" />
 </template>
 
 <style scoped>
-.app-shell {
+.pet-shell {
   width: 100vw;
   height: 100vh;
+  background: transparent;
 }
 </style>

@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-05
+updated: 2026-05-06
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -18,14 +18,18 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：立项准备 → M1 过渡（15 项 ADR 敲定，M1 待启动）
+- **当前 milestone**：M1 W1（壳层 + 对话）
 - **当前 session 在做**：—
-- **下一步**：M1 第 1 天 —— Tauri 2.x + Vue 3 项目脚手架 + 组件库 spike（Naive UI vs Element Plus）
+- **下一步**：[Issue #2](https://github.com/tl0502/APET/issues/2) Element Plus 全量 import + 主题跟随系统（ADR-017 已选定）
 - **阻塞**：无
 
 ---
 
 ## 已完成（里程碑级摘要）
+
+### M1 启动（2026-05-06 起）
+
+- M1-D1 项目脚手架就位（commit 8952e6e）：Tauri 2 + Vue 3 + TS + Pinia + Vite 7 + pnpm；`pnpm tauri:dev` 跑通 320×320 透明窗口；ADR-016 / ADR-017 入库（commit 3426184）。详见关闭的 [Issue #1](https://github.com/tl0502/APET/issues/1)。
 
 ### 立项准备期（2026-04-30 → 2026-05-05）
 
@@ -39,6 +43,10 @@ related:
 ---
 
 ## 历史 session 摘要
+
+### 2026-05-06
+
+完成 [Issue #1](https://github.com/tl0502/APET/issues/1) M1-D1 项目脚手架：17 个文件落盘（5 前端配置 + 4 前端入口 + 5 Tauri 后端 + 1 capabilities + 2 icons），`pnpm install / typecheck / lint` + `cargo check` + `pnpm tauri:dev` 全部通过。**实施期发现**：本机 Windows HyperV TCP 排除范围 1423-1522 包含原计划端口 1430，改用 Tauri 2 默认 1420 + HMR 1421。**ADR-016**（脚手架技术栈）+ **ADR-017**（Element Plus 全量 import + 主题跟随系统）入库（commit 3426184）；脚手架代码 commit 8952e6e 已 push。
 
 ### 2026-05-05
 

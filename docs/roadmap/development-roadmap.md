@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 开发路线图
-updated: 2026-05-05
+updated: 2026-05-06
 related:
   - ../README.md
   - ../requirements/prd.md
@@ -273,7 +273,7 @@ graph LR
 
 | 节点 | 时机 | 决策内容 | 失败降级 |
 |---|---|---|---|
-| **桌宠渲染 spike（VRM）** | 立项期（已完成，从 Live2D 切换）| 启动 < 1500ms / 内存 < 150MB / 配饰挂载点（humanoid bone）可行 | 降级"整套皮肤"（配饰仅整体替换）|
+| **桌宠渲染 spike（VRM）** | 立项期（已完成，从 Live2D 切换）| 配饰挂载点（humanoid bone）可行（启动/内存预算推到 M5 自测期）| 降级"整套皮肤"（配饰仅整体替换）|
 | **组件库 spike** | M1 W1 第 1 天 | Naive UI vs Element Plus 哪个更适合 | 默认 Naive UI |
 | **RAWINPUT spike** | M2 内 | 实现成本是否可控 | 降级"快速 idle 切换"近似信号（N.4 体验弱化）|
 | **配饰美术管线就绪** | M4 启动前 | 8 件配饰 + 4 套节气资源齐 | 推迟节气皮肤到 M4 末或 P1-R1 |

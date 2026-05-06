@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 系统架构设计
-updated: 2026-05-05
+updated: 2026-05-06
 related:
   - ../requirements/prd.md
   - ../requirements/flows.md
@@ -1156,7 +1156,7 @@ LLM 输出后 SecurityGuard **二次扫描**;命中违禁时:
 
 | 里程碑 | 主要交付 |
 |---|---|
-| **M0**(W0) | 14 项 ADR Accepted、3 个内置人格定稿、灵魂宣誓文案、安全前缀文案、声音包来源、配饰美术管线、装扮付费 schema、小游戏 UI 风格、LLM 游戏场景白名单、桌宠渲染 spike(原 Live2D 改为 VRM,启动 < 1500ms / 内存 < 150MB / 配饰挂载点) |
+| **M0**(W0) | 14 项 ADR Accepted、3 个内置人格定稿、灵魂宣誓文案、安全前缀文案、声音包来源、配饰美术管线、装扮付费 schema、小游戏 UI 风格、LLM 游戏场景白名单、桌宠渲染 spike(原 Live2D 改为 VRM,配饰挂载点 humanoid bone 验证；启动/内存预算推到 M5 自测期统一压测) |
 | **M1**(W1-2) | Tauri + Vue 3 项目骨架(组件库 spike 后定)、主进程 IPC 框架、桌宠透明窗口、Onboarding(含 Soul Pledge)、ChatService MVP、PersonaService MVP、LivingPetService 骨架 + 自由活动初版、NicknameService MVP + 昵称设置 UI |
 | **M2**(W3-4) | TaskService 全功能(C/D/E)、PersonaService 试聊沙盒 + 工坊、心情图标 + 精力衰减/恢复、`pet_runtime_state` 持久化、BossKeyService(摸鱼模式)、InteractionRouter(hitbox 解析 + reaction_table + 抗议规则)、RAWINPUT 实现 spike(决断 N.4 是否降级) |
 | **M3**(W5-6) | LLM Provider(OpenAI 兼容)、SecurityGuard、MigrationService、UpdaterService、IdleDetector + ProactiveCareService(频率上限 + 安静时段)、FileDropHandler(文本类)、MilestoneService(首次 7/30 天)、LivingPetService 日常时段表(R.3) |

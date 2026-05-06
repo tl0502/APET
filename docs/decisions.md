@@ -19,14 +19,14 @@ related:
 ### ADR-001 前端框架
 
 - **为什么**：Tauri 默认让 webview 跑前端，需要选一个团队顺手的栈。
-- **选了什么**：Vue 3 + TypeScript + Pinia + Vite。组件库 Naive UI 或 Element Plus，M1 W1 试一下再定。
+- **选了什么**：Vue 3 + TypeScript + Pinia + Vite。组件库 Element Plus
 - **代价**：放弃 React/Solid 生态；Vue 的 SFC 需要 IDE 插件支持。
 
 ### ADR-002 桌宠渲染管线
 
 - **为什么**：原 Live2D Cubism 4 路线在立项期发现 Cubism Core 6 ABI 破坏 + `pixi-live2d-display` 上游停更，无法用。
 - **选了什么**：**VRM 3D**（Three.js + `@pixiv/three-vrm`），MIT 开源无授权风险。
-- **代价**：3D 模型比 2D Live2D 贵；启动 < 1500ms / 内存 < 150MB 需要验证（M1 spike）。
+- **代价**：3D 模型比 2D Live2D 贵；启动 / 内存预算（PRD §10）作为整体性能目标的一部分，**M5 自测期统一压测**，不在 M1 单独 spike 验证。
 - **Supersedes**：原 Live2D 路线（ADR-002a）已废止。
 
 ### ADR-003 配饰美术管线
@@ -122,6 +122,7 @@ related:
 - **为什么**：ADR-001 当时把组件库选型推到 M1 W1 试用再定。M1 D1 复盘：①桌宠 M1-M5 涉及 ChatPanel / Onboarding / 设置面板 / 装扮选择器 / 小游戏 UI 等 ≥ 15 个组件场景，自封工作量 > 学习一个成熟库；② Element Plus 全量 import min+gzip ~314 KB（CSS ~80 KB），估算 Tauri release 二进制 ~7-9 MB，PRD §10 总安装包预算 80MB 占比 < 12%，体积非决定性约束；③ 全量 import 比 `unplugin-vue-components` 按需配置维护成本低，单人项目省心。
 - **选了什么**：**Element Plus 2.13+ 全量 import** + `@element-plus/icons-vue` + 暗色 `theme-chalk/dark/css-vars.css` + 中文 locale `zhCn`。**主题策略**：默认跟随系统（`prefers-color-scheme` 监听）+ 系统托盘菜单可手动切换 `[跟随系统 / 亮色 / 暗色]`，状态走 Pinia `useThemeStore`，先 localStorage 持久化、M3 G 模块时挪到 SQLite `settings` 表。不做按需 import；不引 Naive UI；不走旧项目"原生 + 自封"路线。
 - **代价**：产物多 ~250 KB（接受）；所有 EP 组件 CSS 启动即载（透明窗口下视觉无影响）；锁定 EP 设计语言（若 M5 末实测冷启动 > 5s 预算超支，回滚到 `unplugin-vue-components` 按需 import，评估 0.5 天）。**Supersedes**：ADR-001 中"Naive UI 或 Element Plus，M1 W1 试一下再定"悬而未决项。
+- **实测**（M1-D2，2026-05-06）：`pnpm tauri:build` 产物 `src-tauri/target/release/aipet.exe` = **4.15 MB / 4,350,976 bytes**（debug 对比 = 11.94 MB；release 编译 4m 17s）。预估 7-9 MB，**实测优于预估约 50%**（release profile `lto=true / codegen-units=1 / strip=true` 三件套效果显著）。`bundle.active=false` 故无 .msi/.exe 安装包；M5 末再测全量 bundle 体积（含 WebView2 Bootstrapper 与图标资源）。
 
 ---
 
