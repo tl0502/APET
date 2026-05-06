@@ -20,7 +20,7 @@ related:
 
 - **当前 milestone**：M1 W1（壳层 + 对话）
 - **当前 session 在做**：—
-- **下一步**：[Issue #3](https://github.com/tl0502/APET/issues/3) 接入 PetCanvas + VRM momo 渲染（A.3 vrm spike，关键路径）
+- **下一步**：[Issue #5](https://github.com/tl0502/APET/issues/5) PersonaService MVP + Memory/Nickname 骨架（M1 W1 数据层）；可并行 [Issue #4](https://github.com/tl0502/APET/issues/4) IPC 框架
 - **阻塞**：无
 
 ---
@@ -31,6 +31,7 @@ related:
 
 - M1-D1 项目脚手架就位（commit 8952e6e）：Tauri 2 + Vue 3 + TS + Pinia + Vite 7 + pnpm；`pnpm tauri:dev` 跑通 320×320 透明窗口；ADR-016 / ADR-017 入库（commit 3426184）。详见关闭的 [Issue #1](https://github.com/tl0502/APET/issues/1)。
 - M1-D2 Element Plus + 主题跟随系统就位（commit 7c387db）：EP 全量 import + zh-CN locale + 三态 Pinia 主题 store（auto/light/dark）+ matchMedia/localStorage；`pnpm tauri:build` 实测 release exe = **4.15 MB**（vs 预估 ~9MB，偏好 53%），ADR-017 已补实测；同 commit 清理 4 处文档过时性能预算（`启动 < 1500ms / 内存 < 150MB` → 推到 M5 自测期统一压测）。详见关闭的 [Issue #2](https://github.com/tl0502/APET/issues/2)。
+- M1-D3 PetCanvas + VRM momo 渲染就位（commit 0df9076）：three@0.184 + @pixiv/three-vrm@3.5；vrm.ts（VRMRuntime 透明背景 + 半身相机 + 1.6Hz 呼吸 + A-pose + spring bone）+ useVRMModel composable + 简化版 PetCanvas（193L → 71L，剥离 hitbox/drag/IPC，推到后续 task）；avatar.vrm 用户私有 .gitignore 屏蔽。详见关闭的 [Issue #3](https://github.com/tl0502/APET/issues/3)。
 
 ### 立项准备期（2026-04-30 → 2026-05-05）
 
@@ -52,6 +53,8 @@ related:
 完成 [Issue #2](https://github.com/tl0502/APET/issues/2) Element Plus + 主题跟随系统（commit 7c387db）：EP 2.13 全量 import + zh-CN locale + dark css-vars；新建 `src/stores/theme.ts` 三态 Pinia store（auto/light/dark）+ matchMedia listener + localStorage 持久化；`useThemeStore().init()` 在 mount 之前调用避免 FOUC。**关键取舍**：不引 VueUse `useDark`（三态 mode 与其布尔语义不匹配）；验证 demo 不放 PetCanvas 主壳（违反 PRD §7.2 角色窗透明约束），改为功能性验证后即清理。**实测**：`pnpm tauri:build` release exe = **4.15 MB**（vs ADR-017 预估 ~9MB，偏好 53%），实测数字已写入 ADR-017。**同时清理 4 处文档过时性能预算**（`启动 < 1500ms / 内存 < 150MB` → 推到 M5 自测期统一压测）：decisions.md ADR-002、prd.md §22、architecture §M0 节点、roadmap §4.1 spike 表。
 
 新建 [Issue #3](https://github.com/tl0502/APET/issues/3) 接入 PetCanvas + VRM momo 渲染（type:spike, module:A-shell, priority:p0），M1 W1 关键路径，下一 session 启动。
+
+完成 [Issue #3](https://github.com/tl0502/APET/issues/3) PetCanvas + VRM momo 渲染（commit 0df9076，已 push 触发自动关闭）：装 three@0.184 + @pixiv/three-vrm@3.5 + @types/three(dev)；从旧项目 D:\Project\ai桌宠 整文件复制 src/services/vrm.ts（207L）+ src/composables/useVRMModel.ts（45L）；新写简化版 src/components/PetCanvas.vue（71L，剥离 hitbox/drag/IPC/petStore，仅保留 canvas + Loading/Error 兜底文案）；App.vue 引用 PetCanvas。**关键取舍**：vrm.ts 整文件复制（含未消费的 getBounds() ~50L），下个 hitbox task 直接复用避免重写；PetCanvas 严守 spike 边界（hitbox 推到 A.6，drag 推到 N 模块）；WebView 同源访问 public/avatar/avatar.vrm 无需额外 capabilities。**验收**：tauri:dev 视觉确认 momo 渲染正常 + 背景透明（半身像 / 双臂自然下垂 / 轻微呼吸）；typecheck / lint / cargo check 全过。
 
 ### 2026-05-05
 
