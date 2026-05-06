@@ -18,9 +18,9 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M1 W1（壳层 + 对话）
+- **当前 milestone**：M1 W1-W2（壳层 + 对话）
 - **当前 session 在做**：—
-- **下一步**：M1 W1 数据层 #5 收尾；下一阶段候选（待 `/new-task`）：ChatService MVP B.3.a 极简对话 / Onboarding 6 步 / U.1+U.2 昵称 UI
+- **下一步**：按优先序推进 13 个新 issue（详见 [#6-#18](https://github.com/tl0502/APET/issues)）。第一批可个人测试基线：[#6](https://github.com/tl0502/APET/issues/6) 托盘 → [#7](https://github.com/tl0502/APET/issues/7) 视觉 token → [#8](https://github.com/tl0502/APET/issues/8) 通用容器 → [#9](https://github.com/tl0502/APET/issues/9) 设置面板骨架 → [#10](https://github.com/tl0502/APET/issues/10) 拖动 → [#11](https://github.com/tl0502/APET/issues/11) 全局快捷键。
 - **阻塞**：无
 
 ---
