@@ -21,6 +21,9 @@ export interface AvatarBounds {
  * 注：getBounds() 当前未被消费（M1 spike 期 hitbox 上报推到后续 task），保留以便复用。
  */
 export class VRMRuntime {
+  /** 呼吸角速度：4 秒/周期，2π/4 ≈ 1.5708 rad/s。注释里的"频率"以人类静息呼吸 12-15 次/分钟为参考。 */
+  private static readonly BREATH_RAD_PER_SEC = (2 * Math.PI) / 4
+
   private renderer: THREE.WebGLRenderer | null = null
   private scene: THREE.Scene | null = null
   private camera: THREE.PerspectiveCamera | null = null
@@ -126,11 +129,11 @@ export class VRMRuntime {
 
   /**
    * 呼吸感：upperChest / chest / spine 在 X 轴做极小幅度摆动（±1.4°），
-   * 周期 ~4 秒（成人静息呼吸频率 12-15 次/分钟）。
+   * 周期 4 秒（成人静息呼吸频率 12-15 次/分钟）。
    */
   private applyBreathing(dt: number): void {
     if (!this.vrm?.humanoid) return
-    this.breathPhase += dt * 1.6 // 2π/4s ≈ 1.57 rad/s
+    this.breathPhase += dt * VRMRuntime.BREATH_RAD_PER_SEC
     const h = this.vrm.humanoid
     const chest =
       h.getNormalizedBoneNode('upperChest') ??
