@@ -1,93 +1,51 @@
 // #5 PersonaService IPC commands（H.1 持久化层入口）
 //
-// 暴露 2 个：persona_load / persona_activate
-// - persona_load(id)：从 DB 读 personas + persona_snapshots 拼 PersonaSummary（含 raw markdown，供 ChatService 拼 system prompt）
-// - persona_activate(id)：把所有 personas.is_active=0，目标 id 设 is_active=1
-//
-// services::persona 的 seed_builtin 在启动期已 UPSERT momo（lib.rs setup spawn），所以 M1 直接 load 即可。
+// 2026-05-06 code-review #3+#5+#6 重写：
+// - 业务逻辑下沉到 services/persona.rs（load_persona / activate_persona + with_conn 测试覆盖）
+// - 此处只做 thin wrapper：输入校验 → 调 service → 错误转字符串 → emit event
+// - 错误类型映射 thiserror enum → 前端拿到的 IpcError.message 含语义前缀
 
-use serde::Serialize;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, Connection, SqliteConnection};
-use tauri::{AppHandle, Manager};
+use crate::services::persona::{
+    activate_persona, load_persona, PersonaLookupError, PersonaSummary,
+};
+use tauri::{AppHandle, Emitter};
 
-#[derive(Debug, Serialize)]
-pub struct PersonaSummary {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub source: String,
-    pub raw_markdown: String,
+const PERSONA_ACTIVATED_EVENT: &str = "persona:activated";
+const PERSONA_ID_MAX_LEN: usize = 64;
+
+fn validate_persona_id(id: &str) -> Result<&str, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("persona id 不能为空".to_string());
+    }
+    if trimmed.len() > PERSONA_ID_MAX_LEN {
+        return Err(format!(
+            "persona id 长度超限（≤{} 字符）",
+            PERSONA_ID_MAX_LEN
+        ));
+    }
+    Ok(trimmed)
 }
 
-async fn open_conn(app: &AppHandle) -> Result<SqliteConnection, String> {
-    let app_config = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("config dir: {e}"))?;
-    let db_path = app_config.join("aipet.db");
-    SqliteConnectOptions::new()
-        .filename(&db_path)
-        .create_if_missing(false)
-        .connect()
-        .await
-        .map_err(|e| format!("db connect: {e}"))
+fn lookup_err_to_string(e: PersonaLookupError) -> String {
+    match e {
+        PersonaLookupError::NotFound(id) => format!("persona not found: {id}"),
+        PersonaLookupError::Db(inner) => inner.to_string(),
+    }
 }
 
 #[tauri::command]
 pub async fn persona_load(app: AppHandle, id: String) -> Result<PersonaSummary, String> {
-    let mut conn = open_conn(&app).await?;
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
-        "SELECT p.id, p.name, p.version, p.source \
-         FROM personas p WHERE p.id = ?",
-    )
-    .bind(&id)
-    .fetch_optional(&mut conn)
-    .await
-    .map_err(|e| format!("db query persona: {e}"))?;
-    let (pid, name, version, source) =
-        row.ok_or_else(|| format!("persona not found: {id}"))?;
-    let snap: Option<(String,)> = sqlx::query_as(
-        "SELECT content FROM persona_snapshots \
-         WHERE persona_id = ? AND version = ? \
-         ORDER BY id DESC LIMIT 1",
-    )
-    .bind(&pid)
-    .bind(&version)
-    .fetch_optional(&mut conn)
-    .await
-    .map_err(|e| format!("db query snapshot: {e}"))?;
-    conn.close().await.map_err(|e| format!("db close: {e}"))?;
-    Ok(PersonaSummary {
-        id: pid,
-        name,
-        version,
-        source,
-        raw_markdown: snap.map(|(c,)| c).unwrap_or_default(),
-    })
+    let id = validate_persona_id(&id)?;
+    load_persona(&app, id).await.map_err(lookup_err_to_string)
 }
 
 #[tauri::command]
 pub async fn persona_activate(app: AppHandle, id: String) -> Result<(), String> {
-    let mut conn = open_conn(&app).await?;
-    let mut tx = conn
-        .begin()
-        .await
-        .map_err(|e| format!("db tx begin: {e}"))?;
-    sqlx::query("UPDATE personas SET is_active = 0")
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("db clear active: {e}"))?;
-    let result = sqlx::query("UPDATE personas SET is_active = 1, updated_at = ? WHERE id = ?")
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(&id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("db set active: {e}"))?;
-    if result.rows_affected() == 0 {
-        return Err(format!("persona not found: {id}"));
-    }
-    tx.commit().await.map_err(|e| format!("db tx commit: {e}"))?;
-    conn.close().await.map_err(|e| format!("db close: {e}"))?;
+    let id = validate_persona_id(&id)?.to_string();
+    activate_persona(&app, &id).await.map_err(lookup_err_to_string)?;
+    // 与 nickname:changed 同款契约：跨窗口（M3 设置面板）切人格后角色窗能 listen 到刷新
+    app.emit(PERSONA_ACTIVATED_EVENT, &id)
+        .map_err(|e| format!("emit persona:activated failed: {e}"))?;
     Ok(())
 }

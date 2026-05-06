@@ -24,9 +24,11 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Executor, SqliteConnection};
 use tempfile::TempDir;
 
-/// 与 lib.rs::migrations() 同一来源 — 改 001/002.sql 自动同步到测试。
+use crate::services::db::enforce_pragmas;
+
+/// 与 lib.rs::migrations() 同一来源 — 改 001.sql 自动同步到测试。
+/// 002 已 merge 进 001（2026-05-06 code-review #7 — 单一 migration 文件）。
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
-const MIGRATION_002: &str = include_str!("../../migrations/002_persona_snapshot_unique.sql");
 
 /// 创建一个全新的临时 sqlite DB,apply 所有 migrations,返回 (TempDir, SqliteConnection)。
 ///
@@ -56,9 +58,12 @@ pub async fn fresh_db() -> (TempDir, SqliteConnection) {
     conn.execute(MIGRATION_001)
         .await
         .expect("apply 001_init.sql");
-    conn.execute(MIGRATION_002)
+
+    // 与 prod 行为对齐：每个连接显式 PRAGMA foreign_keys = ON
+    // （sqlx 默认 ON，但显式调用一次能保证未来 prod 加 PRAGMA 时测试同步生效）
+    enforce_pragmas(&mut conn)
         .await
-        .expect("apply 002_persona_snapshot_unique.sql");
+        .expect("enforce pragmas on test conn");
 
     (dir, conn)
 }

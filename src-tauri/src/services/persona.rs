@@ -19,11 +19,12 @@
 use chrono::Utc;
 use gray_matter::engine::YAML;
 use gray_matter::Matter;
-use serde::Deserialize;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, Connection, Transaction};
-use tauri::{AppHandle, Manager, Runtime};
+use serde::{Deserialize, Serialize};
+use sqlx::{Connection, Transaction};
+use tauri::{AppHandle, Runtime};
 use thiserror::Error;
+
+use crate::services::db::{open_app_db, DbError};
 
 /// 内置 momo 人格,编译期注入(与 migrations/001_init.sql 的 include_str! 同款)
 const MOMO_RAW: &str = include_str!("../../personas/_builtin/momo.soul.md");
@@ -74,6 +75,47 @@ impl From<sqlx::Error> for PersonaError {
     }
 }
 
+impl From<DbError> for PersonaError {
+    fn from(e: DbError) -> Self {
+        match e {
+            DbError::AppConfigDir(s) => PersonaError::AppConfigDir(s),
+            DbError::Database(s) => PersonaError::Database(s),
+        }
+    }
+}
+
+/// PersonaService 对外契约（与前端 src/types/persona.ts::PersonaSummary 对齐）。
+///
+/// raw_markdown 是去掉 frontmatter 后的纯 markdown 正文，供 ChatService 拼 system prompt。
+#[derive(Debug, Serialize)]
+pub struct PersonaSummary {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub raw_markdown: String,
+}
+
+#[derive(Debug, Error)]
+pub enum PersonaLookupError {
+    #[error(transparent)]
+    Db(#[from] PersonaError),
+    #[error("persona not found: {0}")]
+    NotFound(String),
+}
+
+impl From<DbError> for PersonaLookupError {
+    fn from(e: DbError) -> Self {
+        PersonaLookupError::Db(e.into())
+    }
+}
+
+impl From<sqlx::Error> for PersonaLookupError {
+    fn from(e: sqlx::Error) -> Self {
+        PersonaLookupError::Db(e.into())
+    }
+}
+
 /// 解析任意 .soul.md 字符串为 ParsedPersona。
 ///
 /// 不依赖 IO — 内置走 const,用户走 fs::read_to_string,后续 H.2 import 走拖拽 payload。
@@ -120,22 +162,79 @@ pub fn parse_persona(content: &str) -> Result<ParsedPersona, PersonaError> {
 /// (MVP 期不阻塞启动 / 不弹错误 UI;H.2 引入 IPC 后可考虑前端反馈)
 pub async fn seed_builtin<R: Runtime>(app: &AppHandle<R>) -> Result<(), PersonaError> {
     let parsed = parse_persona(MOMO_RAW)?;
-
-    let app_config = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| PersonaError::AppConfigDir(e.to_string()))?;
-    let db_path = app_config.join("aipet.db");
-    // 用 builder API 避开 URL parsing — Windows 绝对路径反斜杠会让
-    // `SqliteConnectOptions::from_str("sqlite:C:\...")` 报 SQLITE_CANTOPEN(code 14)
-    let mut conn = SqliteConnectOptions::new()
-        .filename(&db_path)
-        .create_if_missing(false) // plugin 已建,不重复
-        .connect()
-        .await?;
-
+    let mut conn = open_app_db(app).await?;
     seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH).await?;
     conn.close().await?;
+    Ok(())
+}
+
+/// 读取 persona + 最新 snapshot，拼成 PersonaSummary。NotFound 时返回 NotFound 变体（前端可定向提示）。
+pub async fn load_persona<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+) -> Result<PersonaSummary, PersonaLookupError> {
+    let mut conn = open_app_db(app).await?;
+    let summary = load_persona_with_conn(&mut conn, id).await?;
+    conn.close().await.map_err(PersonaError::from)?;
+    Ok(summary)
+}
+
+pub(crate) async fn load_persona_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+) -> Result<PersonaSummary, PersonaLookupError> {
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, name, version, source FROM personas WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (pid, name, version, source) =
+        row.ok_or_else(|| PersonaLookupError::NotFound(id.to_string()))?;
+    let snap: Option<(String,)> = sqlx::query_as(
+        "SELECT content FROM persona_snapshots          WHERE persona_id = ? AND version = ?          ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&pid)
+    .bind(&version)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(PersonaSummary {
+        id: pid,
+        name,
+        version,
+        source,
+        raw_markdown: snap.map(|(c,)| c).unwrap_or_default(),
+    })
+}
+
+/// 把目标 persona 设为 active（其他全部清零）。NotFound 时报 PersonaLookupError::NotFound。
+pub async fn activate_persona<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+) -> Result<(), PersonaLookupError> {
+    let mut conn = open_app_db(app).await?;
+    activate_persona_with_conn(&mut conn, id).await?;
+    conn.close().await.map_err(PersonaError::from)?;
+    Ok(())
+}
+
+pub(crate) async fn activate_persona_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+) -> Result<(), PersonaLookupError> {
+    let mut tx = conn.begin().await?;
+    sqlx::query("UPDATE personas SET is_active = 0")
+        .execute(&mut *tx)
+        .await?;
+    let result = sqlx::query("UPDATE personas SET is_active = 1, updated_at = ? WHERE id = ?")
+        .bind(Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(PersonaLookupError::NotFound(id.to_string()));
+    }
+    tx.commit().await?;
     Ok(())
 }
 

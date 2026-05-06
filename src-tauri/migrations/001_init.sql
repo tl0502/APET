@@ -274,3 +274,11 @@ INSERT INTO nicknames (id, updated_at) VALUES (1, datetime('now'));
 INSERT INTO pet_runtime_state (id, last_interaction_at, updated_at)
   VALUES (1, datetime('now'), datetime('now'));
 INSERT INTO voice_settings (id, updated_at) VALUES (1, datetime('now'));
+
+-- ==== Persona snapshot 唯一约束 ====
+-- 同 (persona_id, version) 只能存在一条快照（idempotent seed + 防御直接 INSERT）。
+-- 历史：原本走单独 002_persona_snapshot_unique.sql（含 DELETE 去重 + CREATE INDEX 两步），
+-- 但 001+002 同一次 commit 入库，002 的 DELETE 在新装机上永远删 0 行；2026-05-06
+-- code-review #7 合并回 001，仅保留 CREATE UNIQUE INDEX 一行（IF NOT EXISTS 兜底）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_snapshots_unique_persona_version
+  ON persona_snapshots(persona_id, version);

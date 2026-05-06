@@ -18,10 +18,11 @@
 
 use chrono::Utc;
 use serde::Serialize;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, Connection, SqliteConnection};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use sqlx::{Connection, SqliteConnection};
+use tauri::{AppHandle, Emitter, Runtime};
 use thiserror::Error;
+
+use crate::services::db::{open_app_db, DbError};
 
 const NICKNAME_CHANGED_EVENT: &str = "nickname:changed";
 const FALLBACK_PET_NAME: &str = "默默";
@@ -44,6 +45,15 @@ impl From<sqlx::Error> for NicknameError {
     }
 }
 
+impl From<DbError> for NicknameError {
+    fn from(e: DbError) -> Self {
+        match e {
+            DbError::AppConfigDir(s) => NicknameError::AppConfigDir(s),
+            DbError::Database(s) => NicknameError::Database(s),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct NicknameChangedPayload {
     /// 'pet' 或 'user' — 与架构 §711 IPC event 契约一致
@@ -53,17 +63,7 @@ pub struct NicknameChangedPayload {
 }
 
 async fn open_conn<R: Runtime>(app: &AppHandle<R>) -> Result<SqliteConnection, NicknameError> {
-    let app_config = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| NicknameError::AppConfigDir(e.to_string()))?;
-    let db_path = app_config.join("aipet.db");
-    // builder API 避开 URL parsing(Windows 绝对路径反斜杠会让 from_str 报 code 14)
-    Ok(SqliteConnectOptions::new()
-        .filename(&db_path)
-        .create_if_missing(false)
-        .connect()
-        .await?)
+    Ok(open_app_db(app).await?)
 }
 
 fn emit_changed<R: Runtime>(
