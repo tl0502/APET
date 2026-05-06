@@ -20,7 +20,7 @@ related:
 
 - **当前 milestone**：M1 W1（壳层 + 对话）
 - **当前 session 在做**：—
-- **下一步**：[Issue #5](https://github.com/tl0502/APET/issues/5) PersonaService MVP + Memory/Nickname 骨架（M1 W1 数据层）；可并行 [Issue #4](https://github.com/tl0502/APET/issues/4) IPC 框架
+- **下一步**：完成 [Issue #5](https://github.com/tl0502/APET/issues/5) PersonaService MVP + Memory/Nickname 骨架（M1 W1 数据层，进行中）
 - **阻塞**：无
 
 ---
@@ -32,6 +32,7 @@ related:
 - M1-D1 项目脚手架就位（commit 8952e6e）：Tauri 2 + Vue 3 + TS + Pinia + Vite 7 + pnpm；`pnpm tauri:dev` 跑通 320×320 透明窗口；ADR-016 / ADR-017 入库（commit 3426184）。详见关闭的 [Issue #1](https://github.com/tl0502/APET/issues/1)。
 - M1-D2 Element Plus + 主题跟随系统就位（commit 7c387db）：EP 全量 import + zh-CN locale + 三态 Pinia 主题 store（auto/light/dark）+ matchMedia/localStorage；`pnpm tauri:build` 实测 release exe = **4.15 MB**（vs 预估 ~9MB，偏好 53%），ADR-017 已补实测；同 commit 清理 4 处文档过时性能预算（`启动 < 1500ms / 内存 < 150MB` → 推到 M5 自测期统一压测）。详见关闭的 [Issue #2](https://github.com/tl0502/APET/issues/2)。
 - M1-D3 PetCanvas + VRM momo 渲染就位（commit 0df9076）：three@0.184 + @pixiv/three-vrm@3.5；vrm.ts（VRMRuntime 透明背景 + 半身相机 + 1.6Hz 呼吸 + A-pose + spring bone）+ useVRMModel composable + 简化版 PetCanvas（193L → 71L，剥离 hitbox/drag/IPC，推到后续 task）；avatar.vrm 用户私有 .gitignore 屏蔽。详见关闭的 [Issue #3](https://github.com/tl0502/APET/issues/3)。
+- M1-D4 IPC 框架就位（commit ff32dda）：Rust `commands::system::ping` + `lib.rs` 注册 `invoke_handler![ping]`；前端 `services/ipc.ts` 统一 `invoke<T>` wrapper + `types/ipc.ts` `IpcError`（带命令名上下文）；M1 不引 ts-rs/specta，类型手写。详见关闭的 [Issue #4](https://github.com/tl0502/APET/issues/4)。
 
 ### 立项准备期（2026-04-30 → 2026-05-05）
 
@@ -55,6 +56,8 @@ related:
 新建 [Issue #3](https://github.com/tl0502/APET/issues/3) 接入 PetCanvas + VRM momo 渲染（type:spike, module:A-shell, priority:p0），M1 W1 关键路径，下一 session 启动。
 
 完成 [Issue #3](https://github.com/tl0502/APET/issues/3) PetCanvas + VRM momo 渲染（commit 0df9076，已 push 触发自动关闭）：装 three@0.184 + @pixiv/three-vrm@3.5 + @types/three(dev)；从旧项目 D:\Project\ai桌宠 整文件复制 src/services/vrm.ts（207L）+ src/composables/useVRMModel.ts（45L）；新写简化版 src/components/PetCanvas.vue（71L，剥离 hitbox/drag/IPC/petStore，仅保留 canvas + Loading/Error 兜底文案）；App.vue 引用 PetCanvas。**关键取舍**：vrm.ts 整文件复制（含未消费的 getBounds() ~50L），下个 hitbox task 直接复用避免重写；PetCanvas 严守 spike 边界（hitbox 推到 A.6，drag 推到 N 模块）；WebView 同源访问 public/avatar/avatar.vrm 无需额外 capabilities。**验收**：tauri:dev 视觉确认 momo 渲染正常 + 背景透明（半身像 / 双臂自然下垂 / 轻微呼吸）；typecheck / lint / cargo check 全过。
+
+完成 [Issue #4](https://github.com/tl0502/APET/issues/4) IPC 框架（commit ff32dda，已 push 触发自动关闭）：与 #3 完全并行的后端壳；新建 `src-tauri/src/commands/{mod,system}.rs`（`#[tauri::command] async fn ping() -> "pong"`）+ `src/services/ipc.ts`（统一 `invoke<T>` wrapper，转发 `@tauri-apps/api/core::invoke` 并把异常包成 `IpcError` 带命令名上下文）+ `src/types/ipc.ts`（`IpcError` class）；`lib.rs` 注册 `invoke_handler![commands::system::ping]`。**关键取舍**：M1 不引 ts-rs/specta（手写类型；M2-M3 视规模决定）；alert 验证 demo 挂在 main.ts dev-only 守卫块（`if (import.meta.env.DEV)`），避开 PetCanvas 透明窗（PRD §7.2），验证通过后清理回原状态；`alert` 而非 `console.log` 是为了让单人 vibecoding 阶段的功能性验证最直观。**实测**：`pnpm tauri:dev` 弹出 `[ipc-verify] ping → pong`；`pnpm typecheck` / `pnpm lint --max-warnings=0` / `cargo check` 三件套 0 错 0 警。
 
 ### 2026-05-05
 
