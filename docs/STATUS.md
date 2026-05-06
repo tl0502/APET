@@ -20,7 +20,7 @@ related:
 
 - **当前 milestone**：M1 W1（壳层 + 对话）
 - **当前 session 在做**：—
-- **下一步**：[Issue #2](https://github.com/tl0502/APET/issues/2) Element Plus 全量 import + 主题跟随系统（ADR-017 已选定）
+- **下一步**：[Issue #3](https://github.com/tl0502/APET/issues/3) 接入 PetCanvas + VRM momo 渲染（A.3 vrm spike，关键路径）
 - **阻塞**：无
 
 ---
@@ -30,6 +30,7 @@ related:
 ### M1 启动（2026-05-06 起）
 
 - M1-D1 项目脚手架就位（commit 8952e6e）：Tauri 2 + Vue 3 + TS + Pinia + Vite 7 + pnpm；`pnpm tauri:dev` 跑通 320×320 透明窗口；ADR-016 / ADR-017 入库（commit 3426184）。详见关闭的 [Issue #1](https://github.com/tl0502/APET/issues/1)。
+- M1-D2 Element Plus + 主题跟随系统就位（commit 7c387db）：EP 全量 import + zh-CN locale + 三态 Pinia 主题 store（auto/light/dark）+ matchMedia/localStorage；`pnpm tauri:build` 实测 release exe = **4.15 MB**（vs 预估 ~9MB，偏好 53%），ADR-017 已补实测；同 commit 清理 4 处文档过时性能预算（`启动 < 1500ms / 内存 < 150MB` → 推到 M5 自测期统一压测）。详见关闭的 [Issue #2](https://github.com/tl0502/APET/issues/2)。
 
 ### 立项准备期（2026-04-30 → 2026-05-05）
 
@@ -47,6 +48,10 @@ related:
 ### 2026-05-06
 
 完成 [Issue #1](https://github.com/tl0502/APET/issues/1) M1-D1 项目脚手架：17 个文件落盘（5 前端配置 + 4 前端入口 + 5 Tauri 后端 + 1 capabilities + 2 icons），`pnpm install / typecheck / lint` + `cargo check` + `pnpm tauri:dev` 全部通过。**实施期发现**：本机 Windows HyperV TCP 排除范围 1423-1522 包含原计划端口 1430，改用 Tauri 2 默认 1420 + HMR 1421。**ADR-016**（脚手架技术栈）+ **ADR-017**（Element Plus 全量 import + 主题跟随系统）入库（commit 3426184）；脚手架代码 commit 8952e6e 已 push。
+
+完成 [Issue #2](https://github.com/tl0502/APET/issues/2) Element Plus + 主题跟随系统（commit 7c387db）：EP 2.13 全量 import + zh-CN locale + dark css-vars；新建 `src/stores/theme.ts` 三态 Pinia store（auto/light/dark）+ matchMedia listener + localStorage 持久化；`useThemeStore().init()` 在 mount 之前调用避免 FOUC。**关键取舍**：不引 VueUse `useDark`（三态 mode 与其布尔语义不匹配）；验证 demo 不放 PetCanvas 主壳（违反 PRD §7.2 角色窗透明约束），改为功能性验证后即清理。**实测**：`pnpm tauri:build` release exe = **4.15 MB**（vs ADR-017 预估 ~9MB，偏好 53%），实测数字已写入 ADR-017。**同时清理 4 处文档过时性能预算**（`启动 < 1500ms / 内存 < 150MB` → 推到 M5 自测期统一压测）：decisions.md ADR-002、prd.md §22、architecture §M0 节点、roadmap §4.1 spike 表。
+
+新建 [Issue #3](https://github.com/tl0502/APET/issues/3) 接入 PetCanvas + VRM momo 渲染（type:spike, module:A-shell, priority:p0），M1 W1 关键路径，下一 session 启动。
 
 ### 2026-05-05
 

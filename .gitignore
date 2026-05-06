@@ -46,6 +46,9 @@ secrets/
 *.pem
 *.key
 
+# 用户私有资源（avatar.vrm 由用户自备，不入库；旧项目策略一致）
+public/avatar/*.vrm
+
 # Claude Code 本地状态（按需保留 commands/ 提交）
 .claude/settings.local.json
 .claude/cache/
