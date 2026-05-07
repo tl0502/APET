@@ -25,6 +25,7 @@ description: 并行 session 协调员 —— 管理 worktree 与多个 Claude se
 - 不写 `src/` / `src-tauri/` / `docs/` 下的业务代码
 - 不改 `docs/STATUS.md`（并行期两边都改易撞，等所有并行合完后由用户走 `/sync-status` 统一同步）
 - 不关闭 GitHub issue（由实际做完的那个 session 走 `/sync-status`）
+- 不主动 `git push`（单人本地项目偏好；commit 即归档，是否同步远端由用户拍）
 - 不写 auto memory（并行管理不是通用规则，是显式触发的 skill）
 - 不替用户在合并冲突时选 ours / theirs（冲突段全部展示，用户拍）
 
@@ -86,8 +87,9 @@ dev 端口：主 session 可能跑着 pnpm tauri:dev 占 1420/1421。你这边�
 只跑 cargo check / pnpm typecheck / pnpm lint 验证；要功能验证时和
 主 session 错峰（让主 session 先 Ctrl+C 停 dev）。
 
-完成后：commit + push 到 <branch> 分支。STATUS.md 暂时不要改
-（避免和主 session 撞），合并回 main 后由用户统一走 /sync-status 同步。
+完成后：本地 commit 到 <branch> 分支即可（单人本地项目，不 push 远端）。
+STATUS.md 暂时不要改（避免和主 session 撞），合并回 main 后由用户统一
+走 /sync-status 同步。
 ```
 
 ---
@@ -126,7 +128,7 @@ dev 端口：主 session 可能跑着 pnpm tauri:dev 占 1420/1421。你这边�
    - 列出 conflict 文件
    - 对每个文件，展示两边改了什么 + 解释意图（不替决，让用户拍）
    - 用户裁决后帮执行 `git add` + `git commit`
-7. `git push`
+7. **不 push**（单人本地项目偏好；如用户明确要求 push 才执行）
 8. 提示用户：「现在可以走 `/sync-status` 关闭 #N + 同步 STATUS.md」
 9. 询问是否清理 worktree（动作 4）
 
@@ -152,6 +154,7 @@ dev 端口：主 session 可能跑着 pnpm tauri:dev 占 1420/1421。你这边�
 - **`pnpm-lock.yaml`** / **`Cargo.lock`**：两边加依赖必撞 → 后合那边重跑 `pnpm install` / `cargo build` 重生成 lock
 - **`src-tauri/src/lib.rs`**：plugin / handler 注册行最易撞 → 入场 prompt 已强调"只追加不改既有行"
 - **`docs/STATUS.md`**：所有并行 session 都不写 → 全部合完后用户统一走 `/sync-status`
+- **路径报告陷阱（Claude Code Windows 沙箱）**：session 内 `pwd` / `git rev-parse --show-toplevel` 报的是虚拟路径（C 盘 `C:\Users\user\project\_external\D\...`），`realpath .` 才是真实物理路径（D 盘 `/d/Project/...`）。给用户外部终端的 cd 命令时，**必须用 `realpath` 转真实路径**，不能直接复制 `pwd` 输出 —— 否则用户在外部 cd 会失败（C 盘那条路径不存在）
 
 ---
 
