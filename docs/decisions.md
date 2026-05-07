@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 决策记录
-updated: 2026-05-06
+updated: 2026-05-07
 related:
   - README.md
   - WORKFLOW.md
@@ -124,10 +124,16 @@ related:
 - **代价**：产物多 ~250 KB（接受）；所有 EP 组件 CSS 启动即载（透明窗口下视觉无影响）；锁定 EP 设计语言（若 M5 末实测冷启动 > 5s 预算超支，回滚到 `unplugin-vue-components` 按需 import，评估 0.5 天）。**Supersedes**：ADR-001 中"Naive UI 或 Element Plus，M1 W1 试一下再定"悬而未决项。
 - **实测**（M1-D2，2026-05-06）：`pnpm tauri:build` 产物 `src-tauri/target/release/aipet.exe` = **4.15 MB / 4,350,976 bytes**（debug 对比 = 11.94 MB；release 编译 4m 17s）。预估 7-9 MB，**实测优于预估约 50%**（release profile `lto=true / codegen-units=1 / strip=true` 三件套效果显著）。`bundle.active=false` 故无 .msi/.exe 安装包；M5 末再测全量 bundle 体积（含 WebView2 Bootstrapper 与图标资源）。
 
+### ADR-018 LLM 三层抽象 + AgentService 工具调用框架
+
+- **为什么**：M1 #12 LLMProvider 设计若按 issue body 字面 `content: String` 实现，M3 接多模态（图/音/文件输入）+ Claude Code 级本地文件能力（Read/Edit/Write/Glob/Grep/Bash 等 agent 工具调用）会被迫重写 trait，所有上游 caller（ChatService / LLMGameRunner 等）跟着改；2026 年实测调研：OpenAI Chat Completions / Anthropic messages / DeepSeek / Moonshot / Qwen / Ollama 已全部走 parts 数组 + tool_calls 协议，按 issue body 字面写 = 已知未来负债。
+- **选了什么**：三层分离 — **Layer 1 LLMProvider**（消息进 token 出 + tool_call 透传，#12 M1 落地；types 用 `Vec<ContentPart>` parts 数组 + `ToolCall` / `ToolDefinition` typed 但 M1 只走 `Text` variant + `tools=vec![]`；M3 接多模态 / 工具调用 = 添 impl 路径不动 trait）；**Layer 2 ChatService**（编排 Persona + Memory + SecurityGuard，#13 起逐步完整；M1 不实现）；**Layer 3 AgentService + ToolRegistry**（Claude Code 风格 agent loop + 内置 tool — Read / Edit / Write / Glob / Grep / Bash 等 6 个起步，M3+ 新增；具体路径白名单 / 命令沙盒细则待 ADR-019 决议）。stream 接口选 callback `Box<dyn Fn(StreamDelta) + Send>` 而非架构 §6.1 字面的 `impl Stream<Item=Result<...>>`（callback 转 Tauri emit 一行；Stream 在 trait object 上需 `Pin<Box<dyn Stream...>>` 写法繁琐；调用方无 take_while / buffer 等组合需求）。OpenAI 协议序列化策略：单 `ContentPart::Text` 序列化成旧 string `{role,content:"s"}`（兼容老 model 与 Ollama / Qwen / Moonshot 各家 fallback 路径），多 part 或非 Text → parts 数组；`messages.content` SQLite 列保留 TEXT，多模态消息 JSON-encode `Vec<ContentPart>` 内嵌（`[{` 前缀探嗅区分），守"27 表零迁移"D5 原则。M1 API key 走 `config` 表 KV 明文（key=`llm:openai:api_key`，与 #10 #11 同款偏离 issue body 的"settings 表"），M3 G CryptoService 上线后迁移到 `secrets` 表 DPAPI 加密（ADR-005 已说明可推迟）。
+- **代价**：M1 多写 ~50 行类型定义（ContentPart 5 variant + ToolCall + ToolDefinition + StreamDelta enum + FinishReason），M1 不消费；M3 才有真消费方。架构 §6.1 stream 形状字面被本 ADR 覆盖（已在原章节追加 *Superseded by ADR-018* 跳转）。tool 沙盒细则未定，M3 G 模块前必须 ADR-019 拍板，否则 AgentService 不能开工。
+
 ---
 
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-018**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-019**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。

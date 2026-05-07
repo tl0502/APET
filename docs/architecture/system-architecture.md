@@ -742,6 +742,8 @@ trait LLMProvider {
 }
 ```
 
+> **Superseded by [ADR-018](../decisions.md)**（2026-05-07，#12 实施期）：trait 实际实现采用 callback `Box<dyn Fn(StreamDelta) + Send>` 取代 `impl Stream<Item=Result<...>>`（trait object 写法简洁；ChatService 转 Tauri emit 一行）；`Vec<Message>` 中 `Message.content` 改为 `Vec<ContentPart>` parts 数组（M1 typed only Text；M3+ 接多模态 / 工具调用不动 trait）。`ChatChunk` 拆为 `StreamDelta::TextDelta / ToolCallDelta / Finish` 三 variant。详 ADR-018。
+
 ### 6.2 实现
 
 - **MVP P0**:OpenAI 兼容协议(覆盖 OpenAI、DeepSeek、Moonshot、通义、Ollama、自定义)— 100% 必备(ADR-005)。
