@@ -25,7 +25,8 @@ const DB_URL: &str = "sqlite:aipet.db";
 fn migrations() -> Vec<Migration> {
     vec![Migration {
         version: 1,
-        description: "init schema v1 per architecture v1.1 §4 (ADR-015 三形态共享 ConversationStore)",
+        description:
+            "init schema v1 per architecture v1.1 §4 (ADR-015 三形态共享 ConversationStore)",
         sql: include_str!("../migrations/001_init.sql"),
         kind: MigrationKind::Up,
     }]
@@ -52,6 +53,8 @@ pub fn run() {
             app.manage(ShortcutRegistry::default());
             // #12 LLM 测试 IPC 的活跃 CancellationToken 槽（chat_send_test ↔ cancel_test 共享）
             crate::commands::llm::setup(app.handle());
+            // #13 ChatService 业务编排（chat_send / chat_cancel / chat_history）
+            app.manage(crate::services::chat::service::ChatService::new());
             // #6 系统托盘 + 菜单（显示/隐藏 / 设置占位 / 退出）
             crate::services::tray::setup(app.handle())?;
             // #5 H.1 内置人格 seed：plugin migrations 已建表，这里 UPSERT momo 行。
@@ -138,6 +141,10 @@ pub fn run() {
             commands::llm::get_openai_config,
             commands::llm::chat_send_test,
             commands::llm::cancel_test,
+            // #13 ChatService 业务编排（流式对话 + 取消 + 历史）
+            commands::chat::chat_send,
+            commands::chat::chat_cancel,
+            commands::chat::chat_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

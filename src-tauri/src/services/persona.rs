@@ -179,16 +179,34 @@ pub async fn load_persona<R: Runtime>(
     Ok(summary)
 }
 
+/// 读取当前 active persona（personas WHERE is_active = 1 LIMIT 1）。
+///
+/// #13 ChatService 拼 system prompt 时用：用户没指定时直接拿当前激活人格。
+/// 没有 active 行（首启 seed 之前 / 全部停用）→ NotFound("active persona")。
+pub async fn load_active_persona<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<PersonaSummary, PersonaLookupError> {
+    let mut conn = open_app_db(app).await?;
+    let active: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM personas WHERE is_active = 1 LIMIT 1")
+            .fetch_optional(&mut conn)
+            .await
+            .map_err(PersonaError::from)?;
+    let id = active.ok_or_else(|| PersonaLookupError::NotFound("active persona".to_string()))?;
+    let summary = load_persona_with_conn(&mut conn, &id.0).await?;
+    conn.close().await.map_err(PersonaError::from)?;
+    Ok(summary)
+}
+
 pub(crate) async fn load_persona_with_conn(
     conn: &mut sqlx::SqliteConnection,
     id: &str,
 ) -> Result<PersonaSummary, PersonaLookupError> {
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
-        "SELECT id, name, version, source FROM personas WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(&mut *conn)
-    .await?;
+    let row: Option<(String, String, String, String)> =
+        sqlx::query_as("SELECT id, name, version, source FROM personas WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?;
     let (pid, name, version, source) =
         row.ok_or_else(|| PersonaLookupError::NotFound(id.to_string()))?;
     let snap: Option<(String,)> = sqlx::query_as(
@@ -441,7 +459,10 @@ mod tests {
         .fetch_one(&mut conn)
         .await
         .unwrap();
-        assert_eq!(snap_count.0, 1, "snapshot must be deduped by (persona_id, version)");
+        assert_eq!(
+            snap_count.0, 1,
+            "snapshot must be deduped by (persona_id, version)"
+        );
     }
 
     #[tokio::test]
