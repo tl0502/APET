@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-06
+updated: 2026-05-07
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -20,7 +20,7 @@ related:
 
 - **当前 milestone**：M1 W1-W2（壳层 + 对话）
 - **当前 session 在做**：—
-- **下一步**：按优先序推进 13 个新 issue（详见 [#6-#18](https://github.com/tl0502/APET/issues)）。第一批可个人测试基线：[#6](https://github.com/tl0502/APET/issues/6) 托盘 → [#7](https://github.com/tl0502/APET/issues/7) 视觉 token → [#8](https://github.com/tl0502/APET/issues/8) 通用容器 → [#9](https://github.com/tl0502/APET/issues/9) 设置面板骨架 → [#10](https://github.com/tl0502/APET/issues/10) 拖动 → [#11](https://github.com/tl0502/APET/issues/11) 全局快捷键。
+- **下一步**：按优先序推进剩余 12 个新 issue（详见 [#7-#18](https://github.com/tl0502/APET/issues)）。第一批可个人测试基线：[#7](https://github.com/tl0502/APET/issues/7) 视觉 token → [#8](https://github.com/tl0502/APET/issues/8) 通用容器 → [#9](https://github.com/tl0502/APET/issues/9) 设置面板骨架 → [#10](https://github.com/tl0502/APET/issues/10) 拖动 → [#11](https://github.com/tl0502/APET/issues/11) 全局快捷键。
 - **阻塞**：无
 
 ---
@@ -34,6 +34,7 @@ related:
 - M1-D3 PetCanvas + VRM momo 渲染就位（commit 0df9076）：three@0.184 + @pixiv/three-vrm@3.5；vrm.ts（VRMRuntime 透明背景 + 半身相机 + 1.6Hz 呼吸 + A-pose + spring bone）+ useVRMModel composable + 简化版 PetCanvas（193L → 71L，剥离 hitbox/drag/IPC，推到后续 task）；avatar.vrm 用户私有 .gitignore 屏蔽。详见关闭的 [Issue #3](https://github.com/tl0502/APET/issues/3)。
 - M1-D4 IPC 框架就位（commit ff32dda）：Rust `commands::system::ping` + `lib.rs` 注册 `invoke_handler![ping]`；前端 `services/ipc.ts` 统一 `invoke<T>` wrapper + `types/ipc.ts` `IpcError`（带命令名上下文）；M1 不引 ts-rs/specta，类型手写。详见关闭的 [Issue #4](https://github.com/tl0502/APET/issues/4)。
 - M1-D5 PersonaService MVP + Memory/Nickname 骨架就位（commit e5ca882）：tauri-plugin-sql 2 + sqlx 0.8 + gray_matter 0.2 + ulid 1；001_init.sql 全 27 表一次建（M2-M5 零迁移）+ 002 persona_snapshots unique idx；启动期 spawn `seed_builtin` UPSERT 内置 momo（personas + persona_snapshots）；11 个 IPC 命令（persona_load/activate + nickname 5 个 + memory KV 4 个）。**整文件复用**旧项目 D:\Project\ai桌宠 dogfood 过的 4 个 .rs + 2 个 SQL + momo.soul.md（38 个测试自带）。详见关闭的 [Issue #5](https://github.com/tl0502/APET/issues/5)。
+- M1-D6 系统托盘 + 关闭语义就位（commit 558dafb）：tauri features 加 `tray-icon`；新建 services/{tray,window_actions}.rs（**整文件复用 + 裁剪**旧项目 D:\Project\ai桌宠 cut/window 的 dogfood helper：tray.rs 125→105L 删 PASSTHROUGH/TOPMOST 2 个 CheckMenuItem，window_actions.rs 35L 0 改）；lib.rs 接入 tray::setup + on_window_event 拦截 CloseRequested → window.hide()，唯一退出路径 = 托盘"退出"。**关键取舍**：「显示/隐藏」1 项动态文案 + 「单击托盘 toggle」按用户决策删除（仅菜单可操作避免误触）；decorations:false 故无 X 按钮，关闭只走 Alt+F4。详见关闭的 [Issue #6](https://github.com/tl0502/APET/issues/6)。
 
 ### 立项准备期（2026-04-30 → 2026-05-05）
 
@@ -47,6 +48,10 @@ related:
 ---
 
 ## 历史 session 摘要
+
+### 2026-05-07
+
+完成 [Issue #6](https://github.com/tl0502/APET/issues/6) 系统托盘菜单（最小集 + 关闭语义，commit 558dafb，将 push 触发自动关闭）：M1 W2 主态可达交付物。**整文件复用 + 裁剪**旧项目 D:\Project\ai桌宠 cut/window/backend/services/ 的 tray.rs（125→105L）+ window_actions.rs（35L 0 改）；裁剪掉旧版 PASSTHROUGH/TOPMOST 2 个 CheckMenuItem（前者依赖未实现 AppState 字段，后者 #6 out-of-scope 推 M2）。**关键决策**：① 「显示/隐藏」按 issue 字面 1 项动态文案：MenuItem clone 多份传 closure，在菜单点击 / hover Enter 时 set_text 刷新；② 「单击托盘 toggle」按用户中途决策删除（仅菜单可操作避免误触）；③ tauri.conf.json `decorations:false` 故实际无 X 按钮，关闭路径只走 Alt+F4。**实测**：cargo check / pnpm typecheck / pnpm lint --max-warnings=0 三件套 0 错 0 警；视觉验证（用户跑 `pnpm tauri:dev`）：托盘图标 + tooltip + 右键 4 项菜单 + Alt+F4 hide + 退出杀进程全部通过。**memory 收纳**：feedback_file_ops（项目根全树读写已永久授权 + 内置 Edit/Write+相对路径 实测稳定，mcp filesystem 在 sandbox 下报 access denied 不用）+ feedback_validate_before_persist（用户提议先实测再写持久化产物，不可行就诚实反馈）。
 
 ### 2026-05-06
 
