@@ -43,7 +43,9 @@ pub async fn persona_load(app: AppHandle, id: String) -> Result<PersonaSummary, 
 #[tauri::command]
 pub async fn persona_activate(app: AppHandle, id: String) -> Result<(), String> {
     let id = validate_persona_id(&id)?.to_string();
-    activate_persona(&app, &id).await.map_err(lookup_err_to_string)?;
+    activate_persona(&app, &id)
+        .await
+        .map_err(lookup_err_to_string)?;
     // 与 nickname:changed 同款契约：跨窗口（M3 设置面板）切人格后角色窗能 listen 到刷新
     app.emit(PERSONA_ACTIVATED_EVENT, &id)
         .map_err(|e| format!("emit persona:activated failed: {e}"))?;

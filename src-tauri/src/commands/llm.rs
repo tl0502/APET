@@ -163,8 +163,8 @@ pub async fn chat_send_test<R: Runtime>(
 
     // CUSTOM provider id：M1 始终沿用 "openai"（trait id 不影响 wire format）；M3 多
     // provider 时由 ProviderRegistry 按用户配置切换 id（'openai' / 'deepseek' / ...）。
-    let provider = OpenAIProvider::new("openai", &base_url, api_key, &model)
-        .map_err(|e| format!("{e}"))?;
+    let provider =
+        OpenAIProvider::new("openai", &base_url, api_key, &model).map_err(|e| format!("{e}"))?;
 
     let cancel = CancellationToken::new();
     {
@@ -194,7 +194,9 @@ pub async fn chat_send_test<R: Runtime>(
     let messages = vec![ChatMessage::text(Role::User, input)];
     let options = ChatOptions::default();
 
-    let result = provider.chat_stream(messages, options, cancel, on_delta).await;
+    let result = provider
+        .chat_stream(messages, options, cancel, on_delta)
+        .await;
 
     // 清理 token 槽（无论成功失败；下次 chat_send_test 重新登记）
     {

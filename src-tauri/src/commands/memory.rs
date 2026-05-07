@@ -55,5 +55,7 @@ pub async fn memory_list(app: AppHandle) -> Result<Vec<PreferenceItem>, String> 
 #[tauri::command]
 pub async fn memory_delete(app: AppHandle, key: String) -> Result<(), String> {
     let key = validate_key(&key)?;
-    preferences::delete(&app, key).await.map_err(|e| e.to_string())
+    preferences::delete(&app, key)
+        .await
+        .map_err(|e| e.to_string())
 }

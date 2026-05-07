@@ -23,7 +23,8 @@ use ulid::Ulid;
 const VALID_ROLES: &[&str] = &["user", "assistant", "system"];
 const VALID_MODES: &[&str] = &["online", "offline_rule"];
 
-const SUMMARY_PLACEHOLDER: &str = "[摘要功能将于 M3 引入;此处为占位符,详见 progress/decisions-log.md]";
+const SUMMARY_PLACEHOLDER: &str =
+    "[摘要功能将于 M3 引入;此处为占位符,详见 progress/decisions-log.md]";
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct MessageRecord {
@@ -123,16 +124,14 @@ pub async fn list_messages_by_conversation<R: Runtime>(
     limit: Option<u32>,
 ) -> Result<Vec<MessageRecord>, MemoryError> {
     let mut conn = open_conn(app).await?;
-    let records = list_messages_by_conversation_with_conn(&mut conn, conversation_id, limit).await?;
+    let records =
+        list_messages_by_conversation_with_conn(&mut conn, conversation_id, limit).await?;
     conn.close().await?;
     Ok(records)
 }
 
 /// 按消息 ID 删除(用户主动 "删除某条" 用)。
-pub async fn delete_message<R: Runtime>(
-    app: &AppHandle<R>,
-    id: &str,
-) -> Result<(), MemoryError> {
+pub async fn delete_message<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), MemoryError> {
     let mut conn = open_conn(app).await?;
     delete_message_with_conn(&mut conn, id).await?;
     conn.close().await?;
@@ -205,30 +204,34 @@ pub(crate) async fn list_messages_by_conversation_with_conn(
     limit: Option<u32>,
 ) -> Result<Vec<MessageRecord>, MemoryError> {
     let records: Vec<MessageRecord> = match limit {
-        Some(n) => sqlx::query_as::<_, MessageRecord>(
-            r#"
+        Some(n) => {
+            sqlx::query_as::<_, MessageRecord>(
+                r#"
             SELECT id, conversation_id, role, content, mode, created_at
             FROM messages
             WHERE conversation_id = ?
             ORDER BY created_at ASC
             LIMIT ?
             "#,
-        )
-        .bind(conversation_id)
-        .bind(n)
-        .fetch_all(conn)
-        .await?,
-        None => sqlx::query_as::<_, MessageRecord>(
-            r#"
+            )
+            .bind(conversation_id)
+            .bind(n)
+            .fetch_all(conn)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, MessageRecord>(
+                r#"
             SELECT id, conversation_id, role, content, mode, created_at
             FROM messages
             WHERE conversation_id = ?
             ORDER BY created_at ASC
             "#,
-        )
-        .bind(conversation_id)
-        .fetch_all(conn)
-        .await?,
+            )
+            .bind(conversation_id)
+            .fetch_all(conn)
+            .await?
+        }
     };
     Ok(records)
 }
@@ -312,12 +315,8 @@ mod tests {
     fn build_message_record_accepts_all_valid_roles_and_modes() {
         for role in VALID_ROLES {
             for mode in VALID_MODES {
-                let r = build_message_record(
-                    "c".into(),
-                    (*role).into(),
-                    "x".into(),
-                    (*mode).into(),
-                );
+                let r =
+                    build_message_record("c".into(), (*role).into(), "x".into(), (*mode).into());
                 assert!(r.is_ok(), "role={role}, mode={mode} should be accepted");
             }
         }
@@ -486,7 +485,9 @@ mod tests {
         let kept = insert_user_msg(&mut conn, "conv-d", "keep").await;
         let removed = insert_user_msg(&mut conn, "conv-d", "remove").await;
 
-        delete_message_with_conn(&mut conn, &removed.id).await.unwrap();
+        delete_message_with_conn(&mut conn, &removed.id)
+            .await
+            .unwrap();
         let list = list_messages_by_conversation_with_conn(&mut conn, "conv-d", None)
             .await
             .unwrap();
@@ -535,7 +536,9 @@ mod tests {
 
         // 用 90 天 cutoff(now - 90d ≫ 2020-01-01)
         let cutoff = cutoff_for_days(90);
-        let removed = cleanup_messages_with_conn(&mut conn, &cutoff).await.unwrap();
+        let removed = cleanup_messages_with_conn(&mut conn, &cutoff)
+            .await
+            .unwrap();
         assert_eq!(removed, 1, "only the 2020 message should be cleaned");
 
         let remaining = list_messages_by_conversation_with_conn(&mut conn, "conv-cleanup", None)

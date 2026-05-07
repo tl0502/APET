@@ -242,11 +242,10 @@ pub(crate) async fn restore_pet_nickname_with_conn(
     conn: &mut SqliteConnection,
     now_rfc3339: &str,
 ) -> Result<Option<String>, NicknameError> {
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT pet_nickname, pet_nickname_previous FROM nicknames WHERE id = 1",
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
+    let row: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT pet_nickname, pet_nickname_previous FROM nicknames WHERE id = 1")
+            .fetch_optional(&mut *conn)
+            .await?;
 
     let (_current, previous) = match row {
         Some(t) => t,
@@ -382,30 +381,21 @@ mod tests {
             .await
             .unwrap();
         // 第二次 set 后:current = "momo", previous = "小默"
-        assert_eq!(
-            get_pet_nickname_with_conn(&mut conn).await.unwrap(),
-            "momo"
-        );
+        assert_eq!(get_pet_nickname_with_conn(&mut conn).await.unwrap(), "momo");
 
         // restore #1:swap → current = "小默", previous = "momo"
         let restored = restore_pet_nickname_with_conn(&mut conn, &now)
             .await
             .unwrap();
         assert_eq!(restored.as_deref(), Some("小默"));
-        assert_eq!(
-            get_pet_nickname_with_conn(&mut conn).await.unwrap(),
-            "小默"
-        );
+        assert_eq!(get_pet_nickname_with_conn(&mut conn).await.unwrap(), "小默");
 
         // restore #2:再 swap → current = "momo", previous = "小默"
         let restored2 = restore_pet_nickname_with_conn(&mut conn, &now)
             .await
             .unwrap();
         assert_eq!(restored2.as_deref(), Some("momo"));
-        assert_eq!(
-            get_pet_nickname_with_conn(&mut conn).await.unwrap(),
-            "momo"
-        );
+        assert_eq!(get_pet_nickname_with_conn(&mut conn).await.unwrap(), "momo");
     }
 
     #[tokio::test]

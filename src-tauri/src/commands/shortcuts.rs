@@ -7,7 +7,10 @@ use crate::services::shortcuts::{self, ProbeResult};
 use tauri::AppHandle;
 
 #[tauri::command]
-pub async fn probe_global_shortcut(app: AppHandle, shortcut: String) -> Result<ProbeResult, String> {
+pub async fn probe_global_shortcut(
+    app: AppHandle,
+    shortcut: String,
+) -> Result<ProbeResult, String> {
     Ok(shortcuts::probe(&app, &shortcut))
 }
 

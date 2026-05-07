@@ -83,7 +83,10 @@ mod self_tests {
         .fetch_one(&mut conn)
         .await
         .expect("query sqlite_master");
-        assert_eq!(count.0, 5, "expected 5 core tables to exist after migrations");
+        assert_eq!(
+            count.0, 5,
+            "expected 5 core tables to exist after migrations"
+        );
     }
 
     #[tokio::test]

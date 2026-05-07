@@ -21,7 +21,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime::JoinHandle;
-use tauri::{AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Runtime, WebviewWindow};
+use tauri::{
+    AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Runtime, WebviewWindow,
+};
 
 use crate::services::config;
 use crate::services::window_actions::PET_WINDOW_LABEL;

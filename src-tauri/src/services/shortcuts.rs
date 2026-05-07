@@ -145,10 +145,7 @@ pub fn probe<R: Runtime>(app: &AppHandle<R>, shortcut_str: &str) -> ProbeResult 
 /// 改 chat 快捷键：unregister 旧 + register 新 + 落 config。
 /// 失败时不影响旧快捷键状态（已先成功 unregister 再 register；如果 register 新的失败，
 /// 调用方会失去旧的，可由前端在 set 失败后手动 register 旧值兜底；M1 不做这层 transaction）。
-pub fn set_chat_shortcut<R: Runtime>(
-    app: &AppHandle<R>,
-    new_shortcut: &str,
-) -> Result<(), String> {
+pub fn set_chat_shortcut<R: Runtime>(app: &AppHandle<R>, new_shortcut: &str) -> Result<(), String> {
     let _new = parse_shortcut(new_shortcut)?;
     unregister_current(app)?;
     register_internal(app, new_shortcut)?;

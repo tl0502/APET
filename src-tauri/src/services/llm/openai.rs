@@ -27,8 +27,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::error::{classify_status, LLMError};
 use super::types::{
-    ChatMessage, ChatOptions, ChatStreamFinish, ContentPart, FinishReason, StreamDelta,
-    ToolChoice, Usage,
+    ChatMessage, ChatOptions, ChatStreamFinish, ContentPart, FinishReason, StreamDelta, ToolChoice,
+    Usage,
 };
 use super::LLMProvider;
 

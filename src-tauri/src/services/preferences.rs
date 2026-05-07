@@ -206,6 +206,9 @@ mod tests {
         set_with_conn(&mut conn, "b", "2", &now).await.unwrap();
         delete_with_conn(&mut conn, "a").await.unwrap();
         assert!(get_with_conn(&mut conn, "a").await.unwrap().is_none());
-        assert_eq!(get_with_conn(&mut conn, "b").await.unwrap().as_deref(), Some("2"));
+        assert_eq!(
+            get_with_conn(&mut conn, "b").await.unwrap().as_deref(),
+            Some("2")
+        );
     }
 }
