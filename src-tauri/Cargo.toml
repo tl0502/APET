@@ -34,8 +34,10 @@ sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runti
 ulid = "1"
 
 # #10 桌宠位置防抖保存：tokio time 用于 200ms debounce 的 sleep + JoinHandle abort。
-# 显式依赖（虽然 tauri/sqlx 已传递引入），feature 收紧到 ["time"] + ["rt"] 仅取所需。
-tokio = { version = "1", features = ["time", "rt"] }
+# #12 LLM 流式 + 取消：tokio::select! 宏需要 `macros` feature；非 dev 编译路径下
+# 必须显式启用（dev-deps tokio 启了 macros 让 cargo test 能跑，但非 test build 不会
+# 继承 dev-deps features，会撞 "cannot find `select` in `tokio`"）。
+tokio = { version = "1", features = ["time", "rt", "macros"] }
 
 # #11 全局快捷键：注册 Ctrl+Alt+Space → emit shortcut:chat（PRD §7.2.2）。
 tauri-plugin-global-shortcut = "2"
