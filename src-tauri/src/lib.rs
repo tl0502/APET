@@ -6,6 +6,8 @@ mod commands;
 mod services;
 
 use services::window_actions::{PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL};
+use services::window_state::SaveDebouncer;
+use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DB_URL: &str = "sqlite:aipet.db";
@@ -55,6 +57,13 @@ pub fn run() {
                     eprintln!("[setup] seed_builtin failed: {e}");
                 }
             });
+            // #10 桌宠位置还原：读 last_position（无则 fallback 主屏右下角偏左 80px）
+            // + 当前 monitor 边界裁剪（16px 安全边距）。同步 block_on 与 seed_builtin 同款理由。
+            if let Err(e) = crate::services::window_state::apply_initial_position(app.handle()) {
+                eprintln!("[setup] apply_initial_position failed: {e}");
+            }
+            // #10 Moved 防抖保存：高频 Moved 通过 200ms debounce 节流写 DB。
+            app.manage(SaveDebouncer::default());
             Ok(())
         })
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
@@ -63,13 +72,27 @@ pub fn run() {
         //
         // #9 settings 窗口同款语义：关闭仅 hide，保留 webview 与 tab 状态供下次唤起；
         // 重新打开走托盘菜单 → settings_show 走 show + set_focus（window_actions::show_settings）。
+        //
+        // #10 pet 窗口 Moved 事件：高频触发（每像素一次），通过 SaveDebouncer 200ms 节流
+        // 防抖落 DB；不消费 pointerup（startDragging 系统级拖动 OS 接管 mouse，pointerup
+        // 不冒泡到 webview，单 Moved + debounce 已足够可靠）。
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let label = window.label();
-                if label == PET_WINDOW_LABEL || label == SETTINGS_WINDOW_LABEL {
-                    api.prevent_close();
-                    let _ = window.hide();
+            let label = window.label();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if label == PET_WINDOW_LABEL || label == SETTINGS_WINDOW_LABEL {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
+                tauri::WindowEvent::Moved(_) if label == PET_WINDOW_LABEL => {
+                    let app = window.app_handle();
+                    if let Some(pet) = app.get_webview_window(PET_WINDOW_LABEL) {
+                        let debouncer = app.state::<SaveDebouncer>();
+                        debouncer.schedule(pet);
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -89,9 +112,11 @@ pub fn run() {
             commands::memory::memory_set,
             commands::memory::memory_list,
             commands::memory::memory_delete,
-            // #9 window 控制（settings show/hide）
+            // #9 window 控制（settings show/hide）+ #10 pet 位置 get/save
             commands::window::settings_show,
             commands::window::settings_hide,
+            commands::window::get_pet_position,
+            commands::window::save_pet_position,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
