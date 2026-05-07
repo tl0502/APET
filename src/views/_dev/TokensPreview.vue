@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { ElButton } from 'element-plus'
 import { useThemeStore } from '@/stores/theme'
+import StandardDialog from '@/components/feedback/StandardDialog.vue'
+import { useToast } from '@/composables/useToast'
 
 const theme = useThemeStore()
+const toast = useToast()
+
+const dialogVisible = ref(false)
+const dialogLoading = ref(false)
 
 const colors = [
   ['primary', 'color-primary'],
@@ -115,12 +122,49 @@ const modeLabel = computed(() => `${theme.mode} / ${theme.isDark ? 'dark' : 'lig
       <h2>Motion</h2>
       <button class="motion-card" type="button">Hover me</button>
     </section>
+
+    <section class="preview-section">
+      <h2>Components</h2>
+      <p class="section-hint">issue #8 三件公共件：Toast / StandardDialog / AppShell。</p>
+      <div class="components-row">
+        <ElButton @click="toast.success('保存成功')">Toast Success</ElButton>
+        <ElButton
+          @click="
+            toast.error('请先填写 API Key', {
+              action: { text: '去设置', handler: () => toast.info('跳到设置...') },
+            })
+          "
+        >
+          Toast Error w/ Action
+        </ElButton>
+        <ElButton @click="toast.info('信息提示')">Toast Info</ElButton>
+        <ElButton @click="toast.warn('谨慎操作')">Toast Warn</ElButton>
+        <ElButton type="primary" @click="dialogVisible = true">Open Dialog</ElButton>
+        <ElButton @click="dialogLoading = !dialogLoading">
+          Toggle Dialog Loading ({{ dialogLoading ? 'on' : 'off' }})
+        </ElButton>
+      </div>
+      <StandardDialog
+        v-model="dialogVisible"
+        title="标准弹窗示例"
+        :width="480"
+        :loading="dialogLoading"
+      >
+        <p>正文：演示 ESC / 遮罩 / 关闭按钮三条关闭路径。</p>
+        <p>切换 Loading 可看 spinner overlay 与 footer 屏蔽（防误关）。</p>
+        <template #footer>
+          <ElButton @click="dialogVisible = false">取消</ElButton>
+          <ElButton type="primary" @click="dialogVisible = false">确定</ElButton>
+        </template>
+      </StandardDialog>
+    </section>
   </main>
 </template>
 
 <style scoped>
 .tokens-preview {
-  min-height: 100vh;
+  height: 100vh;
+  overflow-y: auto;
   padding: var(--aipet-space-8);
   color: var(--aipet-color-text-1);
   background: var(--aipet-color-bg);
@@ -273,5 +317,17 @@ code {
   transform: translateY(-1px);
   background: var(--aipet-color-primary);
   color: var(--aipet-color-surface-raised);
+}
+
+.section-hint {
+  margin: 0 0 var(--aipet-space-3);
+  color: var(--aipet-color-text-3);
+  font-size: var(--aipet-font-size-sm);
+}
+
+.components-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aipet-space-2);
 }
 </style>

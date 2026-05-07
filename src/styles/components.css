@@ -1,0 +1,175 @@
+/* AIPET 项目级组件样式覆写表（issue #8）。
+   - 引入顺序：tokens → element-overrides → components → main（见 main.ts）
+   - 选择器：项目自写组件用 .aipet-{component}__{element}（BEM-like）；
+     EP 渗透样式用 .aipet-{component} .el-{...} 后代选择器
+   - 全部从 --aipet-* token 取值，禁止硬编码颜色 / 间距 / 字号
+*/
+
+/* ===== AppShell ===== */
+.aipet-shell {
+  font-family: var(--aipet-font-family-base);
+  color: var(--aipet-color-text-1);
+}
+
+.aipet-shell--standalone {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100vh;
+  background: var(--aipet-color-bg);
+}
+
+.aipet-shell--standalone .aipet-shell__header {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: var(--aipet-space-3) var(--aipet-space-4);
+  border-bottom: 1px solid var(--aipet-color-border);
+  background: var(--aipet-color-surface);
+  font-size: var(--aipet-font-size-base);
+  font-weight: 600;
+  /* Tauri 2 拖动区由 [data-tauri-drag-region] 处理，本处仅给视觉提示 */
+  cursor: default;
+  user-select: none;
+}
+
+.aipet-shell__title {
+  flex: 1 1 auto;
+  color: var(--aipet-color-text-1);
+}
+
+.aipet-shell__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--aipet-space-6);
+}
+
+.aipet-shell__footer {
+  flex: 0 0 auto;
+  padding: var(--aipet-space-3) var(--aipet-space-4);
+  border-top: 1px solid var(--aipet-color-border);
+  background: var(--aipet-color-surface);
+}
+
+.aipet-shell--transparent {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.aipet-shell--transparent .aipet-shell__body {
+  padding: 0;
+}
+
+/* ===== StandardDialog ===== */
+.aipet-dialog {
+  border-radius: var(--aipet-radius-lg);
+  box-shadow: var(--aipet-shadow-lg);
+  overflow: hidden;
+}
+
+.aipet-dialog .el-dialog__header {
+  margin: 0;
+  padding: var(--aipet-space-4) var(--aipet-space-6);
+  border-bottom: 1px solid var(--aipet-color-border);
+  font-size: var(--aipet-font-size-lg);
+  font-weight: 600;
+  color: var(--aipet-color-text-1);
+}
+
+.aipet-dialog .el-dialog__headerbtn {
+  top: var(--aipet-space-3);
+  right: var(--aipet-space-4);
+}
+
+.aipet-dialog .el-dialog__body {
+  padding: var(--aipet-space-6);
+  color: var(--aipet-color-text-2);
+  font-size: var(--aipet-font-size-base);
+  line-height: var(--aipet-line-height-base);
+}
+
+.aipet-dialog .el-dialog__footer {
+  padding: var(--aipet-space-3) var(--aipet-space-6) var(--aipet-space-4);
+  border-top: 1px solid var(--aipet-color-border);
+}
+
+.aipet-dialog__body {
+  position: relative;
+}
+
+.aipet-dialog__body.is-loading {
+  min-height: 96px;
+}
+
+.aipet-dialog__loading {
+  position: absolute;
+  inset: calc(var(--aipet-space-6) * -1);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--aipet-color-surface) 80%, transparent);
+  z-index: 1;
+}
+
+.aipet-dialog__spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--aipet-color-border);
+  border-top-color: var(--aipet-color-primary);
+  border-radius: 50%;
+  animation: aipet-spin 0.8s linear infinite;
+}
+
+.aipet-dialog__footer.is-loading {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.aipet-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--aipet-space-2);
+}
+
+@keyframes aipet-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ===== Toast ===== */
+.aipet-toast {
+  /* EP 自身 z-index 由 OverlayManager 管理（默认 ~2000+），与 --aipet-z-toast 一致 */
+  border-radius: var(--aipet-radius-base);
+  box-shadow: var(--aipet-shadow-base);
+  border: 1px solid var(--aipet-color-border);
+  font-family: var(--aipet-font-family-base);
+}
+
+.aipet-toast .el-message__content {
+  font-size: var(--aipet-font-size-base);
+  color: var(--aipet-color-text-1);
+}
+
+.aipet-toast__content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aipet-space-3);
+}
+
+.aipet-toast__action {
+  margin: 0;
+  padding: 0 var(--aipet-space-1);
+  border: 0;
+  background: transparent;
+  color: var(--aipet-color-primary);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  transition: color var(--aipet-duration-fast) var(--aipet-ease-standard);
+}
+
+.aipet-toast__action:hover {
+  color: var(--aipet-color-primary-hover);
+}
