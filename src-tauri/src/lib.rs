@@ -1,9 +1,11 @@
-// M1 D1 脚手架 → M1 D4 IPC 框架（#4）→ M1 D5 数据层（#5）→ 2026-05-06 code-review 重构。
-// 后续按 milestone 节奏接入：tray / shortcuts / cursor_tracker / on_window_event 等。
+// M1 D1 脚手架 → M1 D4 IPC 框架（#4）→ M1 D5 数据层（#5）→ 2026-05-06 code-review 重构
+// → #6 系统托盘 + 关闭语义（M1 W2 主态可达交付物）。
+// 后续按 milestone 节奏接入：shortcuts / cursor_tracker / window:Moved emit 等。
 
 mod commands;
 mod services;
 
+use services::window_actions::PET_WINDOW_LABEL;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DB_URL: &str = "sqlite:aipet.db";
@@ -40,6 +42,8 @@ pub fn run() {
         )
         .setup(|app| {
             eprintln!("[setup] reached");
+            // #6 系统托盘 + 菜单（显示/隐藏 / 设置占位 / 退出）
+            crate::services::tray::setup(app.handle())?;
             // #5 H.1 内置人格 seed：plugin migrations 已建表，这里 UPSERT momo 行。
             //
             // 2026-05-06 code-review #4：从 spawn(fire-and-forget) 改 block_on 同步等。
@@ -52,6 +56,17 @@ pub fn run() {
                 }
             });
             Ok(())
+        })
+        // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
+        // 唯一退出路径 = 托盘"退出"菜单。理由：桌宠是常驻应用，误触关闭就杀进程会损害预期。
+        // tauri.conf.json 已 decorations:false，故无标题栏 X 按钮；只走 Alt+F4 / 系统命令路径。
+        .on_window_event(|window, event| {
+            if window.label() == PET_WINDOW_LABEL {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             // #4 system

@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 # M1-D5 #5：接入 SQL（plugin + sqlx）+ frontmatter 解析 + ULID（messages.id）。
 # 业务依赖（reqwest / global-shortcut / 等）按 milestone 节奏后置：B.1 LLMProvider / N InteractionRouter / 等。
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
