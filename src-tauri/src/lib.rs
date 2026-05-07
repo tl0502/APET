@@ -50,6 +50,8 @@ pub fn run() {
             eprintln!("[setup] reached");
             // #11 ShortcutRegistry：先 manage 让 register_chat_on_startup 能拿到 state
             app.manage(ShortcutRegistry::default());
+            // #12 LLM 测试 IPC 的活跃 CancellationToken 槽（chat_send_test ↔ cancel_test 共享）
+            crate::commands::llm::setup(app.handle());
             // #6 系统托盘 + 菜单（显示/隐藏 / 设置占位 / 退出）
             crate::services::tray::setup(app.handle())?;
             // #5 H.1 内置人格 seed：plugin migrations 已建表，这里 UPSERT momo 行。
@@ -129,6 +131,11 @@ pub fn run() {
             // #11 shortcuts（probe + set chat）
             commands::shortcuts::probe_global_shortcut,
             commands::shortcuts::set_shortcut_chat,
+            // #12 LLM 测试 IPC（dev console 验证用；#13 ChatService MVP 上线后真消费 LLMProvider trait）
+            commands::llm::set_openai_api_key,
+            commands::llm::get_openai_api_key_set,
+            commands::llm::chat_send_test,
+            commands::llm::cancel_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
