@@ -1,0 +1,81 @@
+:root {
+  --aipet-color-primary: #7c5cff;
+  --aipet-color-primary-hover: #6b4df2;
+  --aipet-color-bg: #f7f5ff;
+  --aipet-color-surface: rgba(255, 255, 255, 0.9);
+  --aipet-color-surface-raised: rgba(255, 255, 255, 0.96);
+  --aipet-color-text-1: #24212f;
+  --aipet-color-text-2: #5a5368;
+  --aipet-color-text-3: #827a91;
+  --aipet-color-border: rgba(76, 65, 111, 0.16);
+  --aipet-color-success: #3aa981;
+  --aipet-color-warning: #d88a22;
+  --aipet-color-danger: #cf4b5f;
+  --aipet-color-overlay: rgba(36, 33, 47, 0.36);
+  --aipet-color-code-bg: rgba(36, 33, 47, 0.07);
+  --aipet-color-error-surface: rgba(255, 232, 235, 0.96);
+
+  --aipet-space-1: 4px;
+  --aipet-space-2: 8px;
+  --aipet-space-3: 12px;
+  --aipet-space-4: 16px;
+  --aipet-space-6: 24px;
+  --aipet-space-8: 32px;
+  --aipet-space-12: 48px;
+  --aipet-space-16: 64px;
+
+  --aipet-font-family-base: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --aipet-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
+  --aipet-font-size-xs: 10px;
+  --aipet-font-size-sm: 12px;
+  --aipet-font-size-base: 14px;
+  --aipet-font-size-lg: 16px;
+  --aipet-font-size-xl: 20px;
+  --aipet-line-height-tight: 1.2;
+  --aipet-line-height-base: 1.4;
+  --aipet-line-height-loose: 1.6;
+
+  --aipet-radius-sm: 3px;
+  --aipet-radius-base: 6px;
+  --aipet-radius-lg: 12px;
+  --aipet-radius-full: 999px;
+
+  --aipet-shadow-sm: 0 2px 8px rgba(36, 33, 47, 0.08);
+  --aipet-shadow-base: 0 8px 24px rgba(36, 33, 47, 0.12);
+  --aipet-shadow-lg: 0 16px 48px rgba(36, 33, 47, 0.16);
+  --aipet-shadow-float: 0 10px 32px rgba(36, 33, 47, 0.18);
+
+  --aipet-duration-fast: 120ms;
+  --aipet-duration-base: 180ms;
+  --aipet-duration-slow: 280ms;
+  --aipet-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --aipet-ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
+
+  --aipet-z-floating: 100;
+  --aipet-z-dialog: 1000;
+  --aipet-z-toast: 2000;
+  --aipet-z-tooltip: 3000;
+}
+
+:root.dark {
+  --aipet-color-primary: #9a86ff;
+  --aipet-color-primary-hover: #b0a1ff;
+  --aipet-color-bg: #171421;
+  --aipet-color-surface: rgba(34, 29, 47, 0.9);
+  --aipet-color-surface-raised: rgba(43, 37, 59, 0.96);
+  --aipet-color-text-1: #f4f1ff;
+  --aipet-color-text-2: #c9c2da;
+  --aipet-color-text-3: #9c94ad;
+  --aipet-color-border: rgba(220, 212, 255, 0.18);
+  --aipet-color-success: #54c8a1;
+  --aipet-color-warning: #f0aa4d;
+  --aipet-color-danger: #ff7a8c;
+  --aipet-color-overlay: rgba(7, 6, 10, 0.56);
+  --aipet-color-code-bg: rgba(244, 241, 255, 0.1);
+  --aipet-color-error-surface: rgba(71, 34, 45, 0.96);
+
+  --aipet-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.22);
+  --aipet-shadow-base: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --aipet-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.38);
+  --aipet-shadow-float: 0 10px 32px rgba(0, 0, 0, 0.42);
+}

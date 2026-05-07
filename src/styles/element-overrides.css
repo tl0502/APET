@@ -1,0 +1,33 @@
+:root {
+  --el-color-primary: var(--aipet-color-primary);
+  --el-color-primary-light-3: color-mix(in srgb, var(--aipet-color-primary) 70%, white);
+  --el-color-primary-light-5: color-mix(in srgb, var(--aipet-color-primary) 50%, white);
+  --el-color-primary-light-7: color-mix(in srgb, var(--aipet-color-primary) 30%, white);
+  --el-color-primary-light-9: color-mix(in srgb, var(--aipet-color-primary) 10%, white);
+  --el-color-primary-dark-2: var(--aipet-color-primary-hover);
+  --el-color-success: var(--aipet-color-success);
+  --el-color-warning: var(--aipet-color-warning);
+  --el-color-danger: var(--aipet-color-danger);
+  --el-bg-color: var(--aipet-color-bg);
+  --el-bg-color-page: var(--aipet-color-bg);
+  --el-bg-color-overlay: var(--aipet-color-surface-raised);
+  --el-fill-color: var(--aipet-color-surface);
+  --el-fill-color-light: var(--aipet-color-surface);
+  --el-fill-color-lighter: var(--aipet-color-surface-raised);
+  --el-fill-color-blank: var(--aipet-color-surface-raised);
+  --el-text-color-primary: var(--aipet-color-text-1);
+  --el-text-color-regular: var(--aipet-color-text-2);
+  --el-text-color-secondary: var(--aipet-color-text-3);
+  --el-border-color: var(--aipet-color-border);
+  --el-border-color-light: var(--aipet-color-border);
+  --el-border-color-lighter: var(--aipet-color-border);
+  --el-border-radius-base: var(--aipet-radius-base);
+  --el-border-radius-small: var(--aipet-radius-sm);
+  --el-font-size-base: var(--aipet-font-size-base);
+  --el-font-family: var(--aipet-font-family-base);
+  --el-box-shadow: var(--aipet-shadow-base);
+  --el-box-shadow-light: var(--aipet-shadow-sm);
+  --el-box-shadow-lighter: var(--aipet-shadow-sm);
+  --el-transition-duration: var(--aipet-duration-base);
+  --el-transition-duration-fast: var(--aipet-duration-fast);
+}

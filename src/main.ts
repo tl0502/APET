@@ -3,13 +3,20 @@ import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
+import './styles/tokens.css'
+import './styles/element-overrides.css'
+import './styles/main.css'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 
 import App from './App.vue'
-import './styles/main.css'
 import { useThemeStore } from '@/stores/theme'
 
-const app = createApp(App)
+const appComponent =
+  import.meta.env.DEV && new URLSearchParams(window.location.search).get('view') === 'tokens'
+    ? (await import('@/views/_dev/TokensPreview.vue')).default
+    : App
+
+const app = createApp(appComponent)
 app.use(createPinia())
 app.use(ElementPlus, { locale: zhCn })
 

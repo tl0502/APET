@@ -41,29 +41,30 @@ const { isLoaded, errorMessage } = useVRMModel(canvasRef, MODEL_URL)
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 12px;
-  color: #555;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 4px 12px;
-  border-radius: 6px;
+  font-size: var(--aipet-font-size-sm);
+  color: var(--aipet-color-text-2);
+  background: var(--aipet-color-surface);
+  padding: var(--aipet-space-1) var(--aipet-space-3);
+  border-radius: var(--aipet-radius-base);
+  box-shadow: var(--aipet-shadow-sm);
   text-align: center;
   pointer-events: none;
   white-space: nowrap;
 }
 
 .hint-error {
-  background: rgba(255, 220, 220, 0.95);
-  color: #722;
-  font-size: 10px;
+  background: var(--aipet-color-error-surface);
+  color: var(--aipet-color-danger);
+  font-size: var(--aipet-font-size-xs);
   max-width: 290px;
   white-space: normal;
-  line-height: 1.4;
+  line-height: var(--aipet-line-height-base);
 }
 
 .hint-error code {
-  background: rgba(0, 0, 0, 0.07);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-family: ui-monospace, monospace;
+  background: var(--aipet-color-code-bg);
+  padding: 1px var(--aipet-space-1);
+  border-radius: var(--aipet-radius-sm);
+  font-family: var(--aipet-font-family-mono);
 }
 </style>
