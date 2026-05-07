@@ -1,9 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力集 — pet 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）。",
-  "windows": ["pet"],
+  "description": "默认能力集 — pet / settings 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键。",
+  "windows": ["pet", "settings"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister"
   ]
 }

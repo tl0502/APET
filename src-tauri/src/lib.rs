@@ -5,6 +5,7 @@
 mod commands;
 mod services;
 
+use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL};
 use services::window_state::SaveDebouncer;
 use tauri::Manager;
@@ -42,8 +43,19 @@ pub fn run() {
                 .add_migrations(DB_URL, migrations())
                 .build(),
         )
+        // #11 全局快捷键：plugin handler 委托 services::shortcuts::handle_shortcut_pressed
+        // → emit `shortcut:chat`。注册由 builder.setup 阶段完成（依赖 ShortcutRegistry state）。
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    crate::services::shortcuts::handle_shortcut_pressed(app, shortcut, event);
+                })
+                .build(),
+        )
         .setup(|app| {
             eprintln!("[setup] reached");
+            // #11 ShortcutRegistry：先 manage 让 register_chat_on_startup 能拿到 state
+            app.manage(ShortcutRegistry::default());
             // #6 系统托盘 + 菜单（显示/隐藏 / 设置占位 / 退出）
             crate::services::tray::setup(app.handle())?;
             // #5 H.1 内置人格 seed：plugin migrations 已建表，这里 UPSERT momo 行。
@@ -64,6 +76,9 @@ pub fn run() {
             }
             // #10 Moved 防抖保存：高频 Moved 通过 200ms debounce 节流写 DB。
             app.manage(SaveDebouncer::default());
+            // #11 启动期注册 chat 快捷键（DB 无记录 → 默认 Ctrl+Alt+Space）。
+            // 失败仅 emit shortcut:register-failed 不阻断启动。
+            crate::services::shortcuts::register_chat_on_startup(app.handle());
             Ok(())
         })
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
@@ -117,6 +132,9 @@ pub fn run() {
             commands::window::settings_hide,
             commands::window::get_pet_position,
             commands::window::save_pet_position,
+            // #11 shortcuts（probe + set chat）
+            commands::shortcuts::probe_global_shortcut,
+            commands::shortcuts::set_shortcut_chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

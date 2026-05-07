@@ -12,6 +12,7 @@ pub mod config;
 pub mod nickname;
 pub mod persona;
 pub mod preferences;
+pub mod shortcuts;
 pub mod window_state;
 
 // #6 系统托盘 + 窗口动作 helper（M1 W2 主态可达交付物）。
