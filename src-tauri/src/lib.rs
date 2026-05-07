@@ -134,6 +134,8 @@ pub fn run() {
             // #12 LLM 测试 IPC（dev console 验证用；#13 ChatService MVP 上线后真消费 LLMProvider trait）
             commands::llm::set_openai_api_key,
             commands::llm::get_openai_api_key_set,
+            commands::llm::set_openai_config,
+            commands::llm::get_openai_config,
             commands::llm::chat_send_test,
             commands::llm::cancel_test,
         ])
