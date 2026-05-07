@@ -43,15 +43,9 @@ pub fn run() {
                 .add_migrations(DB_URL, migrations())
                 .build(),
         )
-        // #11 全局快捷键：plugin handler 委托 services::shortcuts::handle_shortcut_pressed
-        // → emit `shortcut:chat`。注册由 builder.setup 阶段完成（依赖 ShortcutRegistry state）。
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, shortcut, event| {
-                    crate::services::shortcuts::handle_shortcut_pressed(app, shortcut, event);
-                })
-                .build(),
-        )
+        // #11 全局快捷键 plugin：handler 由 register_internal 通过 on_shortcut 逐个绑定
+        // （比 plugin 全局 with_handler 更可靠，详 services/shortcuts.rs::register_internal 注释）。
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             eprintln!("[setup] reached");
             // #11 ShortcutRegistry：先 manage 让 register_chat_on_startup 能拿到 state

@@ -80,8 +80,15 @@ pub fn register_chat_on_startup<R: Runtime>(app: &AppHandle<R>) {
 
 fn register_internal<R: Runtime>(app: &AppHandle<R>, shortcut_str: &str) -> Result<(), String> {
     let shortcut = parse_shortcut(shortcut_str)?;
+    // 用 on_shortcut（不是 register）— per-shortcut handler 更可靠：
+    // plugin 全局 handler（with_handler）在某些 Windows 环境下不触发（global_hotkey
+    // set_event_handler callback 与 plugin handler 分发链路有 bug 报告）；on_shortcut
+    // 把 handler 直接绑到该 shortcut 的 RegisteredShortcut.handler 字段，plugin closure
+    // 第一段 `if let Some(handler) = &shortcut.handler` 就会命中。
     app.global_shortcut()
-        .register(shortcut)
+        .on_shortcut(shortcut, |app, shortcut, event| {
+            handle_shortcut_pressed(app, shortcut, event);
+        })
         .map_err(|e| e.to_string())?;
     let registry = app.state::<ShortcutRegistry>();
     let mut slot = registry
@@ -150,13 +157,19 @@ pub fn set_chat_shortcut<R: Runtime>(
     Ok(())
 }
 
-/// plugin handler：M1 只有 1 个快捷键（chat 唤起），无脑 emit `shortcut:chat`。
-/// 未来加多组（如摸鱼模式 K 模块）时按 shortcut 字符串匹配分支。
+/// per-shortcut handler（M1 只有 1 个：chat 唤起）。
+/// 由 register_internal 通过 on_shortcut 绑定，每次按下都被 plugin closure 第一段触发。
 pub fn handle_shortcut_pressed<R: Runtime>(
     app: &AppHandle<R>,
-    _shortcut: &Shortcut,
+    shortcut: &Shortcut,
     event: tauri_plugin_global_shortcut::ShortcutEvent,
 ) {
+    // dev 期诊断：handler 未触发 → 看不到此行；触发但 emit 失败 → 看到 fired 但前端无 toast
+    eprintln!(
+        "[shortcut] handler fired: shortcut={:?} state={:?}",
+        shortcut,
+        event.state()
+    );
     if event.state() == GsState::Pressed {
         let payload = ShortcutChatPayload {
             source: "global_shortcut",
