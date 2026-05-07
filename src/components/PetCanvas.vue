@@ -19,6 +19,10 @@ async function onPointerDown(event: PointerEvent) {
   if (event.button !== 0) return
   // closest('[data-no-drag]') 兜底：M2 控制按钮容器上线后只需在该元素加 attr 即可隔离，无需改本处。
   if ((event.target as HTMLElement | null)?.closest('[data-no-drag]')) return
+  // dev 期诊断：若 handler 都没跑，问题在 pointer event 传递；若跑到但 startDragging 抛错，看 catch
+  if (import.meta.env.DEV) {
+    console.log('[PetCanvas] pointerdown @', event.clientX, event.clientY, 'target=', event.target)
+  }
   try {
     await getCurrentWindow().startDragging()
   } catch (e) {
