@@ -5,7 +5,7 @@
 mod commands;
 mod services;
 
-use services::window_actions::PET_WINDOW_LABEL;
+use services::window_actions::{PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DB_URL: &str = "sqlite:aipet.db";
@@ -60,9 +60,13 @@ pub fn run() {
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
         // 唯一退出路径 = 托盘"退出"菜单。理由：桌宠是常驻应用，误触关闭就杀进程会损害预期。
         // tauri.conf.json 已 decorations:false，故无标题栏 X 按钮；只走 Alt+F4 / 系统命令路径。
+        //
+        // #9 settings 窗口同款语义：关闭仅 hide，保留 webview 与 tab 状态供下次唤起；
+        // 重新打开走托盘菜单 → settings_show 走 show + set_focus（window_actions::show_settings）。
         .on_window_event(|window, event| {
-            if window.label() == PET_WINDOW_LABEL {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let label = window.label();
+                if label == PET_WINDOW_LABEL || label == SETTINGS_WINDOW_LABEL {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -85,6 +89,9 @@ pub fn run() {
             commands::memory::memory_set,
             commands::memory::memory_list,
             commands::memory::memory_delete,
+            // #9 window 控制（settings show/hide）
+            commands::window::settings_show,
+            commands::window::settings_hide,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

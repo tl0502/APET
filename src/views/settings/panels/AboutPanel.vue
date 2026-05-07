@@ -1,0 +1,102 @@
+<script setup lang="ts">
+// About tab：M1 完整可用区（issue #9）。
+// - 应用名硬编码（与 tauri.conf.json productName 一致）
+// - 版本走 @tauri-apps/api/app::getVersion()，权威源 = Cargo.toml package.version
+// - 仓库链接、数据策略链接是占位（数据策略文件由 #16 灵魂宣誓页创建）
+import { onMounted, ref } from 'vue'
+import { getVersion } from '@tauri-apps/api/app'
+
+const APP_NAME = 'AI 桌宠'
+const REPO_URL = 'https://github.com/tl0502/APET'
+const DATA_POLICY_HINT = 'assets/legal/data_policy_v1.md（将在 #16 灵魂宣誓页随首次入库）'
+
+const version = ref<string>('—')
+const versionError = ref<string | null>(null)
+
+onMounted(async () => {
+  try {
+    version.value = await getVersion()
+  } catch (e) {
+    versionError.value = e instanceof Error ? e.message : String(e)
+  }
+})
+</script>
+
+<template>
+  <section class="panel">
+    <h2 class="panel__title">关于</h2>
+
+    <dl class="about-grid">
+      <dt>应用</dt>
+      <dd>{{ APP_NAME }}</dd>
+
+      <dt>版本</dt>
+      <dd>
+        <code v-if="!versionError">{{ version }}</code>
+        <span v-else class="panel__error">{{ versionError }}</span>
+      </dd>
+
+      <dt>仓库</dt>
+      <dd>
+        <a :href="REPO_URL" target="_blank" rel="noopener">{{ REPO_URL }}</a>
+      </dd>
+
+      <dt>数据策略</dt>
+      <dd class="panel__hint">{{ DATA_POLICY_HINT }}</dd>
+    </dl>
+  </section>
+</template>
+
+<style scoped>
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipet-space-4);
+}
+.panel__title {
+  margin: 0;
+  font-size: var(--aipet-font-size-lg);
+  font-weight: 600;
+  color: var(--aipet-color-text-1);
+}
+.panel__hint {
+  margin: 0;
+  color: var(--aipet-color-text-3);
+  font-size: var(--aipet-font-size-sm);
+  line-height: var(--aipet-line-height-base);
+}
+.panel__error {
+  color: var(--aipet-color-danger);
+  font-size: var(--aipet-font-size-sm);
+}
+.about-grid {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: var(--aipet-space-2) var(--aipet-space-4);
+  margin: 0;
+}
+.about-grid dt {
+  color: var(--aipet-color-text-3);
+  font-size: var(--aipet-font-size-sm);
+}
+.about-grid dd {
+  margin: 0;
+  color: var(--aipet-color-text-1);
+  font-size: var(--aipet-font-size-base);
+}
+.about-grid a {
+  color: var(--aipet-color-primary);
+  text-decoration: none;
+}
+.about-grid a:hover {
+  text-decoration: underline;
+}
+code {
+  padding: 0 var(--aipet-space-1);
+  border-radius: var(--aipet-radius-sm);
+  background: var(--aipet-color-surface-raised);
+  font-family: var(--aipet-font-family-mono);
+  font-size: var(--aipet-font-size-xs);
+  color: var(--aipet-color-text-2);
+}
+</style>

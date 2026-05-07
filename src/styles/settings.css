@@ -1,0 +1,22 @@
+/* settings 窗口专用全局样式（issue #9）。
+   - 与 pet 窗 main.css 互斥：pet 窗要透明 + overflow:hidden；settings 窗要不透明 + 可滚动
+   - 不强制 user-select:none —— 设置面板要允许用户选中文本（拷贝版本号 / preset 名等）
+*/
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--aipet-color-bg);
+  color: var(--aipet-color-text-1);
+  overflow: hidden; /* 内部由 .aipet-shell__body 自己滚动，避免双滚动条 */
+  font-family: var(--aipet-font-family-base);
+}
+
+html.dark,
+html.dark body,
+html.dark #app {
+  background: var(--aipet-color-bg);
+}

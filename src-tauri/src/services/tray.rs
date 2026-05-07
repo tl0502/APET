@@ -1,10 +1,10 @@
-// 系统托盘服务（#6）
+// 系统托盘服务（#6 + #9 设置入口）
 //
 // 行为：
 // - 启动时注册到 Windows 托盘（任务栏 ^ 展开后可见，用户可拖出常驻）
 // - 左键单击/双击托盘图标 → 无操作（用户决策：仅菜单可操作，避免误触）
-// - 右键 → 弹菜单：显示/隐藏（动态文案）/ 设置（灰显占位）/ 退出
-// - 主窗 CloseRequested 拦截在 lib.rs，改 hide；唯一退出路径 = 托盘"退出"
+// - 右键 → 弹菜单：显示/隐藏（动态文案）/ 设置（#9 激活，唤起 settings 窗口）/ 退出
+// - 主窗 + settings 窗 CloseRequested 拦截在 lib.rs，改 hide；唯一退出路径 = 托盘"退出"
 //
 // 设计要点：
 // - icon 复用 app.default_window_icon()（tauri.conf.json 已引用作 default window icon，0 新增资源）
@@ -47,9 +47,8 @@ fn refresh_label(app: &AppHandle, item: &MenuItem<Wry>) {
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let show_hide_item =
         MenuItemBuilder::with_id(MENU_ID_SHOW_HIDE, current_label(app)).build(app)?;
-    let settings_item = MenuItemBuilder::with_id(MENU_ID_SETTINGS, "设置...")
-        .enabled(false) // #9 设置面板上线后激活
-        .build(app)?;
+    // #9 设置面板上线 → 激活菜单项；点击走 window_actions::show_settings（show + set_focus）。
+    let settings_item = MenuItemBuilder::with_id(MENU_ID_SETTINGS, "设置...").build(app)?;
     let quit_item = MenuItemBuilder::with_id(MENU_ID_QUIT, "退出").build(app)?;
 
     let menu = MenuBuilder::new(app)
@@ -79,8 +78,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                 window_actions::toggle_pet(app);
                 refresh_label(app, &show_hide_for_menu);
             }
+            MENU_ID_SETTINGS => window_actions::show_settings(app),
             MENU_ID_QUIT => app.exit(0),
-            _ => {} // SETTINGS 灰显，理论上点不到；fallthrough 默认忽略
+            _ => {}
         })
         .on_tray_icon_event(move |tray, event| {
             // hover 进图标时刷新文案，兜底外部路径（Alt+F4 hide）造成的状态错位

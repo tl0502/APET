@@ -2,8 +2,10 @@
 //
 // 接入路线（ADR-017）：
 // - 当前 (M1-D2)：仅前端 store + DOM toggle <html class="dark"> + localStorage。
-// - 未来 (A 模块壳层托盘)：托盘菜单 emit `theme:changed` → 前端 listen 后调 setMode()。
-// - 未来 (M3 G 模块)：localStorage 迁移到 SQLite settings 表。
+// - #9 (M1-W2)：加 `storage` event listener 跨窗口同步（pet 窗 ↔ settings 窗 / 未来 onboarding）。
+//   原理：同 origin 的两个 webview 共享 localStorage；窗口 A setItem 会触发窗口 B 的 storage event
+//   （但不触发自己），所以仅靠 storage event 即可单向通知，无需 Tauri event。
+// - 未来 (M3 G 模块)：localStorage 迁移到 SQLite settings 表（届时改走 Tauri event）。
 //
 // 不引 VueUse useDark：useDark 是布尔语义（dark/light），与本 store 三态 mode 不匹配；
 // auto 模式下需要"切到 light/dark 仍记得用户偏好是 auto"，useDark 做不到。
@@ -37,7 +39,7 @@ export const useThemeStore = defineStore('theme', {
     },
   },
   actions: {
-    /** 启动调用：注册 matchMedia listener + 立刻应用 DOM。仅生效一次，重复调用 no-op。 */
+    /** 启动调用：注册 matchMedia + storage listener + 立刻应用 DOM。仅生效一次，重复调用 no-op。 */
     init() {
       if (this._initialized) return
       this._initialized = true
@@ -55,6 +57,16 @@ export const useThemeStore = defineStore('theme', {
       } else if (typeof mql.addListener === 'function') {
         mql.addListener(handler)
       }
+      // #9 跨窗口同步：另一个 webview 改 localStorage 时本窗口收到 storage event。
+      // 自身 setItem 不触发本事件（浏览器规范），所以不会与本窗 setMode 死循环。
+      window.addEventListener('storage', (e: StorageEvent) => {
+        if (e.key !== STORAGE_KEY) return
+        const next = e.newValue
+        if (next === 'auto' || next === 'light' || next === 'dark') {
+          this.mode = next
+          this.applyDom()
+        }
+      })
     },
 
     /** 用户切换：托盘菜单或 demo 调用。 */
