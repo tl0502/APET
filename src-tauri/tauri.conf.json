@@ -30,6 +30,11 @@
       "csp": null
     }
   },
+  "plugins": {
+    "sql": {
+      "preload": ["sqlite:aipet.db"]
+    }
+  },
   "bundle": {
     "active": false,
     "icon": ["icons/icon.png", "icons/icon.ico"]
