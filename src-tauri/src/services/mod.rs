@@ -9,6 +9,12 @@ pub mod db;
 pub mod memory;
 
 pub mod config;
+// #12 LLMProvider trait + OpenAIProvider（M1 W2 ADR-018 Layer 1）。
+// trait + 类型 typed only：M1 W2 LLMProvider 还没被消费方（#13 ChatService 才调），
+// commands::llm IPC 仅做 dev console 验证；多模态 / 工具调用相关 variant 也是 M3+ 才用。
+// 整模块 #[allow(dead_code)]，#13 上线后真消费 trait + 类型时去掉本 attr。
+#[allow(dead_code)]
+pub mod llm;
 pub mod nickname;
 pub mod persona;
 pub mod preferences;

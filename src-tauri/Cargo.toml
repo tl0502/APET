@@ -40,6 +40,21 @@ tokio = { version = "1", features = ["time", "rt"] }
 # #11 全局快捷键：注册 Ctrl+Alt+Space → emit shortcut:chat（PRD §7.2.2）。
 tauri-plugin-global-shortcut = "2"
 
+# #12 LLMProvider：OpenAI 兼容协议流式 + 取消（ADR-018 Layer 1）。
+# - reqwest：HTTP 客户端；rustls-tls 不依赖 OpenSSL（Windows MSVC 友好），stream feature 取 bytes_stream
+# - eventsource-stream：SSE event 解析（OpenAI chat completions stream:true 走 text/event-stream）
+# - futures-util：StreamExt::next 用于 SSE event 循环
+# - async-trait：trait 中 async fn + dyn LLMProvider 兼容（M1 暂只 1 个 provider，但 ChatService #13 起按 dyn 注册）
+# - tokio-util：CancellationToken（#10 已加 tokio time + rt feature；这里加 tokio-util 提供 CancellationToken）
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+eventsource-stream = "0.2"
+futures-util = "0.3"
+async-trait = "0.1"
+tokio-util = "0.7"
+# bytes：reqwest::Response::bytes_stream() yields Result<bytes::Bytes, _>；
+# process_event_stream 在 trait bound 里直接引用，必须是 [dependencies]（非 dev-deps）。
+bytes = "1"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
