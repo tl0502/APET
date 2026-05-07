@@ -134,14 +134,14 @@ AI 对话不持久。新 session 是空白页。[STATUS.md](STATUS.md) 是写给
 
 ### 8.3 怎么更新
 
-session 结束前对 Claude 说：「更新 STATUS.md」。它会按结构改：
+session 结束前调用 `/sync-status`。Claude 会按**三层分离**结构操作：
 
-- "当前 session 在做" → "已完成"对应一行打勾；
-- "下一步" → 推进到下一项；
-- 新发现的任务 → 加到"即将开始"；
-- 当日的关键事项 → 加一行到"历史 session 摘要"。
+1. **关闭已完成 issue**：close-comment 必须**自包含**（commit hash + 做了什么 + 关键偏离/取舍 + 实测 + follow-up），不能写"详见 STATUS.md"指针
+2. **更新 STATUS.md**：只改"当前状态"四行 + "Milestone 进度"一行（如 13/18 → 14/18）；**不**写本 session 详细流水（详情已在 issue closing comment）
+3. **历史 deep dive**：按月归档到 [`_archive/sessions/YYYY-MM.md`](_archive/sessions/)，STATUS.md 主体不再装"历史 session 摘要"
+4. **经验教训**：踩过且容易再踩的坑写到 [lessons.md](lessons.md)，不写进 STATUS.md
 
-不用手写；让 Claude 改。
+不用手写；让 `/sync-status` 改。
 
 ### 8.4 新 session 怎么入场
 
@@ -151,11 +151,14 @@ session 结束前对 Claude 说：「更新 STATUS.md」。它会按结构改：
 
 ### 8.5 STATUS.md 写得太厚怎么办
 
-当历史摘要 > 50 条或文件超 200 行时：
+STATUS.md 当前结构（三层分离后）只装"当前状态快照"+"Milestone 进度索引"，理论上**永远不会膨胀**——本 session 详情留在 issue closing comment，月度 deep dive 按月归档到 `_archive/sessions/`。
 
-- 把过老的"历史 session 摘要"剪出来归到 [CHANGELOG.md](CHANGELOG.md)（按 milestone 一段）；
-- STATUS.md 只保留近 4 周的摘要；
-- 模板备份在 [templates/status-template.md](templates/status-template.md)。
+如果发现 STATUS.md 超过 60 行，通常说明：
+
+- close-comment 没自包含，详情被错误塞回 STATUS（按 §8.3 规则修正下次 sync）
+- 当前 milestone 索引过细（压成"M1 W1-W2 进行中（X/Y）+ 剩余 issue 列表"即可）
+
+每月切归档文件（`_archive/sessions/2026-05.md` → `2026-06.md`），归档文件信息无损保留旧 session deep dive。
 
 ---
 
