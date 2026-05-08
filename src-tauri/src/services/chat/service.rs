@@ -1,20 +1,28 @@
-// chat/service.rs — ChatService::{send, cancel, history}（M1 W2 #13，ADR-018 Layer 2）
+// chat/service.rs — ChatService::{prepare, run_stream, cancel, history}
+// （M1 W2 #13 → 修正：用 tauri::ipc::Channel 替代全局 emit；详 plan
+// `c-issue-13-https-github-com-tl0502-apet-ancient-moth`）
 //
 // 业务编排：把 Persona / Nickname / Memory / Conversation / LLMProvider 串成
-// "chat_send → 流式 token → chat:stream:done" 的真业务对话路径。
+// "chat_send → prepare 同步返 → spawn run_stream 流式 token → channel.send(Done)"
+// 的真业务对话路径。
 //
-// 关键设计：
+// 关键设计（v2 修正版）：
 // - active_streams: Arc<Mutex<HashMap<message_id, CancellationToken>>>，cancel 用
-// - send 流程：load active persona → ensure conv → 写 user msg → 拼 prompt → 现建
-//   OpenAIProvider → 注册 token → chat_stream + on_delta emit chat:stream:delta + 累积 buffer
-//   → 4 分支收尾（成功 / 取消 / 网络降级 / 其他错误）
-// - 取消 = chat:stream:done finishReason='cancelled' + 已收 token 入库
-// - 网络/server error = 抽 # 拒答 模板 + 写 mode='offline_rule' + emit done
-// - 其他 error（AuthFailed / BadRequest / ParseError / RateLimit）= emit chat:stream:error，不入库
+// - prepare 同步：active persona / ensure conv / 写 user msg / 拼 prompt / build_provider /
+//   生成 assistant_id / 注册 cancel token；返 PreparedSend
+// - run_stream 异步：消费 PreparedSend 跑流式；4 分支收尾通过 channel.send(StreamEvent::*) 回前端
+// - 取消 = StreamEvent::Done finishReason='cancelled' + 已收 token 入库
+// - 网络/server error = 抽 # 拒答 模板 + 写 mode='offline_rule' + send Delta+Done
+// - 其他 error（AuthFailed / BadRequest / ParseError / RateLimit）= send Error，不入库
 //
-// Provider 注入：每次 send 都从 config 表读三键现建 OpenAIProvider（与 #12 chat_send_test
+// Provider 注入：每次 prepare 都从 config 表读三键现建 OpenAIProvider（与 #12 chat_send_test
 // 同模式）。用户改配置立即生效，无 hot reload 烦恼；M3 多 provider 时改成
 // ProviderRegistry::resolve(active_id)。
+//
+// 为什么用 ipc::Channel 而非 app.emit（修正 #13 原契约）：
+// - 老契约 chat_send 是 async fn 直到流式结束才 resolve → 前端拿不到 assistant_id 全程
+//   → cancel 按钮成死按钮、切换会话被锁
+// - Channel 自带 scope（每个 invoke 一条），不需 messageId 路由；类型安全；并发隔离
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -22,35 +30,24 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use serde::Serialize;
 use sqlx::Connection;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Runtime};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use crate::services::chat::conversation::{ensure_active_conversation, update_last_activity};
 use crate::services::chat::prompt::build_messages;
 use crate::services::chat::ChatError;
-use crate::services::config;
 use crate::services::db::open_app_db;
 use crate::services::llm::{
-    ChatOptions, FinishReason, LLMError, LLMProvider, OpenAIProvider, StreamDelta,
+    ChatMessage, ChatOptions, FinishReason, LLMError, LLMProvider, OpenAIProvider, StreamDelta,
 };
+use crate::services::llm_providers;
 use crate::services::memory::{
     insert_message_with_conn, list_messages_by_conversation, MessageRecord,
 };
 use crate::services::nickname::{get_pet_nickname, get_user_nickname};
-use crate::services::persona::load_active_persona;
-
-// === IPC 事件名（与前端 src/services/chat.ts onDelta/onDone/onError 契约对齐；Tauri 2.x 用 ':' 不允许 '.'）===
-pub const CHAT_STREAM_DELTA_EVENT: &str = "chat:stream:delta";
-pub const CHAT_STREAM_DONE_EVENT: &str = "chat:stream:done";
-pub const CHAT_STREAM_ERROR_EVENT: &str = "chat:stream:error";
-
-// === LLM 配置 KV key（与 #12 commands/llm.rs 共用 namespace；M3 多 provider 时改成 `llm:<id>:*`）===
-pub const CONFIG_KEY_OPENAI_API_KEY: &str = "llm:openai:api_key";
-pub const CONFIG_KEY_OPENAI_BASE_URL: &str = "llm:openai:base_url";
-pub const CONFIG_KEY_OPENAI_MODEL: &str = "llm:openai:model";
-pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
+use crate::services::persona::{load_active_persona, PersonaSummary};
 
 // === 业务常量 ===
 /// 历史窗口（M1 N=10；M3 接 ContextManager 改为 token 预算自适应）。
@@ -63,36 +60,57 @@ const FALLBACK_REFUSAL: &str = "这个我现在没法陪你聊，要不我们换
 pub struct SendResult {
     pub message_id: String,
     /// 当前轮所属的 conversation ID（caller 传 None 时由 ensure_active_conversation 决定）。
-    /// dev 验收 + #14 ChatPanel 切会话都需要；省一次 IPC。
+    /// dev 验收 + ChatPanel 切会话都需要；省一次 IPC。
     pub conversation_id: String,
 }
 
+/// 流式事件 —— 通过 `tauri::ipc::Channel<StreamEvent>` 发回前端。
+///
+/// 序列化形态（前端 onmessage 拿到的 JSON）：
+/// - `{ "type": "delta", "token": "你" }`
+/// - `{ "type": "done", "totalTokens": 42, "finishReason": "stop" }`
+/// - `{ "type": "error", "errorKind": "AuthFailed", "message": "401 ..." }`
+///
+/// finishReason 取值见 finish_reason_to_str：stop / length / tool_calls / content_filter /
+/// error / cancelled / offline_rule。
+///
+/// channel 自带 scope（一个 invoke 一条），故 payload 不带 messageId（前端从 SendResult
+/// 拿到的 messageId 就是这条 channel 服务的 assistant 消息）。
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatStreamDeltaPayload {
-    message_id: String,
-    token: String,
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum StreamEvent {
+    Delta {
+        token: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Done {
+        total_tokens: u32,
+        finish_reason: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Error {
+        error_kind: String,
+        message: String,
+    },
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatStreamDonePayload {
-    message_id: String,
-    total_tokens: u32,
-    finish_reason: String,
+/// prepare 阶段产出，run_stream 消费。
+///
+/// 把所有"需要 await DB / IPC"的工作集中到 prepare（同步返），把"需要长时间跑流式"的
+/// 工作留给 spawn 出去的 run_stream。
+pub struct PreparedSend {
+    pub assistant_id: String,
+    pub conv_id: String,
+    pub persona: PersonaSummary,
+    pub messages: Vec<ChatMessage>,
+    pub provider: OpenAIProvider,
+    pub cancel_token: CancellationToken,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatStreamErrorPayload {
-    message_id: String,
-    error_kind: String,
-    message: String,
-}
-
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ChatService {
     /// 在飞 chat_stream 的 cancel token map（key = assistant message_id ULID）。
+    /// 用 Arc<Mutex<...>> 让 ChatService 可 Clone 进 spawn 出去的 task。
     active_streams: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
@@ -101,15 +119,14 @@ impl ChatService {
         Self::default()
     }
 
-    /// chat_send 业务编排（详细流程见模块顶部注释）。
-    ///
-    /// 返 { message_id }（assistant 消息的 ULID）；前端用它对应 chat:stream:* events。
-    pub async fn send<R: Runtime>(
+    /// chat_send 同步阶段：解析 conv / 写 user msg / 拼 prompt / 现建 provider /
+    /// 生成 assistant_id / 注册 cancel token；返 PreparedSend 给上层 spawn。
+    pub async fn prepare<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         input: String,
         conversation_id: Option<String>,
-    ) -> Result<SendResult, ChatError> {
+    ) -> Result<PreparedSend, ChatError> {
         // 1. 加载 active persona + 解析或建 conversation
         let active_persona = load_active_persona(app).await?;
         let conv_id = match conversation_id {
@@ -153,84 +170,147 @@ impl ChatService {
             map.insert(assistant_id.clone(), cancel.clone());
         }
 
-        // 7. 流式调用 + 收集 buffer + emit delta
+        Ok(PreparedSend {
+            assistant_id,
+            conv_id,
+            persona: active_persona,
+            messages,
+            provider,
+            cancel_token: cancel,
+        })
+    }
+
+    /// chat_send 异步阶段：跑流式 + 4 分支收尾。
+    ///
+    /// 内部不返 Result —— 所有错误通过 channel.send(StreamEvent::Error) 回前端；
+    /// channel send 失败仅 log，因为 spawn 出去后不再有调用者能 propagate。
+    /// 必保证 channel 末尾要么 Done 要么 Error 一次（前端据此清 currentStreamId）。
+    pub async fn run_stream<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        prepared: PreparedSend,
+        channel: Channel<StreamEvent>,
+    ) {
+        let PreparedSend {
+            assistant_id,
+            conv_id,
+            persona,
+            messages,
+            provider,
+            cancel_token,
+        } = prepared;
+
+        // 流式调用 + 收集 buffer + send Delta
         let buffer = Arc::new(Mutex::new(String::new()));
         let buffer_for_cb = buffer.clone();
-        let app_for_emit = app.clone();
-        let assistant_id_for_cb = assistant_id.clone();
+        let channel_for_cb = channel.clone();
         let on_delta: Box<dyn Fn(StreamDelta) + Send + Sync> = Box::new(move |delta| {
             if let StreamDelta::TextDelta(text) = &delta {
                 if let Ok(mut buf) = buffer_for_cb.lock() {
                     buf.push_str(text);
                 }
-                let _ = app_for_emit.emit(
-                    CHAT_STREAM_DELTA_EVENT,
-                    ChatStreamDeltaPayload {
-                        message_id: assistant_id_for_cb.clone(),
-                        token: text.clone(),
-                    },
-                );
+                if let Err(e) = channel_for_cb.send(StreamEvent::Delta {
+                    token: text.clone(),
+                }) {
+                    eprintln!("[chat] channel send Delta failed: {e}");
+                }
             }
             // ToolCallDelta / Finish：M1 不接 tools，不会触发；忽略
         });
 
         let stream_result = provider
-            .chat_stream(messages, ChatOptions::default(), cancel.clone(), on_delta)
+            .chat_stream(messages, ChatOptions::default(), cancel_token, on_delta)
             .await;
 
-        // 清理 token 槽（无论成功失败；下次 send 重新登记）
-        {
-            let mut map = self
-                .active_streams
-                .lock()
-                .map_err(|e| ChatError::Llm(format!("active_streams lock poisoned: {e}")))?;
+        // 清理 token 槽（无论成功失败；下次 prepare 重新登记）
+        if let Ok(mut map) = self.active_streams.lock() {
             map.remove(&assistant_id);
         }
 
-        let collected = buffer
-            .lock()
-            .map_err(|e| ChatError::Llm(format!("buffer lock poisoned: {e}")))?
-            .clone();
+        let collected = match buffer.lock() {
+            Ok(b) => b.clone(),
+            Err(e) => {
+                let _ = channel.send(StreamEvent::Error {
+                    error_kind: "InternalError".to_string(),
+                    message: format!("buffer lock poisoned: {e}"),
+                });
+                return;
+            }
+        };
 
-        // 8. 4 分支收尾：成功 / 取消 / 网络降级 / 其他错误
+        // 4 分支收尾：成功 / 取消 / 网络降级 / 其他错误
         match stream_result {
             Ok(finish) => {
-                insert_assistant_msg(app, &assistant_id, &conv_id, &collected, "online").await?;
-                update_last_activity(app, &conv_id).await?;
-                emit_done(
-                    app,
-                    &assistant_id,
-                    finish.usage.map(|u| u.total_tokens).unwrap_or(0),
-                    finish_reason_to_str(&finish.reason),
-                )?;
+                if let Err(e) =
+                    insert_assistant_msg(app, &assistant_id, &conv_id, &collected, "online").await
+                {
+                    let _ = channel.send(StreamEvent::Error {
+                        error_kind: "DbError".to_string(),
+                        message: e.to_string(),
+                    });
+                    return;
+                }
+                if let Err(e) = update_last_activity(app, &conv_id).await {
+                    eprintln!("[chat] update_last_activity failed: {e}");
+                }
+                let _ = channel.send(StreamEvent::Done {
+                    total_tokens: finish.usage.map(|u| u.total_tokens).unwrap_or(0),
+                    finish_reason: finish_reason_to_str(&finish.reason).to_string(),
+                });
             }
             Err(LLMError::Cancelled) => {
-                // 已收 partial 入库 + emit done finishReason='cancelled'
-                insert_assistant_msg(app, &assistant_id, &conv_id, &collected, "online").await?;
-                update_last_activity(app, &conv_id).await?;
-                emit_done(app, &assistant_id, 0, "cancelled")?;
+                // 已收 partial 入库 + Done finishReason='cancelled'
+                if let Err(e) =
+                    insert_assistant_msg(app, &assistant_id, &conv_id, &collected, "online").await
+                {
+                    let _ = channel.send(StreamEvent::Error {
+                        error_kind: "DbError".to_string(),
+                        message: e.to_string(),
+                    });
+                    return;
+                }
+                if let Err(e) = update_last_activity(app, &conv_id).await {
+                    eprintln!("[chat] update_last_activity failed: {e}");
+                }
+                let _ = channel.send(StreamEvent::Done {
+                    total_tokens: 0,
+                    finish_reason: "cancelled".to_string(),
+                });
             }
             Err(LLMError::Network(_)) | Err(LLMError::ServerError(_)) => {
                 // 离线降级：抽 # 拒答 模板（# 共情 / # 问候 与"网络断了"语义不贴）
-                let templates = extract_refusal_templates(&active_persona.raw_markdown);
+                let templates = extract_refusal_templates(&persona.raw_markdown);
                 let refusal = pick_refusal(&templates);
-                insert_assistant_msg(app, &assistant_id, &conv_id, &refusal, "offline_rule")
-                    .await?;
-                update_last_activity(app, &conv_id).await?;
-                // emit 一个 delta 让前端能渲染，再 emit done finishReason='offline_rule'
-                emit_delta(app, &assistant_id, &refusal)?;
-                emit_done(app, &assistant_id, 0, "offline_rule")?;
+                if let Err(e) =
+                    insert_assistant_msg(app, &assistant_id, &conv_id, &refusal, "offline_rule")
+                        .await
+                {
+                    let _ = channel.send(StreamEvent::Error {
+                        error_kind: "DbError".to_string(),
+                        message: e.to_string(),
+                    });
+                    return;
+                }
+                if let Err(e) = update_last_activity(app, &conv_id).await {
+                    eprintln!("[chat] update_last_activity failed: {e}");
+                }
+                // send 一个 Delta 让前端能渲染，再 send Done finishReason='offline_rule'
+                let _ = channel.send(StreamEvent::Delta {
+                    token: refusal.clone(),
+                });
+                let _ = channel.send(StreamEvent::Done {
+                    total_tokens: 0,
+                    finish_reason: "offline_rule".to_string(),
+                });
             }
             Err(e) => {
-                // AuthFailed / RateLimit / BadRequest / ParseError → emit error 事件，不入库
-                emit_error(app, &assistant_id, error_kind_str(&e), &e.to_string())?;
+                // AuthFailed / RateLimit / BadRequest / ParseError → send Error，不入库
+                let _ = channel.send(StreamEvent::Error {
+                    error_kind: error_kind_str(&e).to_string(),
+                    message: e.to_string(),
+                });
             }
         }
-
-        Ok(SendResult {
-            message_id: assistant_id,
-            conversation_id: conv_id,
-        })
     }
 
     /// 按 message_id 触发活跃 chat_stream 的取消。message_id 不存在 = no-op。
@@ -300,73 +380,21 @@ async fn insert_assistant_msg<R: Runtime>(
 }
 
 async fn build_provider<R: Runtime>(app: &AppHandle<R>) -> Result<OpenAIProvider, ChatError> {
-    let api_key = config::get(app, CONFIG_KEY_OPENAI_API_KEY)
-        .await?
-        .filter(|s| !s.is_empty())
+    let record = llm_providers::get_active_record(app)
+        .await
+        .map_err(|e| ChatError::Llm(format!("read active provider: {e}")))?
         .ok_or_else(|| {
             ChatError::Llm(
-                "API Key 未设置；先调 set_openai_api_key('sk-...') 或 set_openai_config({api_key:'sk-...'})".to_string()
+                "未配置 LLM Provider；请到设置面板 → LLM Provider 添加并激活一个".to_string(),
             )
         })?;
-    let base_url = config::get(app, CONFIG_KEY_OPENAI_BASE_URL)
-        .await?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
-    let model = config::get(app, CONFIG_KEY_OPENAI_MODEL)
-        .await?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string());
-    OpenAIProvider::new("openai", &base_url, api_key, &model)
+    if record.api_key.is_empty() {
+        return Err(ChatError::Llm(
+            "active provider 的 API Key 为空；请到设置面板填写".to_string(),
+        ));
+    }
+    OpenAIProvider::new("openai", &record.base_url, record.api_key, &record.model)
         .map_err(|e| ChatError::Llm(format!("provider init: {e}")))
-}
-
-fn emit_delta<R: Runtime>(
-    app: &AppHandle<R>,
-    message_id: &str,
-    token: &str,
-) -> Result<(), ChatError> {
-    app.emit(
-        CHAT_STREAM_DELTA_EVENT,
-        ChatStreamDeltaPayload {
-            message_id: message_id.to_string(),
-            token: token.to_string(),
-        },
-    )
-    .map_err(|e| ChatError::Llm(format!("emit delta: {e}")))
-}
-
-fn emit_done<R: Runtime>(
-    app: &AppHandle<R>,
-    message_id: &str,
-    total_tokens: u32,
-    finish_reason: &str,
-) -> Result<(), ChatError> {
-    app.emit(
-        CHAT_STREAM_DONE_EVENT,
-        ChatStreamDonePayload {
-            message_id: message_id.to_string(),
-            total_tokens,
-            finish_reason: finish_reason.to_string(),
-        },
-    )
-    .map_err(|e| ChatError::Llm(format!("emit done: {e}")))
-}
-
-fn emit_error<R: Runtime>(
-    app: &AppHandle<R>,
-    message_id: &str,
-    error_kind: &str,
-    message: &str,
-) -> Result<(), ChatError> {
-    app.emit(
-        CHAT_STREAM_ERROR_EVENT,
-        ChatStreamErrorPayload {
-            message_id: message_id.to_string(),
-            error_kind: error_kind.to_string(),
-            message: message.to_string(),
-        },
-    )
-    .map_err(|e| ChatError::Llm(format!("emit error: {e}")))
 }
 
 fn finish_reason_to_str(r: &FinishReason) -> &'static str {
@@ -568,6 +596,56 @@ mod tests {
         }
         assert!(!token.is_cancelled());
         svc.cancel("test-id").unwrap();
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn stream_event_serializes_delta_with_camel_case_tag() {
+        let ev = StreamEvent::Delta {
+            token: "你好".to_string(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["type"], "delta");
+        assert_eq!(json["token"], "你好");
+    }
+
+    #[test]
+    fn stream_event_serializes_done_with_camel_case_fields() {
+        let ev = StreamEvent::Done {
+            total_tokens: 42,
+            finish_reason: "stop".to_string(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["type"], "done");
+        assert_eq!(json["totalTokens"], 42);
+        assert_eq!(json["finishReason"], "stop");
+    }
+
+    #[test]
+    fn stream_event_serializes_error_with_camel_case_fields() {
+        let ev = StreamEvent::Error {
+            error_kind: "AuthFailed".to_string(),
+            message: "401 Unauthorized".to_string(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["errorKind"], "AuthFailed");
+        assert_eq!(json["message"], "401 Unauthorized");
+    }
+
+    #[test]
+    fn service_clone_shares_active_streams() {
+        // ChatService 必须可 Clone 且共享 active_streams（spawn 出去的 task 通过 cancel 路径
+        // 找到同一个 token map）
+        let svc = ChatService::new();
+        let svc2 = svc.clone();
+        let token = CancellationToken::new();
+        {
+            let mut map = svc.active_streams.lock().unwrap();
+            map.insert("shared-id".to_string(), token.clone());
+        }
+        // svc2 应能 cancel 到同一个 token
+        svc2.cancel("shared-id").unwrap();
         assert!(token.is_cancelled());
     }
 }

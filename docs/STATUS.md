@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-07
+updated: 2026-05-08
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -20,8 +20,8 @@ related:
 ## 当前状态
 
 - **当前 milestone**：M1 W1-W2（壳层 + 对话）
-- **当前 session 在做**：—
-- **下一步**：按优先序推进剩余 5 个 issue（[#14-#18](https://github.com/tl0502/APET/issues)）。下一步：[#14](https://github.com/tl0502/APET/issues/14) ChatPanel 形态 2 极简（独立 chat 窗口 380×480 + 流式渲染；blocked by #13 已解锁）。
+- **当前 session 在做**：#13 修正落地（IPC 流式契约从全局 emit 迁移到 `tauri::ipc::Channel<StreamEvent>`，cancel/切换会话死锁修复）；#14/#15/#16 余下 bug 待下次 session 处理
+- **下一步**：处理 #14（ChatPanel 流式 + ProviderDrawer create 模式 test 误关 drawer bug）/ #15（昵称切换污染对话，需注入 system 转场消息 + persona 切换清旧 nickname）/ #16（视图层 SoulPledgeView）相关 bug 与增强（详 plan：模型探测 / 昵称污染解决方案）
 - **阻塞**：无
 
 ---

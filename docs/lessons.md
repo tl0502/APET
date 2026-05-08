@@ -1,6 +1,6 @@
 ---
 title: AIPET 开发踩坑笔记
-updated: 2026-05-07
+updated: 2026-05-08
 related:
   - STATUS.md
   - WORKFLOW.md
@@ -77,6 +77,24 @@ related:
 4. 一条响应只动 1 个文件（缩小被同时审查的代码面积）
 
 **出处**：[#13](https://github.com/tl0502/APET/issues/13) M1-D11 上半 session 中断 → 4 条规则后顺利完成
+
+---
+
+## 6. Tauri 2 长流式 IPC 必须用 `ipc::Channel`，不要用 `app.emit`
+
+**症状**：单 IPC 命令内跑长流式（chat completion / 长文件读 / 渐进搜索结果），用 `app.emit("xxx:stream:*", payload)` + 前端 `listen("xxx:stream:*")` 看似正常，但 IPC 直到流跑完才 resolve → 前端**拿不到任务 id 全程** → cancel 按钮死锁、切换上下文死锁、并发任务无法路由。
+
+**根因**：`#[tauri::command] async fn` 整段 await 完才返 → 前端 `await invoke()` 必须等流末。`app.emit` 是全局广播，payload 必须自带 messageId/jobId 路由 → 但 messageId 从 IPC 返回值拿，时序对不上。
+
+**处理**：用 [`tauri::ipc::Channel<T>`](https://docs.rs/tauri/latest/tauri/ipc/struct.Channel.html) —
+1. command 签名加 `onStream: Channel<StreamEvent>` 参数；前端 `new Channel<StreamEvent>()` 传入
+2. command 内部拆 `prepare`（同步：分配 id + 注册 cancel token + 校验 + DB 准备）+ spawn 出去的 `run_stream`（流式 + 收尾）；prepare 完立即 `Ok(SendResult { id, ... })` 返
+3. 流式事件通过 `channel.send(StreamEvent::*)` 回前端；channel 自带 scope 不需要 messageId 路由
+4. 前端 `await invoke()` 立即拿到 id → cancel / 切换路径全打通
+
+**反例**：保留全局 emit 的合理场景 —— 真广播事件（多窗口都要听，如 `nickname:changed` / `persona:activated` / `shortcut:chat`）。Channel 是单 invoke scope，不替代广播。
+
+**出处**：[#13 修正](https://github.com/tl0502/APET/issues/13) M1-D12，2026-05-08；plan `~/.claude/plans/c-issue-13-https-github-com-tl0502-apet-ancient-moth.md`
 
 ---
 

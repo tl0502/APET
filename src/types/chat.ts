@@ -1,8 +1,8 @@
-// ChatService IPC 类型（#13，ADR-018 Layer 2）。
+// ChatService IPC 类型（#13 → 修正：用 tauri::ipc::Channel<StreamEvent> 替代全局 emit）。
 //
 // 字段命名规则：
 // - Message 是 sqlx::FromRow MessageRecord 直序列化 → snake_case (id / conversation_id / created_at / ...)
-// - SendResult / 3 个 stream payload 是 service.rs 用 #[serde(rename_all = "camelCase")] 重命名 → camelCase
+// - SendResult / StreamEvent 是 service.rs 用 #[serde(rename_all = "camelCase")] 重命名 → camelCase
 //
 // 这是 mixed convention，两边类型要严格对齐 Rust 端契约。
 
@@ -32,8 +32,10 @@ export interface Message {
 /**
  * chat_send 返回值（service.rs::SendResult）。
  *
- * messageId 是 assistant 消息的 ULID，前端用它对应后续 chat:stream:* events。
+ * messageId 是 assistant 消息的 ULID；前端用它做 chat_cancel 入参。
  * conversationId 是当前轮所属会话 ID，dev 验收 / ChatPanel 切会话用。
+ *
+ * 修正后的契约下，IPC 立即返这个值（不再等流式跑完）；前端拿到后立刻能 cancel。
  */
 export interface SendResult {
   messageId: string
@@ -56,25 +58,31 @@ export type ChatFinishReason =
   | 'cancelled'
   | 'offline_rule'
 
-/** `chat:stream:delta` event payload。 */
-export interface ChatStreamDeltaPayload {
-  messageId: string
-  /** 单 token 文本增量（多个 token 可在一帧内多次 emit）。 */
-  token: string
-}
+/**
+ * Channel<StreamEvent> 单条消息（mirror service.rs::StreamEvent）。
+ *
+ * 三 variant 对应原 chat:stream:{delta,done,error} 三事件，但走 ipc::Channel 通道：
+ * - delta: 流式 token 增量（多个 token 可在一帧内连续到达）
+ * - done: 流式完成（含 cancelled / offline_rule 收尾）
+ * - error: 流式错误（AuthFailed / BadRequest / RateLimit / ParseError；不入库的错误路径）
+ *
+ * 不带 messageId —— channel 自带 scope，每个 chat_send 调用一条 channel 只服务一个 assistant 消息。
+ */
+export type StreamEvent =
+  | { type: 'delta'; token: string }
+  | { type: 'done'; totalTokens: number; finishReason: ChatFinishReason }
+  | { type: 'error'; errorKind: LLMErrorKind; message: string }
 
-/** `chat:stream:done` event payload。 */
-export interface ChatStreamDonePayload {
-  messageId: string
-  /** OpenAI usage.total_tokens（cancel / offline_rule 路径无 usage 时为 0）。 */
-  totalTokens: number
-  finishReason: ChatFinishReason
-}
-
-/** `chat:stream:error` event payload。 */
-export interface ChatStreamErrorPayload {
-  messageId: string
-  /** LLMError variant 字符串；前端按此分支提示（AuthFailed → 改 API Key 等）。 */
-  errorKind: LLMErrorKind
-  message: string
+/**
+ * 单条 conversation summary（侧边栏列表用，与 services/chat/conversation.rs::ConversationSummary 对齐）。
+ *
+ * 字段 snake_case：sqlx::FromRow 默认按列名序列化，未加 rename_all。
+ * `title` 为 NULL 时前端 fallback 到"未命名 + started_at" UI 文案。
+ */
+export interface ConversationSummary {
+  id: string
+  persona_id: string
+  title: string | null
+  started_at: string
+  last_activity_at: string
 }
