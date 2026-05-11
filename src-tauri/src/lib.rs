@@ -187,6 +187,7 @@ pub fn run() {
             commands::system::ping,
             // #5 persona
             commands::persona::persona_load,
+            commands::persona::persona_list,
             commands::persona::persona_activate,
             commands::persona::persona_get_active,
             // #5 nickname（2026-05-09：删 pet 系列，加 announce 开关）

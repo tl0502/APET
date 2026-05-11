@@ -26,11 +26,24 @@ use thiserror::Error;
 
 use crate::services::db::{open_app_db, DbError};
 
-/// 内置 momo 人格,编译期注入(与 migrations/001_init.sql 的 include_str! 同款)
+/// 内置人格,编译期注入(与 migrations/001_init.sql 的 include_str! 同款)。
+/// ADR-009 Accepted:默默 / 阿吉 / 教官。
 const MOMO_RAW: &str = include_str!("../../personas/_builtin/momo.soul.md");
+const JOKER_RAW: &str = include_str!("../../personas/_builtin/joker.soul.md");
+const COACH_RAW: &str = include_str!("../../personas/_builtin/coach.soul.md");
 
 /// 内置 file_path 标识 — 用 `<bundled>:` 前缀区别于用户人格(后者填真实 APPDATA 路径)
 const MOMO_BUNDLED_PATH: &str = "<bundled>:_builtin/momo.soul.md";
+const JOKER_BUNDLED_PATH: &str = "<bundled>:_builtin/joker.soul.md";
+const COACH_BUNDLED_PATH: &str = "<bundled>:_builtin/coach.soul.md";
+
+/// 启动期内置 seed 清单。顺序约定 momo 第一,因为首启默认 active=momo
+/// (flows §1.2 Step 2 "跳过 → 默认默默"语义)。
+const BUILTIN_SEEDS: &[(&str, &str, bool)] = &[
+    (MOMO_RAW, MOMO_BUNDLED_PATH, true),
+    (JOKER_RAW, JOKER_BUNDLED_PATH, false),
+    (COACH_RAW, COACH_BUNDLED_PATH, false),
+];
 
 const SUPPORTED_SCHEMAS: &[u32] = &[1, 2];
 
@@ -96,6 +109,18 @@ pub struct PersonaSummary {
     pub raw_markdown: String,
 }
 
+/// PersonaService list 契约：onboarding Step 2 / 设置面板列表用。
+///
+/// 不含 raw_markdown 字段——picker 只显示 id/name + active 高亮，正文按需 `persona_load(id)` 拉。
+#[derive(Debug, Serialize)]
+pub struct PersonaListItem {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub is_active: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum PersonaLookupError {
     #[error(transparent)]
@@ -156,14 +181,19 @@ pub fn parse_persona(content: &str) -> Result<ParsedPersona, PersonaError> {
     })
 }
 
-/// 启动入口:解析内置 momo → UPSERT personas + idempotent INSERT persona_snapshots
+/// 启动入口:解析所有内置人格 → 依次 UPSERT personas + idempotent INSERT persona_snapshots。
 ///
-/// 调用方在 lib.rs setup 阶段用 `tauri::async_runtime::spawn` 异步跑,失败仅 eprintln 到 stderr
-/// (MVP 期不阻塞启动 / 不弹错误 UI;H.2 引入 IPC 后可考虑前端反馈)
+/// 调用方在 lib.rs setup 阶段用 `tauri::async_runtime::block_on` 同步等(冷启 50-200ms,
+/// 避免前端 persona_load("momo") 与 seed 的 race);失败仅 eprintln 到 stderr 不阻塞启动。
+///
+/// 默认 active:仅 momo 首次 INSERT 时 is_active=1,其余 0;ON CONFLICT 路径**不动** is_active,
+/// 保证用户在 Step 2 / 设置切到 joker/coach 后,后续重启 seed 不抹掉用户的选择。
 pub async fn seed_builtin<R: Runtime>(app: &AppHandle<R>) -> Result<(), PersonaError> {
-    let parsed = parse_persona(MOMO_RAW)?;
     let mut conn = open_app_db(app).await?;
-    seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH).await?;
+    for (raw, file_path, set_active) in BUILTIN_SEEDS {
+        let parsed = parse_persona(raw)?;
+        seed_persona_with_conn(&mut conn, &parsed, "builtin", file_path, *set_active).await?;
+    }
     conn.close().await?;
     Ok(())
 }
@@ -190,6 +220,39 @@ pub async fn load_active_persona<R: Runtime>(
     let summary = load_active_persona_with_conn(&mut conn).await?;
     conn.close().await.map_err(PersonaError::from)?;
     Ok(summary)
+}
+
+/// 列出所有人格 summary（不含 raw_markdown）。onboarding Step 2 / 设置面板列表用。
+///
+/// 排序：is_active DESC（active 优先）、id ASC（稳定次序），让 picker 默认聚焦当前 active 卡片。
+pub async fn list_personas<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Vec<PersonaListItem>, PersonaError> {
+    let mut conn = open_app_db(app).await?;
+    let items = list_personas_with_conn(&mut conn).await?;
+    conn.close().await?;
+    Ok(items)
+}
+
+pub(crate) async fn list_personas_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+) -> Result<Vec<PersonaListItem>, PersonaError> {
+    let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
+        "SELECT id, name, version, source, is_active FROM personas \
+         ORDER BY is_active DESC, id ASC",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, version, source, is_active)| PersonaListItem {
+            id,
+            name,
+            version,
+            source,
+            is_active: is_active != 0,
+        })
+        .collect())
 }
 
 /// B1 修复：with_conn 变体，让 ChatService::prepare 把多个 service 调用串到同一条 conn 上，
@@ -267,14 +330,18 @@ pub(crate) async fn activate_persona_with_conn(
 /// Inner helper(2026-05-04 test-coverage):接 SqliteConnection,不依赖 AppHandle。
 ///
 /// 与 prod `seed_builtin` 完全等价的 SQL 语义:begin tx → UPSERT persona → INSERT snapshot → commit。
+///
+/// `set_active`:仅在 **首次 INSERT** 时写入 is_active 字段;ON CONFLICT 路径(persona id 已存在)
+/// 不更新 is_active,保护用户跑步切换过的 active 状态不被后续 seed 抹掉。
 pub(crate) async fn seed_persona_with_conn(
     conn: &mut sqlx::SqliteConnection,
     parsed: &ParsedPersona,
     source: &str,
     file_path: &str,
+    set_active: bool,
 ) -> Result<(), PersonaError> {
     let mut tx = conn.begin().await?;
-    upsert_persona(&mut tx, parsed, source, file_path).await?;
+    upsert_persona(&mut tx, parsed, source, file_path, set_active).await?;
     insert_snapshot_if_new(&mut tx, &parsed.frontmatter.id, parsed).await?;
     tx.commit().await?;
     Ok(())
@@ -285,12 +352,14 @@ async fn upsert_persona(
     parsed: &ParsedPersona,
     source: &str,
     file_path: &str,
+    set_active: bool,
 ) -> Result<(), PersonaError> {
     let now = Utc::now().to_rfc3339();
+    let is_active_value: i64 = if set_active { 1 } else { 0 };
     sqlx::query(
         r#"
         INSERT INTO personas (id, name, version, source, file_path, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             version = excluded.version,
@@ -303,6 +372,7 @@ async fn upsert_persona(
     .bind(&parsed.frontmatter.version)
     .bind(source)
     .bind(file_path)
+    .bind(is_active_value)
     .bind(&now)
     .bind(&now)
     .execute(tx.as_mut())
@@ -399,7 +469,7 @@ mod tests {
     async fn seed_builtin_writes_personas_row() {
         let (_dir, mut conn) = fresh_db().await;
         let parsed = parse_persona(MOMO_RAW).unwrap();
-        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH)
+        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH, true)
             .await
             .unwrap();
 
@@ -423,7 +493,7 @@ mod tests {
     async fn seed_builtin_writes_persona_snapshot() {
         let (_dir, mut conn) = fresh_db().await;
         let parsed = parse_persona(MOMO_RAW).unwrap();
-        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH)
+        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH, true)
             .await
             .unwrap();
 
@@ -447,7 +517,7 @@ mod tests {
 
         // 跑 3 次 seed
         for _ in 0..3 {
-            seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH)
+            seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH, true)
                 .await
                 .unwrap();
         }
@@ -479,7 +549,7 @@ mod tests {
         // (例如未来 H.2 import flow 用了 INSERT 不带 ON CONFLICT)
         let (_dir, mut conn) = fresh_db().await;
         let parsed = parse_persona(MOMO_RAW).unwrap();
-        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH)
+        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH, true)
             .await
             .unwrap();
 
@@ -509,10 +579,10 @@ mod tests {
         )
         .unwrap();
 
-        seed_persona_with_conn(&mut conn, &v1, "user", "/tmp/momo.v1.md")
+        seed_persona_with_conn(&mut conn, &v1, "user", "/tmp/momo.v1.md", true)
             .await
             .unwrap();
-        seed_persona_with_conn(&mut conn, &v2, "user", "/tmp/momo.v2.md")
+        seed_persona_with_conn(&mut conn, &v2, "user", "/tmp/momo.v2.md", true)
             .await
             .unwrap();
 
@@ -534,5 +604,101 @@ mod tests {
             snap_count.0, 2,
             "snapshots accumulate per-version history (audit trail)"
         );
+    }
+
+    // ===== 3 内置人格 seed 语义（ADR-009 / #21 Step 2 前置）=====
+
+    #[test]
+    fn parse_all_three_builtins_succeed() {
+        // 编译期 include_str! 进来的 3 个 .soul.md 必须都能 parse + 字段对得上
+        let momo = parse_persona(MOMO_RAW).expect("momo should parse");
+        assert_eq!(momo.frontmatter.id, "momo");
+        assert_eq!(momo.frontmatter.name, "默默");
+
+        let joker = parse_persona(JOKER_RAW).expect("joker should parse");
+        assert_eq!(joker.frontmatter.id, "joker");
+        assert_eq!(joker.frontmatter.name, "阿吉");
+
+        let coach = parse_persona(COACH_RAW).expect("coach should parse");
+        assert_eq!(coach.frontmatter.id, "coach");
+        assert_eq!(coach.frontmatter.name, "教官");
+    }
+
+    /// 模拟 seed_builtin 在 fresh_db 上的语义。同 prod 路径,不依赖 AppHandle。
+    async fn seed_all_builtins(conn: &mut sqlx::SqliteConnection) {
+        for (raw, file_path, set_active) in BUILTIN_SEEDS {
+            let parsed = parse_persona(raw).unwrap();
+            seed_persona_with_conn(conn, &parsed, "builtin", file_path, *set_active)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_three_builtins_only_momo_active() {
+        let (_dir, mut conn) = fresh_db().await;
+        seed_all_builtins(&mut conn).await;
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM personas")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 3, "all 3 builtins should be seeded");
+
+        let active_id: (String,) =
+            sqlx::query_as("SELECT id FROM personas WHERE is_active = 1")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(active_id.0, "momo", "momo is default active on first seed");
+
+        let active_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM personas WHERE is_active = 1")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(active_count.0, 1, "exactly one active persona");
+    }
+
+    #[tokio::test]
+    async fn repeat_seed_preserves_user_active_choice() {
+        // 防御:用户切到 joker 后,后续 seed_builtin(重启)不能抹掉这个选择
+        let (_dir, mut conn) = fresh_db().await;
+        seed_all_builtins(&mut conn).await;
+
+        // 用户在 Step 2 / 设置面板切到 joker
+        activate_persona_with_conn(&mut conn, "joker")
+            .await
+            .unwrap();
+
+        // 再 seed 一遍(模拟重启)
+        seed_all_builtins(&mut conn).await;
+
+        let active_id: (String,) =
+            sqlx::query_as("SELECT id FROM personas WHERE is_active = 1")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(
+            active_id.0, "joker",
+            "user's active choice must survive re-seed"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_personas_returns_three_active_first() {
+        let (_dir, mut conn) = fresh_db().await;
+        seed_all_builtins(&mut conn).await;
+
+        let items = list_personas_with_conn(&mut conn).await.unwrap();
+        assert_eq!(items.len(), 3, "list returns all 3 builtins");
+        // is_active DESC 排序 → momo（active=true）在第一位
+        assert_eq!(items[0].id, "momo");
+        assert!(items[0].is_active);
+        // 后两位按 id ASC（coach < joker）
+        assert_eq!(items[1].id, "coach");
+        assert!(!items[1].is_active);
+        assert_eq!(items[2].id, "joker");
+        assert!(!items[2].is_active);
     }
 }

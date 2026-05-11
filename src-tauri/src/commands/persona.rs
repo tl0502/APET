@@ -6,7 +6,8 @@
 // - 错误类型映射 thiserror enum → 前端拿到的 IpcError.message 含语义前缀
 
 use crate::services::persona::{
-    activate_persona, load_active_persona, load_persona, PersonaLookupError, PersonaSummary,
+    activate_persona, list_personas, load_active_persona, load_persona, PersonaError,
+    PersonaListItem, PersonaLookupError, PersonaSummary,
 };
 use tauri::{AppHandle, Emitter};
 
@@ -38,6 +39,14 @@ fn lookup_err_to_string(e: PersonaLookupError) -> String {
 pub async fn persona_load(app: AppHandle, id: String) -> Result<PersonaSummary, String> {
     let id = validate_persona_id(&id)?;
     load_persona(&app, id).await.map_err(lookup_err_to_string)
+}
+
+/// 列出所有人格 summary（不含 raw_markdown）。onboarding Step 2 / 设置面板列表用。
+///
+/// 排序由后端保证（active 优先 + id ASC）；前端直接渲染即可，不需要再 sort。
+#[tauri::command]
+pub async fn persona_list(app: AppHandle) -> Result<Vec<PersonaListItem>, String> {
+    list_personas(&app).await.map_err(|e: PersonaError| e.to_string())
 }
 
 /// 读当前激活人格 summary（含 raw_markdown）。
