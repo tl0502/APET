@@ -10,6 +10,9 @@ pub const PET_WINDOW_LABEL: &str = "pet";
 pub const SETTINGS_WINDOW_LABEL: &str = "settings";
 /// 对话窗口 label（与 tauri.conf.json 静态注册一致；issue #14）。
 pub const CHAT_WINDOW_LABEL: &str = "chat";
+/// 灵魂宣誓窗口 label（与 tauri.conf.json 静态注册一致；issue #16）。
+/// 启动期 visible:false；setup hook 调 consent::check_version 后决定是否 show。
+pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
 
 pub(crate) fn show_pet(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
@@ -80,5 +83,22 @@ pub(crate) fn toggle_chat(app: &AppHandle) {
                 let _ = window.set_focus();
             }
         }
+    }
+}
+
+/// 显示灵魂宣誓窗口（issue #16）。窗口启动期 `visible:false` 静态注册；
+/// 由 setup hook 在 consent NotGranted / NeedReconsent 路径上唤起。
+pub(crate) fn show_onboarding(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// 隐藏灵魂宣誓窗口（issue #16）。"我懂了"路径用——不 destroy 是为了 #17 接 6 步状态机时
+/// 仍可复用同一 webview 渲染后续 Step 2-6（避免每步建窗销窗的闪烁开销）。
+pub(crate) fn hide_onboarding(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        let _ = window.hide();
     }
 }

@@ -1,6 +1,6 @@
 ---
 title: AIPET 开发踩坑笔记
-updated: 2026-05-10
+updated: 2026-05-11
 related:
   - STATUS.md
   - WORKFLOW.md
@@ -13,13 +13,15 @@ related:
 
 ---
 
-## 1. Tauri 2 capability 必须显式 allow
+## 1. Tauri 2 capability：写类窗口 API + plugin API 必须显式 allow
 
-**症状**：`startDragging()` / `setPosition()` / `monitor` / 全局快捷键调用**静默无反应**，无 console error，无 stderr。
+**症状**：`startDragging()` / `setPosition()` / 全局快捷键调用**静默无反应**，无 console error，无 stderr。
 
-**根因**：`core:default` permission set 不含 `core:window:allow-start-dragging` / `set-position` / `outer-position` / `current-monitor` / `available-monitors` / `primary-monitor` / `global-shortcut:*` 等。Tauri 2 比 Tauri 1 更严，每个 webview API 都要在 `capabilities/default.json` 显式列出。
+**根因**：`core:window:default`（被 `core:default` 聚合）**只覆盖只读 API**（`allow-outer-position` / `allow-current-monitor` / `allow-available-monitors` / `allow-primary-monitor` / `allow-inner-position` / `allow-cursor-position` 等都已默认有）。所有**改窗口状态**的写类 API（`allow-start-dragging` / `allow-set-position` / `allow-set-size` / `allow-center` / `allow-close` / `allow-hide` …）以及 plugin 自带权限（`global-shortcut:*` / `sql:*` 等）必须在 `capabilities/default.json` 显式 allow。Tauri 2 比 Tauri 1 严的就是这一刀切。
 
-**处理**：引入新 webview/plugin API 前，先去 [Tauri permissions 文档](https://v2.tauri.app/reference/acl/permission/) 查 `core:window` / `core:webview` 子项 → 显式 allow → dev 视觉验证。
+**处理**：引入新 API 前先判别"读还是写"——
+- 读类（is-*/get-*/inner-*/outer-*/monitor 系列）：`core:window:default` 已覆盖，**不要重复 allow**（噪音 + 误导）
+- 写类 + plugin API：去 [Tauri permissions 文档](https://v2.tauri.app/reference/acl/permission/) 查具体子项 → 显式 allow → dev 视觉验证
 
 **出处**：[#10](https://github.com/tl0502/APET/issues/10) fix `2a34cf7` / [#11](https://github.com/tl0502/APET/issues/11) fix `ff318b9`
 
@@ -53,7 +55,7 @@ related:
 
 **症状**：`cargo check --tests` / `cargo test` 全过，但 `pnpm tauri:dev` 撞 `cannot find select in tokio` 编译错。
 
-**根因**：`Cargo.toml` 把 `tokio` 的 `macros` feature 只写在 `[dev-dependencies]`。test build 继承 dev-deps features，非 test build（生产 build）不继承。
+**根因**：`Cargo.toml` 把 `tokio` 的 `macros` feature 只写在 `[dev-dependencies]`。**resolver v2**（edition 2021+ 默认，Tauri 2 模板默认）下，dev-deps features 只在 test/example/bench build 里激活，普通 lib/bin build 不继承——所以 `--tests` 能过、生产 build 炸。（resolver v1 下 features 会从 dev-deps 泄漏到普通 build，反而踩不到这个坑。）
 
 **处理**：每个 feature 检查"是否非 test 路径也用得上"。M1 W2 起，`cargo check` **必须额外跑一遍 lib-only 路径**（不带 `--tests`）才算真过。
 
@@ -80,19 +82,19 @@ related:
 
 ---
 
-## 6. Tauri 2 长流式 IPC 必须用 `ipc::Channel`，不要用 `app.emit`
+## 6. Tauri 2 长流式 IPC 优先用 `ipc::Channel`，少用 `app.emit`
 
-**症状**：单 IPC 命令内跑长流式（chat completion / 长文件读 / 渐进搜索结果），用 `app.emit("xxx:stream:*", payload)` + 前端 `listen("xxx:stream:*")` 看似正常，但 IPC 直到流跑完才 resolve → 前端**拿不到任务 id 全程** → cancel 按钮死锁、切换上下文死锁、并发任务无法路由。
+**症状**：单 IPC 命令内跑长流式（chat completion / 长文件读 / 渐进搜索结果），如果写成"`async fn` 整段 await 完才返"+ `app.emit("xxx:stream:*", payload)` + 前端 `listen("xxx:stream:*")`：IPC 直到流跑完才 resolve → 前端**拿不到任务 id 全程** → cancel 按钮死锁、切换上下文死锁、并发任务无法路由。
 
-**根因**：`#[tauri::command] async fn` 整段 await 完才返 → 前端 `await invoke()` 必须等流末。`app.emit` 是全局广播，payload 必须自带 messageId/jobId 路由 → 但 messageId 从 IPC 返回值拿，时序对不上。
+**根因**：问题不是 `app.emit` 本身不能流式（spawn 后立即 `Ok(id)` 返回也能跑通），而是用 emit 路线要**手工**协调一堆东西：messageId 路由、cancel token 表、生命周期清理、跨 invoke 隔离——很容易写错时序。
 
-**处理**：用 [`tauri::ipc::Channel<T>`](https://docs.rs/tauri/latest/tauri/ipc/struct.Channel.html) —
+**处理**：优先用 [`tauri::ipc::Channel<T>`](https://docs.rs/tauri/latest/tauri/ipc/struct.Channel.html)——
 1. command 签名加 `onStream: Channel<StreamEvent>` 参数；前端 `new Channel<StreamEvent>()` 传入
 2. command 内部拆 `prepare`（同步：分配 id + 注册 cancel token + 校验 + DB 准备）+ spawn 出去的 `run_stream`（流式 + 收尾）；prepare 完立即 `Ok(SendResult { id, ... })` 返
-3. 流式事件通过 `channel.send(StreamEvent::*)` 回前端；channel 自带 scope 不需要 messageId 路由
+3. 流式事件通过 `channel.send(StreamEvent::*)` 回前端；channel 自带 invoke scope，不需要 messageId 路由
 4. 前端 `await invoke()` 立即拿到 id → cancel / 切换路径全打通
 
-**反例**：保留全局 emit 的合理场景 —— 真广播事件（多窗口都要听，如 `nickname:changed` / `persona:activated` / `shortcut:chat`）。Channel 是单 invoke scope，不替代广播。
+**何时还是要 `app.emit`**：真广播事件——多窗口都要听（如 `nickname:changed` / `persona:activated` / `shortcut:chat`）。Channel 是单 invoke scope，不替代广播。
 
 **出处**：[#13 修正](https://github.com/tl0502/APET/issues/13) M1-D12，2026-05-08；plan `~/.claude/plans/c-issue-13-https-github-com-tl0502-apet-ancient-moth.md`
 
@@ -124,7 +126,7 @@ related:
 
 ---
 
-## 11. 多会话 KV 与 archived 标记的多层防护
+## 8. 多会话 KV 与 archived 标记的多层防护
 
 **症状**：跨窗口归档场景下两类隐蔽 bug：
 1. settings 窗 archive 一条非 active 会话 → pet 窗列表过期还显示它 → 用户点它 → `set_active` 成功 → 后续 `chat_send` 不传 conv_id 时 `ensure_active` 看 KV 行存在直接复用 → **消息写进归档会话，list 永远看不见**

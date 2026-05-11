@@ -3,9 +3,26 @@
 // M1 spike 阶段仅渲染 VRM；hitbox 上报推到后续 task（A.6）。
 // #10 拖动：pointerdown → getCurrentWindow().startDragging()（系统级拖动，OS 接管 mouse）。
 // 整窗 100% 可拖（无按钮容器 / 穿透按钮，M2 W3 控制按钮区上线时再加 [data-no-drag] 隔离）。
-import { ref } from 'vue'
+//
+// #16：复用到 onboarding 窗时通过 `:draggable="false"` 关掉拖动（onboarding 窗用系统 decorations
+// 标题栏拖动，且窗口固定不应被 webview 内 startDragging 移动）；并 emit `loaded`/`error` 让
+// SoulPledgeView 在 VRM 就绪 / 失败后再开播文案（用户拍板：等 isLoaded === true 再开播）。
+import { ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useVRMModel } from '@/composables/useVRMModel'
+
+interface Props {
+  draggable?: boolean
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  draggable: true,
+})
+
+const emit = defineEmits<{
+  loaded: []
+  error: [string]
+}>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 
@@ -14,7 +31,17 @@ const MODEL_URL = '/avatar/avatar.vrm'
 
 const { isLoaded, errorMessage } = useVRMModel(canvasRef, MODEL_URL)
 
+// 把 composable 的 ref 翻译成 event；SoulPledgeView 只关心"何时可以开播"
+// （成功 → loaded；失败 → error，view 也应开播，不能让 VRM 缺失卡死宣誓流程）。
+watch(isLoaded, (v) => {
+  if (v) emit('loaded')
+})
+watch(errorMessage, (v) => {
+  if (v) emit('error', v)
+})
+
 async function onPointerDown(event: PointerEvent) {
+  if (!props.draggable) return
   // 主键 (button=0) 才触发拖动，避免与 M2 后续右键菜单冲突。
   if (event.button !== 0) return
   // closest('[data-no-drag]') 兜底：M2 控制按钮容器上线后只需在该元素加 attr 即可隔离，无需改本处。
@@ -32,7 +59,11 @@ async function onPointerDown(event: PointerEvent) {
 </script>
 
 <template>
-  <div class="pet-stage" @pointerdown="onPointerDown">
+  <div
+    class="pet-stage"
+    :class="{ 'pet-stage--draggable': draggable }"
+    @pointerdown="onPointerDown"
+  >
     <canvas ref="canvasRef" class="pet-canvas" width="320" height="320"></canvas>
     <div v-if="!isLoaded && !errorMessage" class="hint">Loading VRM…</div>
     <div v-else-if="errorMessage" class="hint hint-error">
@@ -47,11 +78,14 @@ async function onPointerDown(event: PointerEvent) {
   position: relative;
   width: 320px;
   height: 320px;
-  /* 让透明像素也能接 pointerdown：默认 div 透明区域不接事件，加 cursor:grab 同时确保 pointer-events:auto */
+}
+
+/* draggable=true（pet 角色窗默认）：grab cursor 让透明像素也能接 pointerdown */
+.pet-stage--draggable {
   cursor: grab;
 }
 
-.pet-stage:active {
+.pet-stage--draggable:active {
   cursor: grabbing;
 }
 

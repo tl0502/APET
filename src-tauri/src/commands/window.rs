@@ -4,12 +4,13 @@
 // - settings show/hide（#9）
 // - pet 位置 get/save（#10；与后端 Moved 自动保存路径独立，前端可主动覆写）
 // - chat show/hide/toggle（#14；接 #11 全局快捷键 + 关闭按钮 / ESC）
+// - onboarding_complete（#16；"我懂了"路径切窗 + emit step-done 给 #17 状态机用）
 
 use crate::services::window_actions::{
-    hide_chat, hide_settings, show_chat, show_settings, toggle_chat,
+    hide_chat, hide_onboarding, hide_settings, show_chat, show_pet, show_settings, toggle_chat,
 };
 use crate::services::window_state::{self, LastPosition};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
 pub async fn settings_show(app: AppHandle) -> Result<(), String> {
@@ -52,5 +53,28 @@ pub async fn chat_hide(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn chat_toggle(app: AppHandle) -> Result<(), String> {
     toggle_chat(&app);
+    Ok(())
+}
+
+/// issue #16："我懂了"路径切窗 IPC。
+///
+/// 调用契约：前端 SoulPledgeView 在 `consent_grant` 成功后调本命令，由后端统一完成
+/// 1. hide onboarding 窗口（保留 webview 供 #17 状态机后续 Step 2-6 复用）
+/// 2. show pet 窗口（startup 期为它 hide 过；现在用户已同意 → 进入主态）
+/// 3. emit 全局事件 `onboarding:step-done` { step: "soul-pledge" } 给 #17 监听
+///
+/// 后端做切窗而不让前端自行切的理由：
+/// - 切窗涉及两个不同窗口（onboarding hide + pet show），前端跨窗口编排需要绕一圈
+///   getAll() / find by label；后端 AppHandle 直接拿 webview window 更简洁
+/// - 与 settings_show / chat_show 等同款风格（窗口可见性统一从 Rust 侧管控）
+/// - 事件 emit 也需要 AppHandle.emit；前端在 onboarding webview 里 emit 只能发到本窗，
+///   pet webview 收不到——后端 emit 是全局广播，所有 webview 都能监听
+#[tauri::command]
+pub async fn onboarding_complete(app: AppHandle) -> Result<(), String> {
+    hide_onboarding(&app);
+    show_pet(&app);
+    // 事件 payload 用对象而非裸字符串，给 #17 状态机扩展空间（如 step 字段 + reconsent 标记）
+    app.emit("onboarding:step-done", serde_json::json!({ "step": "soul-pledge" }))
+        .map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -1,0 +1,22 @@
+/* onboarding 窗口专用全局样式（issue #16）。
+   - 与 chat/settings 同款：不透明 + reset；不强制 user-select:none（文案要可读）
+   - 内部 .onboarding-stage 自己排列；html/body 关 overflow（避免双滚动条）
+*/
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--aipet-color-bg);
+  color: var(--aipet-color-text-1);
+  overflow: hidden;
+  font-family: var(--aipet-font-family-base);
+}
+
+html.dark,
+html.dark body,
+html.dark #app {
+  background: var(--aipet-color-bg);
+}

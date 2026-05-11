@@ -59,6 +59,20 @@
         "resizable": true,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "onboarding",
+        "title": "灵魂宣誓 — AI 桌宠",
+        "url": "onboarding.html",
+        "width": 480,
+        "height": 720,
+        "transparent": false,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "resizable": false,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {

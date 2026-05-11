@@ -6,7 +6,9 @@ mod commands;
 mod services;
 
 use services::shortcuts::ShortcutRegistry;
-use services::window_actions::{CHAT_WINDOW_LABEL, PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL};
+use services::window_actions::{
+    CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL,
+};
 use services::window_state::SaveDebouncer;
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -107,6 +109,27 @@ pub fn run() {
                     eprintln!("[setup] seed_builtin failed: {e}");
                 }
             });
+            // #16 启动期 consent 路由：seed_builtin 后 DB 已可用 → 查 consent_check_version。
+            // - Match → 不动（pet 默认 visible，onboarding 默认 hidden）
+            // - NotGranted / NeedReconsent → 隐藏 pet 窗 + 显示 onboarding 窗
+            //   （用户必须完成宣誓才能用桌宠；onboarding 窗的 close 走 app.exit(0) 分支）
+            // 失败仅 eprintln 不阻断启动：最坏情况是 pet 窗显示而 consent 未同意，
+            // 用户调用任何需要 consent 的功能时再次被引导（M3 数据治理才会强校验，M1 不致命）。
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::block_on(async move {
+                match crate::services::consent::check_version(&app_handle).await {
+                    Ok(crate::services::consent::ConsentStatus::Match) => {}
+                    Ok(_) => {
+                        if let Some(pet) = app_handle.get_webview_window(PET_WINDOW_LABEL) {
+                            let _ = pet.hide();
+                        }
+                        crate::services::window_actions::show_onboarding(&app_handle);
+                    }
+                    Err(e) => {
+                        eprintln!("[setup] consent check_version failed: {e}");
+                    }
+                }
+            });
             // #10 桌宠位置还原：读 last_position（无则 fallback 主屏右下角偏左 80px）
             // + 当前 monitor 边界裁剪（16px 安全边距）。同步 block_on 与 seed_builtin 同款理由。
             if let Err(e) = crate::services::window_state::apply_initial_position(app.handle()) {
@@ -133,7 +156,15 @@ pub fn run() {
             let label = window.label();
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    if label == PET_WINDOW_LABEL
+                    if label == ONBOARDING_WINDOW_LABEL {
+                        // #16 onboarding 关闭语义：Alt+F4 / 系统关闭 / 前端"退出"按钮 都等同
+                        // app.exit(0)（不写 consent；下次启动重弹）。与 pet/settings/chat 的
+                        // "关 = hide" 反向：onboarding 是 ADR-008 强制路径，用户没同意完就关 →
+                        // 应用应整体退出，不应留在后台"半同意"状态。
+                        // prevent_close 先拦住默认走 hide 的路径，再统一 exit。
+                        api.prevent_close();
+                        window.app_handle().exit(0);
+                    } else if label == PET_WINDOW_LABEL
                         || label == SETTINGS_WINDOW_LABEL
                         || label == CHAT_WINDOW_LABEL
                     {
@@ -176,6 +207,8 @@ pub fn run() {
             commands::window::chat_show,
             commands::window::chat_hide,
             commands::window::chat_toggle,
+            // #16 灵魂宣誓"我懂了"切窗 IPC（hide onboarding + show pet + emit step-done）
+            commands::window::onboarding_complete,
             // #11 shortcuts（probe + set chat）
             commands::shortcuts::probe_global_shortcut,
             commands::shortcuts::set_shortcut_chat,
