@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "onboarding",
+  "description": "灵魂宣誓窗口（#16）专属能力：基础 IPC（自定义 commands + event listen）+ 自我关闭（'退出'按钮 / Alt+F4 / X 都走 close() → Rust CloseRequested → app.exit(0)）。pet/settings/chat 不需要 close()（它们用 hide IPC），所以拆开 capability 避免暴露面扩大。",
+  "windows": ["onboarding"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close"
+  ]
+}
