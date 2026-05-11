@@ -1,6 +1,6 @@
 ---
 title: AIPET 开发踩坑笔记
-updated: 2026-05-08
+updated: 2026-05-10
 related:
   - STATUS.md
   - WORKFLOW.md
@@ -95,6 +95,53 @@ related:
 **反例**：保留全局 emit 的合理场景 —— 真广播事件（多窗口都要听，如 `nickname:changed` / `persona:activated` / `shortcut:chat`）。Channel 是单 invoke scope，不替代广播。
 
 **出处**：[#13 修正](https://github.com/tl0502/APET/issues/13) M1-D12，2026-05-08；plan `~/.claude/plans/c-issue-13-https-github-com-tl0502-apet-ancient-moth.md`
+
+---
+
+## 7. #13 取消 / 错误分类的真实状态机（注释 / STATUS 描述会漂）
+
+**症状**：读老 commit / STATUS / 早期 closing comment 时看到的"取消收尾：UPDATE 已收 partial"、`error_kind_str at service.rs:419-429` 等描述，对照当前代码已经对不上 —— 行号漂了、分支语义变了。新 session 不查源码就建议照旧实现，会破坏已经修过的属性。
+
+**根因**：单一文件被多 issue 反复重构（#1/#3/#5/#6/#7/#9 都动过 `run_stream`），但 STATUS / CLAUDE.md / closing comment 是只读快照，不会自动跟着代码漂。"自包含"原则保证 closing comment 里有 commit hash，但**正文描述本身**仍可能是当时的真理而非当下的真理。
+
+**处理**：动 cancel/错误分类前**必读** `service.rs::run_stream` 的 4 主分支真实实现，不要按记忆/老描述写代码。当前真实状态（截止 2026-05-10）：
+
+| 分支 | 触发 | DB 行为 | Channel 末事件 |
+|---|---|---|---|
+| Ok(finish) | 流式正常结束 | UPDATE mode='online' | Done(finishReason=stop/length/...) |
+| Err(Cancelled { partial_usage }) | 用户取消 | 空 partial → DELETE；非空 → UPDATE mode='cancelled' | Done(finishReason='cancelled', totalTokens=partial_usage.total_tokens) |
+| Err(Network/ServerError) | 网络/5xx | UPDATE mode='offline_rule' + 拒答模板 | Delta + Done(finishReason='offline_rule') |
+| Err(其他) | AuthFailed/RateLimit/BadRequest/ParseError | DELETE 成功 → 不入库；DELETE 失败 → fallback 改写 offline_rule + 走 offline_rule 收尾 | DELETE 成功 → Error；DELETE 失败 fallback 成功 → Delta+Done('offline_rule')；都失败 → Error |
+
+关键变体：
+- `LLMError::Cancelled` 是**结构体变体** `{ partial_usage: Option<Usage> }`，模式匹配必须 `LLMError::Cancelled { partial_usage }` 或 `LLMError::Cancelled { .. }`，**不能写 unit 形式**
+- `FinishReason::Unknown(String)` 透传上游未知 finish_reason 字符串，不再被吞成 `Error`
+- StreamEvent.error.errorKind 实际值含 `'DbError'`（4 处 update/delete 失败兜底），**不在** `LLMErrorKind`；前端类型用 `LLMErrorKind | 'DbError'`
+
+`error_kind_str` 中 `Network/ServerError/Cancelled` 三变体走 `unreachable!()` —— 因为 `run_stream` 上游分支已经拦下。新增 `LLMError` 变体时必须同步在 `run_stream` 加分支，否则运行时立即 panic 暴露。
+
+**出处**：[#13 修正后回溯检查](https://github.com/tl0502/APET/issues/13)，2026-05-10。
+
+---
+
+## 11. 多会话 KV 与 archived 标记的多层防护
+
+**症状**：跨窗口归档场景下两类隐蔽 bug：
+1. settings 窗 archive 一条非 active 会话 → pet 窗列表过期还显示它 → 用户点它 → `set_active` 成功 → 后续 `chat_send` 不传 conv_id 时 `ensure_active` 看 KV 行存在直接复用 → **消息写进归档会话，list 永远看不见**
+2. 流式跑到一半（5-30s）期间会话被另一窗口归档 → 收尾 `update_last_activity` 仍刷新归档行 → 取消归档后排序错乱、时间戳与归档时间不符
+
+**根因**：B6 修复 `set_active` 时只校验"行存在"没校验"未归档"；`ensure_active` / `update_last_activity` 同病。`archived` 标记单独存在但三个写路径都没读它。
+
+**处理**：三处都加 `AND archived = 0`：
+- `ensure_active_conversation_with_conn`：归档行视同孤儿 KV，走 fallback 建新（透明自愈）
+- `set_active_conversation_with_conn`：归档行报"对话不存在或已被归档"（让前端 toast + 刷列表）
+- `update_last_activity_with_conn`：归档行 UPDATE 不命中即静默 ok（messages 仍写入归档行，用户取消归档后看得见，比"消息凭空消失"友好）
+
+**未做的事**：SELECT-then-write 没包 tx。SQLite 单写锁 + ensure_active fallback + prepare tx 内二次校验三层兜底已够；若将来出现孤儿 KV 频发再加。
+
+**判别要点**：写多会话相关代码时问一句"这个 SQL / KV 路径是否要看 archived？"——三个答案都是 yes 就该过滤。归档不是软删，是"暂时不可见不可写"的运行态。
+
+**出处**：[多会话管理代码 review](docs/STATUS.md)，2026-05-10；3 个回归测试在 [conversation.rs:tests](src-tauri/src/services/chat/conversation.rs)。
 
 ---
 

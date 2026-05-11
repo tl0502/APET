@@ -9,13 +9,21 @@ pub mod db;
 pub mod memory;
 
 pub mod config;
+// #16 ConsentService：consent 表读写 + 版本路由判定（启动期 / Onboarding 用）
+pub mod consent;
 // #13 ChatService 业务编排层（M1 W2 ADR-018 Layer 2）— commands::chat 已真消费。
 pub mod chat;
 // #12 LLMProvider trait + OpenAIProvider（ADR-018 Layer 1）— #13 ChatService 真消费
 // chat_stream / OpenAIProvider / ChatOptions / FinishReason / LLMError / StreamDelta。
 // 多模态 ContentPart::ImageUrl 等 variant 仍 typed only，M3+ 接多模态时实现 impl 路径。
 pub mod llm;
+// 用户增补：多 provider 实例管理（参考 cc-switch UI）；ChatService.build_provider 真消费
+// get_active_record。原 #12 单 namespace `llm:openai:*` 已被 migrate_legacy_if_needed 搬迁。
+pub mod llm_providers;
 pub mod nickname;
+// 2026-05-09：user_nickname 切换转场注入（解决 System Prompt Inconsistency 污染对话）。
+// nickname::set_user_nickname 成功后调 maybe_inject_user_change 写 system 转场消息。
+pub mod nickname_announcement;
 pub mod persona;
 pub mod preferences;
 pub mod shortcuts;

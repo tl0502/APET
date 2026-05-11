@@ -6,7 +6,7 @@ mod commands;
 mod services;
 
 use services::shortcuts::ShortcutRegistry;
-use services::window_actions::{PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL};
+use services::window_actions::{CHAT_WINDOW_LABEL, PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL};
 use services::window_state::SaveDebouncer;
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -51,10 +51,49 @@ pub fn run() {
             eprintln!("[setup] reached");
             // #11 ShortcutRegistry：先 manage 让 register_chat_on_startup 能拿到 state
             app.manage(ShortcutRegistry::default());
-            // #12 LLM 测试 IPC 的活跃 CancellationToken 槽（chat_send_test ↔ cancel_test 共享）
-            crate::commands::llm::setup(app.handle());
+            // 用户增补 LLM Providers：测试连通用的活跃 CancellationToken 槽（llm_test_provider
+            // ↔ 同时仅 1 个；新调用抢占旧的）。原 #12 单 namespace setup 已退役。
+            crate::commands::llm_providers::setup(app.handle());
             // #13 ChatService 业务编排（chat_send / chat_cancel / chat_history）
             app.manage(crate::services::chat::service::ChatService::new());
+            // #6 启动期 GC：清理上次进程退出时 detached spawn 没收尾留下的孤儿 assistant
+            // placeholder（content='' 在 chat_history 视图里渲染为空气泡）。cutoff = 启动
+            // 时间快照；新进程启动后 prepare 写的 placeholder created_at >= cutoff 不会被
+            // 误删。失败仅 eprintln 不阻断启动（GC 失败用户最多看到一个空气泡，不致命）。
+            {
+                let app_handle = app.handle().clone();
+                let cutoff = chrono::Utc::now().to_rfc3339();
+                tauri::async_runtime::block_on(async move {
+                    match crate::services::memory::cleanup_orphan_assistant_placeholders(
+                        &app_handle,
+                        &cutoff,
+                    )
+                    .await
+                    {
+                        Ok(0) => {}
+                        Ok(n) => eprintln!("[setup] cleaned {n} orphan assistant placeholder(s)"),
+                        Err(e) => eprintln!("[setup] cleanup orphan placeholders failed: {e}"),
+                    }
+                });
+            }
+            // 用户增补：多 provider migration（旧 #12 单 namespace 三键 → 多 provider 默认条目 + active）
+            // 失败仅 eprintln 不阻断启动；用户可在设置面板手动添加 provider。
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::block_on(async move {
+                    match crate::services::llm_providers::migrate_legacy_if_needed(&app_handle)
+                        .await
+                    {
+                        Ok(true) => {
+                            eprintln!("[llm_providers] migrated legacy llm:openai:* into default provider");
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            eprintln!("[llm_providers] migrate_legacy_if_needed failed: {e}");
+                        }
+                    }
+                });
+            }
             // #6 系统托盘 + 菜单（显示/隐藏 / 设置占位 / 退出）
             crate::services::tray::setup(app.handle())?;
             // #5 H.1 内置人格 seed：plugin migrations 已建表，这里 UPSERT momo 行。
@@ -94,7 +133,10 @@ pub fn run() {
             let label = window.label();
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    if label == PET_WINDOW_LABEL || label == SETTINGS_WINDOW_LABEL {
+                    if label == PET_WINDOW_LABEL
+                        || label == SETTINGS_WINDOW_LABEL
+                        || label == CHAT_WINDOW_LABEL
+                    {
                         api.prevent_close();
                         let _ = window.hide();
                     }
@@ -115,36 +157,56 @@ pub fn run() {
             // #5 persona
             commands::persona::persona_load,
             commands::persona::persona_activate,
-            // #5 nickname
-            commands::nickname::nickname_get_pet,
+            commands::persona::persona_get_active,
+            // #5 nickname（2026-05-09：删 pet 系列，加 announce 开关）
             commands::nickname::nickname_get_user,
-            commands::nickname::nickname_set_pet,
             commands::nickname::nickname_set_user,
-            commands::nickname::nickname_restore_pet,
+            commands::nickname::nickname_get_announce_user_change,
+            commands::nickname::nickname_set_announce_user_change,
             // #5 KV 偏好（services::preferences；IPC 名沿用 memory_*，与 schema 列名 `memory` 一致）
             commands::memory::memory_get,
             commands::memory::memory_set,
             commands::memory::memory_list,
             commands::memory::memory_delete,
-            // #9 window 控制（settings show/hide）+ #10 pet 位置 get/save
+            // #9 window 控制（settings show/hide）+ #10 pet 位置 get/save + #14 chat show/hide/toggle
             commands::window::settings_show,
             commands::window::settings_hide,
             commands::window::get_pet_position,
             commands::window::save_pet_position,
+            commands::window::chat_show,
+            commands::window::chat_hide,
+            commands::window::chat_toggle,
             // #11 shortcuts（probe + set chat）
             commands::shortcuts::probe_global_shortcut,
             commands::shortcuts::set_shortcut_chat,
-            // #12 LLM 测试 IPC（dev console 验证用；#13 ChatService MVP 上线后真消费 LLMProvider trait）
-            commands::llm::set_openai_api_key,
-            commands::llm::get_openai_api_key_set,
-            commands::llm::set_openai_config,
-            commands::llm::get_openai_config,
-            commands::llm::chat_send_test,
-            commands::llm::cancel_test,
-            // #13 ChatService 业务编排（流式对话 + 取消 + 历史）
+            // 用户增补 LLM Providers（多 provider 实例 CRUD + activate + test，参考 cc-switch UI）
+            commands::llm_providers::llm_list_providers,
+            commands::llm_providers::llm_get_provider,
+            commands::llm_providers::llm_add_provider,
+            commands::llm_providers::llm_update_provider,
+            commands::llm_providers::llm_delete_provider,
+            commands::llm_providers::llm_activate_provider,
+            commands::llm_providers::llm_test_provider,
+            commands::llm_providers::llm_probe_models,
+            // #13 ChatService 业务编排（流式对话 + 取消 + 历史）+ 多会话切换
             commands::chat::chat_send,
             commands::chat::chat_cancel,
             commands::chat::chat_history,
+            commands::chat::chat_list_conversations,
+            commands::chat::chat_create_conversation,
+            commands::chat::chat_set_active_conversation,
+            commands::chat::chat_rename_conversation,
+            commands::chat::chat_archive_conversation,
+            commands::chat::chat_delete_conversation,
+            // V3 多对话并发草稿持久化（config 表 KV chat:draft:<convId>）
+            commands::chat::chat_get_draft,
+            commands::chat::chat_set_draft,
+            commands::chat::chat_delete_draft,
+            // #16 Consent（灵魂宣誓 IPC 管道；前端视图 #16b）
+            commands::consent::consent_get,
+            commands::consent::consent_grant,
+            commands::consent::consent_check_version,
+            commands::consent::consent_get_current_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -41,6 +41,24 @@
         "resizable": true,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "chat",
+        "title": "对话 — AI 桌宠",
+        "url": "chat.html",
+        "width": 640,
+        "height": 480,
+        "minWidth": 480,
+        "minHeight": 400,
+        "maxWidth": 1000,
+        "maxHeight": 800,
+        "transparent": false,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "resizable": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
@@ -54,6 +72,7 @@
   },
   "bundle": {
     "active": false,
-    "icon": ["icons/icon.png", "icons/icon.ico"]
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "resources": ["assets/onboarding/*", "assets/legal/*"]
   }
 }

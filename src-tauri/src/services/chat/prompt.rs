@@ -16,10 +16,12 @@
 //   pet_nickname == persona_name → 跳过 pet bullet（不显式提"你叫某某"避免冗余）
 //
 // - build_messages(persona, user_nickname?, pet_nickname, history, current_input):
-//   返 Vec<ChatMessage>：[system] + [history user/assistant 交替] + [包装后的 current user]。
+//   返 Vec<ChatMessage>：[system] + [history user/assistant/system 交替] + [包装后的 current user]。
 //   包装规则（防 drift inline 注入，arxiv 2402.10962 学术支持的 cheap technique）：
 //     wrap_user_input(name, raw) = format!("（保持 {name} 风格）{raw}")
 //   注：DB 仍存原始 input（用户在 ChatPanel 看到原文），仅 LLM 调用时包装。
+//   注：history 中 role='system' 是 NicknameService 转场注入消息（如改称呼），保留进 LLM
+//   能直接重置话术（System Prompt Inconsistency / Persona Drift 解法）。
 
 use thiserror::Error;
 
@@ -27,8 +29,9 @@ use crate::services::llm::{ChatMessage, Role};
 use crate::services::memory::MessageRecord;
 use crate::services::persona::PersonaSummary;
 
-/// M1 安全前缀占位。M3 G ADR-006 真注入时填充（通用 5 条 + 地区补充）。
-const SAFETY_PREFIX_PLACEHOLDER: &str = "";
+/// M1 安全前缀占位。M3 G ADR-006 真注入时改 `Some(...)` 即可。
+/// C2：用 Option 避免空字符串 push 后 `parts.join("\n\n")` 在开头多出双换行。
+const SAFETY_PREFIX: Option<&str> = None;
 
 /// 单 section 字符上限（中文 1 字符 ≈ 1.5 token，4000 字符 ≈ 6000 token，4 节合计 ≤ ~24K token）。
 /// 防恶意人格 / 用户写超长 # 性格 把 LLM context 吃光。
@@ -74,18 +77,41 @@ fn classify_line(line: &str) -> SectionKind {
         return SectionKind::NotH1;
     }
     let body = line.trim_start_matches('#').trim();
-    if body.starts_with("身份") {
+    if matches_section(body, "身份") {
         SectionKind::Identity
-    } else if body.starts_with("性格") {
+    } else if matches_section(body, "性格") {
         SectionKind::Personality
-    } else if body.starts_with("能力") {
+    } else if matches_section(body, "能力") {
         SectionKind::Abilities
-    } else if body.starts_with("行为规则") {
+    } else if matches_section(body, "行为规则") {
         SectionKind::Rules
-    } else if body.starts_with("离线模板") || body.starts_with("反应配置") {
+    } else if matches_section(body, "离线模板") || matches_section(body, "反应配置") {
         SectionKind::Terminator
     } else {
         SectionKind::OtherH1
+    }
+}
+
+/// B3 修复：精确 token 匹配，避免 `# 身份证认证` 这种 H1 被误判为 Identity 段。
+///
+/// 接受形式（按 .soul.md 实际写法穷举）：
+/// - 单 token：`# 身份`
+/// - 后跟空格+英文/补充：`# 身份 / Identity`、`# 身份 - 详细`
+/// - 紧挨括号注释：`# 身份(Identity)`、`# 身份（说明）`
+/// - 紧挨斜杠并列：`# 身份/Identity`
+///
+/// 不接受 `# 身份证`、`# 性格使然` 等扩展词（rest 起始字符是中文 / 英文字母而非分隔符）。
+fn matches_section(body: &str, kw: &str) -> bool {
+    if let Some(rest) = body.strip_prefix(kw) {
+        rest.is_empty()
+            || rest.starts_with(' ')
+            || rest.starts_with('\t')
+            || rest.starts_with('/')
+            || rest.starts_with('(')
+            || rest.starts_with('（')
+            || rest.starts_with('-')
+    } else {
+        false
     }
 }
 
@@ -187,9 +213,9 @@ pub fn build_system_message(
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
 
-    // 1. 安全前缀（M1 占位空字符串；非空才输出）
-    if !SAFETY_PREFIX_PLACEHOLDER.is_empty() {
-        parts.push(SAFETY_PREFIX_PLACEHOLDER.to_string());
+    // 1. 安全前缀（M1 None；非 None 才输出）
+    if let Some(prefix) = SAFETY_PREFIX {
+        parts.push(prefix.to_string());
     }
 
     // 2. 角色身份
@@ -198,6 +224,12 @@ pub fn build_system_message(
     parts.push(sections.personality.clone());
     parts.push(sections.abilities.clone());
     parts.push(sections.rules.clone());
+
+    // C8：告知 LLM 用户消息可能带 wrap_user_input 包装的「（保持 X 风格）」前缀，
+    // 让它视为系统引导而不是用户内容，回复中也不复读这个前缀。
+    parts.push(format!(
+        "（系统说明）用户消息可能带「（保持 {persona_name} 风格）」前缀作为系统引导，请视为指令而非用户内容；回复中不要复读这个前缀。"
+    ));
 
     // 3. 当前会话上下文（昵称注入；persona-design.md §8.3 ChatService 统一注入）
     let mut nickname_bullets: Vec<String> = Vec::new();
@@ -243,7 +275,12 @@ pub fn build_messages(
         let role = match record.role.as_str() {
             "user" => Role::User,
             "assistant" => Role::Assistant,
-            // 'system' 不应出现在 history（ChatService 不写 system role）；防御性 skip
+            // 'system' 用于 NicknameService 的转场注入消息（如"用户改称呼为 X"）。
+            // 让 LLM 真的看到——研究文献（Persona Drift, arxiv 2402.10962）证实：
+            // 仅靠开头 system prompt + 末尾 anchor 在长 history 下会被稀释；
+            // history 中段插入的 system 通知能直接重置话术，避免旧昵称污染。
+            "system" => Role::System,
+            // 未知 role：防御性 skip
             _ => continue,
         };
         messages.push(ChatMessage::text(role, record.content.clone()));
@@ -377,6 +414,50 @@ mod tests {
         );
     }
 
+    // ===== B3：精确 token 匹配，避免扩展词被误判 =====
+
+    #[test]
+    fn h1_extension_words_are_not_classified_as_target_sections() {
+        // # 身份证认证 / # 性格使然 等扩展词不能命中目标段
+        let raw =
+            "# 身份证认证\n你需要的证件\n\n# 身份\n你是测试。\n\n# 性格\n- 慵懒\n\n# 能力\n- 测试\n\n# 行为规则\n- 守规则";
+        let sections = extract_persona_sections(raw).expect("must parse");
+        assert!(
+            !sections.identity.contains("身份证认证"),
+            "# 身份证认证 不应被吸收进 # 身份"
+        );
+        assert!(!sections.identity.contains("证件"));
+        assert!(sections.identity.contains("你是测试"));
+    }
+
+    #[test]
+    fn h1_with_paren_or_slash_still_matches() {
+        // 带英文 / 括号注释的 H1 仍应正确分类
+        let raw = "# 身份(Identity)\nA\n\n# 性格 / Personality\n- B\n\n# 能力（说明）\n- C\n\n# 行为规则\n- D";
+        let sections = extract_persona_sections(raw).expect("must parse");
+        assert!(sections.identity.contains("# 身份(Identity)"));
+        assert!(sections.identity.contains('A'));
+        assert!(sections.personality.contains("# 性格 / Personality"));
+        assert!(sections.abilities.contains("# 能力（说明）"));
+    }
+
+    #[test]
+    fn classify_extension_word_returns_other_h1() {
+        assert_eq!(classify_line("# 身份证认证"), SectionKind::OtherH1);
+        assert_eq!(classify_line("# 性格使然"), SectionKind::OtherH1);
+        assert_eq!(classify_line("# 能力者"), SectionKind::OtherH1);
+    }
+
+    #[test]
+    fn classify_target_token_with_separators_returns_target() {
+        assert_eq!(classify_line("# 身份"), SectionKind::Identity);
+        assert_eq!(classify_line("# 身份 / Identity"), SectionKind::Identity);
+        assert_eq!(classify_line("# 身份(说明)"), SectionKind::Identity);
+        assert_eq!(classify_line("# 身份（注释）"), SectionKind::Identity);
+        assert_eq!(classify_line("# 身份/Identity"), SectionKind::Identity);
+        assert_eq!(classify_line("# 身份-详细"), SectionKind::Identity);
+    }
+
     #[test]
     fn truncate_no_marker_when_under_limit() {
         let small = "x".repeat(100);
@@ -454,6 +535,22 @@ mod tests {
     }
 
     #[test]
+    fn build_system_includes_wrap_prefix_guidance_with_persona_name() {
+        // C8：system message 必须告诉 LLM"（保持 X 风格）"前缀是引导词
+        let body = momo_body();
+        let sections = extract_persona_sections(&body).unwrap();
+        let system = build_system_message(&sections, "默默", None, "默默");
+        assert!(
+            system.contains("保持 默默 风格"),
+            "system message 应包含 wrap 前缀模板"
+        );
+        assert!(
+            system.contains("不要复读这个前缀"),
+            "system message 应明确要求 LLM 不复读引导词"
+        );
+    }
+
+    #[test]
     fn wrap_user_input_format_is_stable() {
         assert_eq!(wrap_user_input("默默", "你好"), "（保持 默默 风格）你好");
         assert_eq!(wrap_user_input("阿吉", ""), "（保持 阿吉 风格）");
@@ -508,6 +605,37 @@ mod tests {
         assert_eq!(messages.len(), 4, "unknown role 'admin' 必须 skip");
         assert_eq!(message_text(&messages[1]), "u1");
         assert_eq!(message_text(&messages[2]), "a1");
+    }
+
+    #[test]
+    fn build_messages_propagates_system_role_in_history() {
+        // role='system' 是 NicknameService 转场注入消息，必须传到 LLM 重置话术。
+        // 测试覆盖 [system_prompt] + [user, system 转场, assistant] + [wrapped_user] 顺序。
+        let body = momo_body();
+        let persona = make_persona(&body, "默默");
+        let history = vec![
+            make_record("user", "你好"),
+            make_record(
+                "system",
+                "「系统通知」用户希望你之后称呼TA「Bob」（之前是「Alice」）。",
+            ),
+            make_record("assistant", "好的，Alice"),
+        ];
+        let messages = build_messages(&persona, Some("Bob"), "默默", &history, "再见").unwrap();
+        assert_eq!(messages.len(), 5, "[sys] + 3 history + 1 wrapped current");
+        assert_eq!(messages[0].role, Role::System, "leading system prompt");
+        assert_eq!(messages[1].role, Role::User);
+        assert_eq!(message_text(&messages[1]), "你好");
+        assert_eq!(
+            messages[2].role,
+            Role::System,
+            "history system 转场必须保留为 Role::System 给 LLM"
+        );
+        assert!(message_text(&messages[2]).contains("Bob"), "转场内容透传");
+        assert_eq!(messages[3].role, Role::Assistant);
+        assert_eq!(message_text(&messages[3]), "好的，Alice");
+        assert_eq!(messages[4].role, Role::User);
+        assert_eq!(message_text(&messages[4]), "（保持 默默 风格）再见");
     }
 
     #[test]

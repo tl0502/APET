@@ -53,7 +53,23 @@ pub async fn open_app_db<R: Runtime>(app: &AppHandle<R>) -> Result<SqliteConnect
 }
 
 /// 把测试 / 集成连接也拉到与 prod 一致的 PRAGMA 状态。
+///
+/// - `journal_mode = WAL`：CLAUDE.md 声明 "SQLite + WAL"，但 tauri-plugin-sql 默认 builder 不
+///   保证开启 WAL，先前版本 enforce_pragmas 也漏设；落到默认 `journal_mode=delete` 时写时
+///   整库锁，叠加并发流式 + chat_history + 昵称注入三路写极易触发 BUSY。WAL 是 DB 级持久
+///   属性（第一次设置写入文件 header），后续每次连接显式设无副作用，作"确认型 PRAGMA"使用。
+///   注：`:memory:` DB 不支持 WAL（SQLite 会静默忽略保持 memory 模式），磁盘 DB 才生效——
+///   test_db::fresh_db 走 tempfile 磁盘文件，OK。2026-05-10 code-review Bug 4 修复。
+/// - `foreign_keys = ON`：messages.conversation_id / persona_snapshots.persona_id 等 FK
+///   能稳定生效（SQLite 默认 OFF，sqlx 默认 ON，但 plugin DbPool 路径 / 手动连接不保证）。
+/// - `busy_timeout = 5000`：拿不到写锁时**等 5s 再返 BUSY**（SQLite 默认 0 = 立即报错）。
+///   修复缘由：#4 修复期间在 ChatService::prepare 引入了 begin/SELECT/INSERT*2/commit 的
+///   显式事务，持有写锁 ~10-50ms。同时 update_last_activity / nickname_announcement /
+///   plugin DbPool 路径都在写同一 aipet.db。默认 0 timeout 下两路并发就立即 SQLITE_BUSY
+///   (code 5)。5s 内重试是 SQLite 标准做法，远短于人感知阈值且足够吸收正常的并发写。
 pub async fn enforce_pragmas(conn: &mut SqliteConnection) -> Result<(), DbError> {
+    conn.execute("PRAGMA journal_mode = WAL").await?;
     conn.execute("PRAGMA foreign_keys = ON").await?;
+    conn.execute("PRAGMA busy_timeout = 5000").await?;
     Ok(())
 }

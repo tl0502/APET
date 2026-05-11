@@ -57,8 +57,16 @@ tokio-util = "0.7"
 # process_event_stream 在 trait bound 里直接引用，必须是 [dependencies]（非 dev-deps）。
 bytes = "1"
 
+# C1：parking_lot::Mutex 替换 std Mutex 用于 ChatService.active_streams 与
+# LlmTestRegistry.current —— 无 poison 概念让代码不再 .map_err(|e| ...)，且 panic
+# 后下次锁获取仍工作（std Mutex poison 后整个 chat / test 子系统永久死锁）。
+parking_lot = "0.12"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+[patch.crates-io]
+typeid = { path = "vendor/typeid" }
 
 # #5 DB 集成测试 dev-deps：
 # - tempfile：每个测试一份独立 .db 文件，避免共享状态串味；Drop 自动清理

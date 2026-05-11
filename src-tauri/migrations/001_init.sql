@@ -267,13 +267,16 @@ CREATE TABLE error_logs (
 );
 
 -- ==== 单行表 seed(确保 UPDATE 能命中) ====
-INSERT INTO schema_version (version, applied_at) VALUES (1, datetime('now'));
+-- 时间戳格式：strftime('%Y-%m-%dT%H:%M:%fZ','now') = RFC3339 UTC（"2026-05-10T14:25:30.123Z"），
+-- 与 Rust 端 chrono::Utc::now().to_rfc3339() 同协议；避免 datetime('now') 的空格分隔格式
+-- 与 service 层后续 UPDATE 写入混存导致字符串排序失序。
+INSERT INTO schema_version (version, applied_at) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 INSERT INTO consent (id, granted, method, version, accepted_at)
-  VALUES (1, 0, 'classic', 1, datetime('now'));
-INSERT INTO nicknames (id, updated_at) VALUES (1, datetime('now'));
+  VALUES (1, 0, 'classic', 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+INSERT INTO nicknames (id, updated_at) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 INSERT INTO pet_runtime_state (id, last_interaction_at, updated_at)
-  VALUES (1, datetime('now'), datetime('now'));
-INSERT INTO voice_settings (id, updated_at) VALUES (1, datetime('now'));
+  VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+INSERT INTO voice_settings (id, updated_at) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
 -- ==== Persona snapshot 唯一约束 ====
 -- 同 (persona_id, version) 只能存在一条快照（idempotent seed + 防御直接 INSERT）。

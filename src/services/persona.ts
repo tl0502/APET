@@ -10,3 +10,8 @@ export function loadPersona(id: string): Promise<PersonaSummary> {
 export function activatePersona(id: string): Promise<void> {
   return invoke<void>('persona_activate', { id })
 }
+
+/** 读当前激活人格 summary（含 raw_markdown）。#14 ChatPanel header 标题、设置面板提示用。 */
+export function getActivePersona(): Promise<PersonaSummary> {
+  return invoke<PersonaSummary>('persona_get_active')
+}

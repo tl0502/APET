@@ -94,13 +94,28 @@ description: 从对话上下文综合推断 + 创建 GitHub issue（智能版）
 
   Refs:      docs/requirements/prd.md §B.3.a, docs/architecture/system-architecture.md §3.2
 
-  Body:
-    做什么：实现 ChatService 主进程服务的最小版本，含 OpenAI Provider + 流式渲染到前端。
-    验收标准：
-    - [ ] /chat IPC 命令跑通
-    - [ ] 流式 token 显示在 ChatPanel
-    - [ ] 错误兜底（API key 无效、网络失败）
-    依赖：H-persona MVP（已完成 ADR-008 灵魂宣誓后才能给 ChatService 喂安全前缀）
+  Body:（≤ 50 行；6 段结构，小任务可省略「拍板」「不做」两段）
+    ## 目标
+    实现 ChatService MVP，含 OpenAI Provider + 流式渲染。
+
+    ## 范围
+    - src-tauri/src/services/chat/service.rs：spawn run_stream + ipc::Channel
+    - src-tauri/src/commands/chat.rs：chat_send + chat_cancel IPC
+    - src/services/chat.ts + ChatPanel.vue 前端集成
+
+    ## 拍板（PRD/ADR 待详细化的项；无则省略）
+    - 流式协议：tauri::ipc::Channel<StreamEvent>（替代 emit）
+
+    ## 不做（明确 out-of-scope；无则省略）
+    - 多 provider 路由切换（→ 后续 issue）
+
+    ## 验收
+    - [ ] /chat IPC 跑通；流式 token 渲染到 ChatPanel
+    - [ ] 错误兜底（key 失败 / 网络 / 取消三类）
+
+    依赖：H-persona MVP（ADR-008 安全前缀）。预计 4h。
+
+    Refs: docs/requirements/prd.md §B.3.a
 
   确认创建？(y / 改 / 取消)
 ```
@@ -142,6 +157,8 @@ gh issue create \
 - [ ] title 以 `<module-letter>:` 开头
 - [ ] body 含 `Refs:` 一行
 - [ ] body 含验收标准复选框（feat / spike 必须；fix / chore 可省）
+- [ ] body ≤ 50 行（含验收 checkbox 但不含代码块；超过通常意味着在复制 PRD/ADR，请改为 `Refs:`）
+- [ ] body 不含 Vue/Rust 组件伪代码 / IPC 函数签名（实现细节看 commit；body 只声明范围）
 - [ ] milestone 存在（如果 gh milestone list 不含目标 milestone，先告诉我，不要自动建）
 
 ## 不要做

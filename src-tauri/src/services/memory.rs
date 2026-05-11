@@ -10,18 +10,23 @@
 // - **默认无限保留** + 用户主动清理(类似 ChatGPT 网页);UI 入口由后续模块 B.3 / 设置面板提供
 // - PRD §73 / 架构 §549 的"90 天默认 + is_deleted 软删"措辞与本实现偏差,留给 doc-aligner 后续对齐
 // - messages.id 走 ULID(schema 注释明写;时间序利于 (conversation_id, created_at) 索引)
-// - DB 连接同 persona.rs 模式:自开 sqlx 短期连接,DB 路径用 app.path().app_config_dir()
+// - DB 连接走 services::db::open_app_db（统一收口 PRAGMA foreign_keys / busy_timeout / WAL）;
+//   早先版本自维护 open_conn 跳过 enforce_pragmas，导致 ChatService::history /
+//   启动期 GC 路径并发写时立即 SQLITE_BUSY（无 5s 重试）— 2026-05-10 code-review 修复。
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, Connection, FromRow, SqliteConnection};
-use tauri::{AppHandle, Manager, Runtime};
+use sqlx::{Connection, FromRow, SqliteConnection};
+use tauri::{AppHandle, Runtime};
 use thiserror::Error;
 use ulid::Ulid;
 
+use crate::services::db::{open_app_db, DbError};
+
 const VALID_ROLES: &[&str] = &["user", "assistant", "system"];
-const VALID_MODES: &[&str] = &["online", "offline_rule"];
+// 'cancelled' 用于 ChatService run_stream 收到 LLMError::Cancelled 但已收到 partial 文本的场景：
+// UI 仍可见这条半句，但下一轮 prompt 时 ChatService 会过滤掉（与 'offline_rule' 同理由 — A6 修复）。
+const VALID_MODES: &[&str] = &["online", "offline_rule", "cancelled"];
 
 const SUMMARY_PLACEHOLDER: &str =
     "[摘要功能将于 M3 引入;此处为占位符,详见 progress/decisions-log.md]";
@@ -51,6 +56,15 @@ pub enum MemoryError {
 impl From<sqlx::Error> for MemoryError {
     fn from(e: sqlx::Error) -> Self {
         MemoryError::Database(e.to_string())
+    }
+}
+
+impl From<DbError> for MemoryError {
+    fn from(e: DbError) -> Self {
+        match e {
+            DbError::AppConfigDir(s) => MemoryError::AppConfigDir(s),
+            DbError::Database(s) => MemoryError::Database(s),
+        }
     }
 }
 
@@ -84,20 +98,6 @@ fn cutoff_for_days(days: u32) -> String {
     (Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339()
 }
 
-async fn open_conn<R: Runtime>(app: &AppHandle<R>) -> Result<SqliteConnection, MemoryError> {
-    let app_config = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| MemoryError::AppConfigDir(e.to_string()))?;
-    let db_path = app_config.join("aipet.db");
-    // builder API 避开 URL parsing(Windows 绝对路径反斜杠会让 from_str 报 code 14)
-    Ok(SqliteConnectOptions::new()
-        .filename(&db_path)
-        .create_if_missing(false)
-        .connect()
-        .await?)
-}
-
 /// 写入一条消息(ChatService B.2 streaming 完成后调用)。
 pub async fn insert_message<R: Runtime>(
     app: &AppHandle<R>,
@@ -108,7 +108,7 @@ pub async fn insert_message<R: Runtime>(
 ) -> Result<MessageRecord, MemoryError> {
     let record = build_message_record(conversation_id, role, content, mode)?;
 
-    let mut conn = open_conn(app).await?;
+    let mut conn = open_app_db(app).await?;
     insert_message_with_conn(&mut conn, &record).await?;
     conn.close().await?;
 
@@ -123,7 +123,7 @@ pub async fn list_messages_by_conversation<R: Runtime>(
     conversation_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<MessageRecord>, MemoryError> {
-    let mut conn = open_conn(app).await?;
+    let mut conn = open_app_db(app).await?;
     let records =
         list_messages_by_conversation_with_conn(&mut conn, conversation_id, limit).await?;
     conn.close().await?;
@@ -132,7 +132,7 @@ pub async fn list_messages_by_conversation<R: Runtime>(
 
 /// 按消息 ID 删除(用户主动 "删除某条" 用)。
 pub async fn delete_message<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), MemoryError> {
-    let mut conn = open_conn(app).await?;
+    let mut conn = open_app_db(app).await?;
     delete_message_with_conn(&mut conn, id).await?;
     conn.close().await?;
     Ok(())
@@ -144,7 +144,7 @@ pub async fn delete_messages_by_conversation<R: Runtime>(
     app: &AppHandle<R>,
     conversation_id: &str,
 ) -> Result<u64, MemoryError> {
-    let mut conn = open_conn(app).await?;
+    let mut conn = open_app_db(app).await?;
     let count = delete_messages_by_conversation_with_conn(&mut conn, conversation_id).await?;
     conn.close().await?;
     Ok(count)
@@ -167,7 +167,7 @@ pub(crate) async fn cleanup_messages_older_than<R: Runtime>(
     days: u32,
 ) -> Result<u64, MemoryError> {
     let cutoff = cutoff_for_days(days);
-    let mut conn = open_conn(app).await?;
+    let mut conn = open_app_db(app).await?;
     let count = cleanup_messages_with_conn(&mut conn, &cutoff).await?;
     conn.close().await?;
     Ok(count)
@@ -205,13 +205,22 @@ pub(crate) async fn list_messages_by_conversation_with_conn(
 ) -> Result<Vec<MessageRecord>, MemoryError> {
     let records: Vec<MessageRecord> = match limit {
         Some(n) => {
+            // H1 修复（2026-05-09）：原 `ORDER BY created_at ASC LIMIT ?` 在长对话
+            // （消息数 > limit）时取的是**最早 N 条**而非"最近 N 条"，导致 ChatService.prepare
+            // 拉到几个月前的开场寒暄推给 LLM，看似"上下文窗口太小"实则 LIMIT 方向反了。
+            // 修复：内层 DESC LIMIT N 取最近 N 条，外层翻 ASC 保持调用方升序契约不变
+            // （prompt.rs:273-274 build_messages 注释依赖此排序）。
             sqlx::query_as::<_, MessageRecord>(
                 r#"
             SELECT id, conversation_id, role, content, mode, created_at
-            FROM messages
-            WHERE conversation_id = ?
+            FROM (
+                SELECT id, conversation_id, role, content, mode, created_at
+                FROM messages
+                WHERE conversation_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            ) AS recent
             ORDER BY created_at ASC
-            LIMIT ?
             "#,
             )
             .bind(conversation_id)
@@ -247,6 +256,29 @@ pub(crate) async fn delete_message_with_conn(
     Ok(())
 }
 
+/// 按 message id 更新 content + mode（A4 修复：ChatService 预插入空行后流式末尾改写）。
+///
+/// content / mode 校验沿用 build_message_record 的 VALID_MODES（'online' | 'offline_rule' | 'cancelled'）；
+/// 调用方需保证 mode 合法（service 层硬编码三值，不做 IPC 暴露）。
+/// 不存在 id → no-op（rows_affected=0；调用方 ChatService 已守 prepare 期 INSERT 必成功）。
+pub(crate) async fn update_message_content_with_conn(
+    conn: &mut SqliteConnection,
+    id: &str,
+    content: &str,
+    mode: &str,
+) -> Result<(), MemoryError> {
+    if !VALID_MODES.contains(&mode) {
+        return Err(MemoryError::InvalidMode(mode.to_string(), VALID_MODES));
+    }
+    sqlx::query("UPDATE messages SET content = ?, mode = ? WHERE id = ?")
+        .bind(content)
+        .bind(mode)
+        .bind(id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 pub(crate) async fn delete_messages_by_conversation_with_conn(
     conn: &mut SqliteConnection,
     conversation_id: &str,
@@ -266,6 +298,46 @@ pub(crate) async fn cleanup_messages_with_conn(
         .bind(cutoff_rfc3339)
         .execute(conn)
         .await?;
+    Ok(result.rows_affected())
+}
+
+/// #6 启动期 GC：清理上次进程退出时 detached spawn 的 run_stream 还没收尾就被
+/// 强杀（托盘"退出" / 系统重启 / 崩溃）留下的孤儿 assistant placeholder。
+///
+/// 这些行的特征：role='assistant' AND mode='online' AND content=''，在 chat_history
+/// 视图里渲染为"空气泡"，UX 体验差。
+///
+/// `cutoff_rfc3339` 必须由 caller 在启动早期捕获（一般 `Utc::now().to_rfc3339()`）：
+/// 加了这个上界后，新进程启动后立刻收到 chat_send 也不会被误删（新 placeholder 的
+/// created_at >= 启动时间快照）。
+///
+/// 失败语义：caller 仅 log 不阻断启动；返删除行数（一般 0-N，N 通常 < 5）。
+pub async fn cleanup_orphan_assistant_placeholders<R: Runtime>(
+    app: &AppHandle<R>,
+    cutoff_rfc3339: &str,
+) -> Result<u64, MemoryError> {
+    let mut conn = open_app_db(app).await?;
+    let count = cleanup_orphan_assistant_placeholders_with_conn(&mut conn, cutoff_rfc3339).await?;
+    conn.close().await?;
+    Ok(count)
+}
+
+pub(crate) async fn cleanup_orphan_assistant_placeholders_with_conn(
+    conn: &mut SqliteConnection,
+    cutoff_rfc3339: &str,
+) -> Result<u64, MemoryError> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM messages
+        WHERE role = 'assistant'
+          AND mode = 'online'
+          AND content = ''
+          AND created_at < ?
+        "#,
+    )
+    .bind(cutoff_rfc3339)
+    .execute(conn)
+    .await?;
     Ok(result.rows_affected())
 }
 
@@ -468,6 +540,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_respects_limit() {
+        // H1 修复（2026-05-09）：原测试只断 len()=3 通过，但 ASC LIMIT 取的是
+        // [msg-0, msg-1, msg-2]（最早 3 条），而 ChatService 期望"最近 3 条"。
+        // 修复后 SQL 用子查询 DESC LIMIT N → 外层 ASC，应取 [msg-2, msg-3, msg-4]。
         let (_dir, mut conn) = fresh_db().await;
         for i in 0..5 {
             insert_user_msg(&mut conn, "conv-limit", &format!("msg-{i}")).await;
@@ -477,6 +552,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(limited.len(), 3);
+        assert_eq!(
+            limited[0].content, "msg-2",
+            "limit=3 应取最近 3 条（msg-2/3/4），而非最早 3 条（msg-0/1/2）"
+        );
+        assert_eq!(limited[1].content, "msg-3");
+        assert_eq!(limited[2].content, "msg-4");
     }
 
     #[tokio::test]
@@ -546,5 +627,131 @@ mod tests {
             .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].content, "fresh");
+    }
+
+    // ===== #6 启动期 GC：孤儿 assistant placeholder =====
+
+    #[tokio::test]
+    async fn cleanup_orphan_placeholders_only_drops_empty_online_assistant() {
+        // 只删 role=assistant + mode=online + content='' 的；其他都保留
+        let (_dir, mut conn) = fresh_db().await;
+        ensure_conversation(&mut conn, "conv-gc").await;
+
+        // 1. 孤儿 placeholder（应被清）
+        let orphan = build_message_record(
+            "conv-gc".into(),
+            "assistant".into(),
+            String::new(),
+            "online".into(),
+        )
+        .unwrap();
+        insert_message_with_conn(&mut conn, &orphan).await.unwrap();
+
+        // 2. 已完成的 assistant 行（content 非空，应保留）
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let completed = build_message_record(
+            "conv-gc".into(),
+            "assistant".into(),
+            "你好呀".into(),
+            "online".into(),
+        )
+        .unwrap();
+        insert_message_with_conn(&mut conn, &completed)
+            .await
+            .unwrap();
+
+        // 3. offline_rule 拒答行（mode=offline_rule，应保留——降级路径写的是非空 refusal，
+        //    但即便 content='' 也不该按"未完成的 placeholder"处理）
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let offline = build_message_record(
+            "conv-gc".into(),
+            "assistant".into(),
+            "暂时没法陪你聊".into(),
+            "offline_rule".into(),
+        )
+        .unwrap();
+        insert_message_with_conn(&mut conn, &offline).await.unwrap();
+
+        // 4. user 空消息（理论不可能但防御性，应保留）
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let user_empty = build_message_record(
+            "conv-gc".into(),
+            "user".into(),
+            String::new(),
+            "online".into(),
+        )
+        .unwrap();
+        insert_message_with_conn(&mut conn, &user_empty)
+            .await
+            .unwrap();
+
+        // 用足够远的 future cutoff 让所有现有行都 < cutoff
+        let future_cutoff = (Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+        let removed = cleanup_orphan_assistant_placeholders_with_conn(&mut conn, &future_cutoff)
+            .await
+            .unwrap();
+        assert_eq!(removed, 1, "只删 1 个空 online assistant placeholder");
+
+        let remaining = list_messages_by_conversation_with_conn(&mut conn, "conv-gc", None)
+            .await
+            .unwrap();
+        assert_eq!(remaining.len(), 3);
+        assert!(!remaining.iter().any(|r| r.id == orphan.id));
+        assert!(remaining.iter().any(|r| r.id == completed.id));
+        assert!(remaining.iter().any(|r| r.id == offline.id));
+        assert!(remaining.iter().any(|r| r.id == user_empty.id));
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphan_placeholders_respects_cutoff_filter() {
+        // cutoff 之后的 placeholder 不被误删（保护新进程刚 INSERT 的 placeholder）
+        let (_dir, mut conn) = fresh_db().await;
+        ensure_conversation(&mut conn, "conv-cutoff").await;
+
+        // 旧的孤儿（启动前）
+        let old_orphan_id = "01OLDPLACEHOLDER0000000000";
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, role, content, mode, created_at) \
+             VALUES (?, 'conv-cutoff', 'assistant', '', 'online', '2024-01-01T00:00:00Z')",
+        )
+        .bind(old_orphan_id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        // 新生成的（启动后）
+        let new_placeholder = build_message_record(
+            "conv-cutoff".into(),
+            "assistant".into(),
+            String::new(),
+            "online".into(),
+        )
+        .unwrap();
+        insert_message_with_conn(&mut conn, &new_placeholder)
+            .await
+            .unwrap();
+
+        // cutoff = 2025 年（介于两条之间）
+        let cutoff = "2025-01-01T00:00:00Z";
+        let removed = cleanup_orphan_assistant_placeholders_with_conn(&mut conn, cutoff)
+            .await
+            .unwrap();
+        assert_eq!(removed, 1, "只删 cutoff 之前的");
+
+        let remaining = list_messages_by_conversation_with_conn(&mut conn, "conv-cutoff", None)
+            .await
+            .unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, new_placeholder.id);
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphan_placeholders_returns_zero_on_clean_db() {
+        let (_dir, mut conn) = fresh_db().await;
+        let cutoff = (Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+        let removed = cleanup_orphan_assistant_placeholders_with_conn(&mut conn, &cutoff)
+            .await
+            .unwrap();
+        assert_eq!(removed, 0, "干净 DB 上 GC 应是 no-op，返 0");
     }
 }

@@ -72,12 +72,49 @@ export function listConversations(limit = 50): Promise<ConversationSummary[]> {
   return invoke<ConversationSummary[]>('chat_list_conversations', { limit })
 }
 
-/** 显式新建 conversation + 切 active KV；返回新 id。"新建对话"按钮路径。 */
-export function createConversation(): Promise<string> {
-  return invoke<string>('chat_create_conversation')
+/** 显式新建 conversation + 切 active KV；返回新 id。"新建对话"按钮路径。
+ *
+ * C7：personaId 可选；不传 → 后端用当前 active persona 兜底（M1 默认行为）。
+ * 留入参为 M3 多 persona UI 准备。
+ */
+export function createConversation(personaId?: string): Promise<string> {
+  return invoke<string>('chat_create_conversation', { personaId })
 }
 
 /** 切 active KV（点列表项路径；不动 messages 表）。 */
 export function setActiveConversation(conversationId: string): Promise<void> {
   return invoke<void>('chat_set_active_conversation', { conversationId })
+}
+
+/** 重命名 conversation。空字符串 → 后端写 NULL（恢复"未命名"）；非空 → trim + ≤100 字符截断。 */
+export function renameConversation(conversationId: string, title: string): Promise<void> {
+  return invoke<void>('chat_rename_conversation', { conversationId, title })
+}
+
+/** 归档 conversation；列表立刻隐藏；命中 active KV 则后端清 KV。 */
+export function archiveConversation(conversationId: string): Promise<void> {
+  return invoke<void>('chat_archive_conversation', { conversationId })
+}
+
+/** 硬删 conversation；FK ON DELETE CASCADE 自动级联删 messages；命中 active KV 则后端清 KV。
+ *  V3：后端会顺带清 chat:draft:<id> KV。 */
+export function deleteConversation(conversationId: string): Promise<void> {
+  return invoke<void>('chat_delete_conversation', { conversationId })
+}
+
+/** V3 多对话并发：读对话草稿。空 / 不存在 → null。 */
+export function getChatDraft(conversationId: string): Promise<string | null> {
+  return invoke<string | null>('chat_get_draft', { conversationId })
+}
+
+/** V3 多对话并发：写对话草稿。空字符串 → 后端删 KV。
+ *  调用方应 debounce 200ms，避免每次按键都打 IPC。 */
+export function setChatDraft(conversationId: string, draft: string): Promise<void> {
+  return invoke<void>('chat_set_draft', { conversationId, draft })
+}
+
+/** V3 多对话并发：删对话草稿（不存在 = no-op）。
+ *  正常路径由 deleteConversation 自动级联；只在显式"清空草稿"场景手动调。 */
+export function deleteChatDraft(conversationId: string): Promise<void> {
+  return invoke<void>('chat_delete_draft', { conversationId })
 }

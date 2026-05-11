@@ -49,6 +49,9 @@ secrets/
 # 用户私有资源（avatar.vrm 由用户自备，不入库；旧项目策略一致）
 public/avatar/*.vrm
 
+# Issue / commit 草稿（私人 review 用，不入库）
+docs/_drafts/
+
 # Claude Code 本地状态（按需保留 commands/ 提交）
 .claude/settings.local.json
 .claude/cache/

@@ -6,7 +6,7 @@
 // - 错误类型映射 thiserror enum → 前端拿到的 IpcError.message 含语义前缀
 
 use crate::services::persona::{
-    activate_persona, load_persona, PersonaLookupError, PersonaSummary,
+    activate_persona, load_active_persona, load_persona, PersonaLookupError, PersonaSummary,
 };
 use tauri::{AppHandle, Emitter};
 
@@ -38,6 +38,17 @@ fn lookup_err_to_string(e: PersonaLookupError) -> String {
 pub async fn persona_load(app: AppHandle, id: String) -> Result<PersonaSummary, String> {
     let id = validate_persona_id(&id)?;
     load_persona(&app, id).await.map_err(lookup_err_to_string)
+}
+
+/// 读当前激活人格 summary（含 raw_markdown）。
+///
+/// #14 ChatPanel 拿来显示 header 标题（active persona name），无需先知道 id。
+/// 后端 `load_active_persona` helper 在 #13 已落地（services/persona.rs:186）。
+#[tauri::command]
+pub async fn persona_get_active(app: AppHandle) -> Result<PersonaSummary, String> {
+    load_active_persona(&app)
+        .await
+        .map_err(lookup_err_to_string)
 }
 
 #[tauri::command]

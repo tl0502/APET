@@ -1,0 +1,9 @@
+[package]
+name = "typeid"
+version = "1.0.3"
+edition = "2018"
+rust-version = "1.34"
+
+[lib]
+name = "typeid"
+path = "src/lib.rs"

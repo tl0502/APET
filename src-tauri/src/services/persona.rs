@@ -187,15 +187,23 @@ pub async fn load_active_persona<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<PersonaSummary, PersonaLookupError> {
     let mut conn = open_app_db(app).await?;
+    let summary = load_active_persona_with_conn(&mut conn).await?;
+    conn.close().await.map_err(PersonaError::from)?;
+    Ok(summary)
+}
+
+/// B1 修复：with_conn 变体，让 ChatService::prepare 把多个 service 调用串到同一条 conn 上，
+/// 把单 chat_send 的 open/close 周期从 8 次降到 2 次（prepare 1 + run_stream 收尾 1）。
+pub(crate) async fn load_active_persona_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+) -> Result<PersonaSummary, PersonaLookupError> {
     let active: Option<(String,)> =
         sqlx::query_as("SELECT id FROM personas WHERE is_active = 1 LIMIT 1")
-            .fetch_optional(&mut conn)
+            .fetch_optional(&mut *conn)
             .await
             .map_err(PersonaError::from)?;
     let id = active.ok_or_else(|| PersonaLookupError::NotFound("active persona".to_string()))?;
-    let summary = load_persona_with_conn(&mut conn, &id.0).await?;
-    conn.close().await.map_err(PersonaError::from)?;
-    Ok(summary)
+    load_persona_with_conn(conn, &id.0).await
 }
 
 pub(crate) async fn load_persona_with_conn(

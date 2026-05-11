@@ -54,6 +54,14 @@ pub async fn set<R: Runtime>(
     Ok(())
 }
 
+/// 删 key；不存在 = no-op。draft KV / 归档清理路径用。
+pub async fn delete<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<(), ConfigError> {
+    let mut conn = open_app_db(app).await?;
+    delete_with_conn(&mut conn, key).await?;
+    conn.close().await?;
+    Ok(())
+}
+
 pub(crate) async fn get_with_conn(
     conn: &mut SqliteConnection,
     key: &str,
@@ -84,6 +92,18 @@ pub(crate) async fn set_with_conn(
     .bind(now_rfc3339)
     .execute(conn)
     .await?;
+    Ok(())
+}
+
+/// 删 key；不存在 = no-op（不报错）。归档/删除 active conversation 时清 KV 路径。
+pub(crate) async fn delete_with_conn(
+    conn: &mut SqliteConnection,
+    key: &str,
+) -> Result<(), ConfigError> {
+    sqlx::query("DELETE FROM config WHERE key = ?")
+        .bind(key)
+        .execute(conn)
+        .await?;
     Ok(())
 }
 
@@ -120,5 +140,22 @@ mod tests {
         set_with_conn(&mut conn, "k", "v2", &now).await.unwrap();
         let v = get_with_conn(&mut conn, "k").await.unwrap();
         assert_eq!(v.as_deref(), Some("v2"));
+    }
+
+    #[tokio::test]
+    async fn delete_existing_key_clears_value() {
+        let (_dir, mut conn) = fresh_db().await;
+        let now = Utc::now().to_rfc3339();
+        set_with_conn(&mut conn, "k", "v", &now).await.unwrap();
+        delete_with_conn(&mut conn, "k").await.unwrap();
+        let v = get_with_conn(&mut conn, "k").await.unwrap();
+        assert!(v.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_unknown_key_is_noop() {
+        let (_dir, mut conn) = fresh_db().await;
+        // 不存在的 key 删除 = 0 影响行；不应报错
+        delete_with_conn(&mut conn, "no-such-key").await.unwrap();
     }
 }

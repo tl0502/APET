@@ -237,7 +237,10 @@ git ls-remote origin
 - ✗ 不装完整 ccpm 30+ 命令（单人 overkill）
 - ✗ 不用 epic/sub-issue 父子关系（M? milestone 已是 epic）
 - ✗ 不做并行 git worktree（一次干一条线）
-- ✗ 不在 issue body 复制 PRD 内容（写反向链接 `Refs:`）
+- ✗ 不在 issue body 复制 PRD / ADR 全文（写反向链接 `Refs:` 即可）
+- ✗ 不在 issue body 写实现层伪代码（Vue 组件 / Rust IPC 签名 / 函数体）；body 声明范围与拍板，实现明细看 commit
+- ✗ issue body > 50 行（spike 类 RFC 例外）；超过几乎一定是在复制别处已有的内容
+- ✗ 不依赖详细 body 做"上下文恢复"——`/resumex` 只读 issue 的 title/labels/milestone（[resumex.md §必读](../.claude/commands/resumex.md)），需要细节时人手 `gh issue view <N>`
 
 ---
 
