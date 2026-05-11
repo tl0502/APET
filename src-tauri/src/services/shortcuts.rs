@@ -172,13 +172,23 @@ pub fn current_chat_shortcut<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
 }
 
 /// 改 chat 快捷键：unregister 旧 + register 新 + 落 config。
+///
+/// **async** 因为内部 config::set 是 async；从 #[tauri::command] async fn 调入时，
+/// 必须 await 而不是 block_on —— 后者在 tokio runtime 内嵌套会死锁（IPC 卡住,前端
+/// 永远拿不到结果）。register_chat_on_startup 用 block_on 是因为它在 lib.rs setup
+/// 同步上下文,与本 async fn 路径分离。
+///
 /// 失败时不影响旧快捷键状态（已先成功 unregister 再 register；如果 register 新的失败，
 /// 调用方会失去旧的，可由前端在 set 失败后手动 register 旧值兜底；M1 不做这层 transaction）。
-pub fn set_chat_shortcut<R: Runtime>(app: &AppHandle<R>, new_shortcut: &str) -> Result<(), String> {
+pub async fn set_chat_shortcut<R: Runtime>(
+    app: &AppHandle<R>,
+    new_shortcut: &str,
+) -> Result<(), String> {
     let _new = parse_shortcut(new_shortcut)?;
     unregister_current(app)?;
     register_internal(app, new_shortcut)?;
-    block_on(config::set(app, CONFIG_KEY_SHORTCUT_CHAT, new_shortcut))
+    config::set(app, CONFIG_KEY_SHORTCUT_CHAT, new_shortcut)
+        .await
         .map_err(|e| e.to_string())?;
     Ok(())
 }

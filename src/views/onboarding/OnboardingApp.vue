@@ -4,12 +4,14 @@
 // 当前接入 step（按 flows §1.2 顺序）：
 // - soul-pledge（#16 Step 1）：灵魂宣誓 + grant consent
 // - persona-picker（#21 Step 2）：3 内置人格选择
+// - shortcut-confirm（#21 Step 3）：chat 全局快捷键确认 + 占用探测
 // - completed：调 invoke('onboarding_complete') 切窗到 pet + 广播 onboarding:step-done
 //
 // 设计点：
-// 1. 子 view 完成自己的业务（写 DB / activate persona）后 emit('done')，由本 router 决定下一步
+// 1. 子 view 完成自己的业务（写 DB / activate persona / set shortcut）后 emit('done'),
+//    由本 router 决定下一步
 // 2. 切窗 IPC（onboarding_complete）集中在本 router 调，子 view 不感知"我是最后一步吗"
-// 3. 未来 Step 3-6 接入时：扩 OnboardingStep 联合类型 + 在 advanceStep 加分支即可
+// 3. 未来 Step 4-6 接入时：扩 OnboardingStep 联合类型 + 在 advanceStep 加分支即可
 // 4. 进度持久化（KV `onboarding:current_step`）+ 续接 弹窗在 #21 后续 commit 加（ADR-019）
 //
 // dev mode（浏览器直访 onboarding.html）：onboarding_complete IPC 抛错 → console.warn 不阻断；
@@ -19,8 +21,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { useToast } from '@/composables/useToast'
 import SoulPledgeView from './SoulPledgeView.vue'
 import PersonaPickerView from './PersonaPickerView.vue'
+import ShortcutConfirmView from './ShortcutConfirmView.vue'
 
-type OnboardingStep = 'soul-pledge' | 'persona-picker' | 'completed'
+type OnboardingStep = 'soul-pledge' | 'persona-picker' | 'shortcut-confirm' | 'completed'
 
 const toast = useToast()
 const currentStep = ref<OnboardingStep>('soul-pledge')
@@ -32,7 +35,10 @@ async function advanceStep() {
       currentStep.value = 'persona-picker'
       break
     case 'persona-picker':
-      // M1 阶段 Step 2 是最后一个已实现 step；Step 3-6 接入后挪到对应 step done
+      currentStep.value = 'shortcut-confirm'
+      break
+    case 'shortcut-confirm':
+      // M1 阶段 Step 3 是最后一个已实现 step；Step 4-6 接入后挪到对应 step done
       currentStep.value = 'completed'
       await finalizeOnboarding()
       break
@@ -53,12 +59,12 @@ async function finalizeOnboarding() {
   } catch (e) {
     console.error('[OnboardingApp] onboarding_complete failed:', e)
     toast.warn(
-      '人格已保存,但窗口切换失败,请重启应用。错误：' +
+      '快捷键已保存,但窗口切换失败,请重启应用。错误：' +
         (e instanceof Error ? e.message : String(e)),
       { duration: 8000 },
     )
-    // 切回上一 step（persona-picker），让用户能再次触发"用这个"重试 onboarding_complete
-    currentStep.value = 'persona-picker'
+    // 切回上一 step（shortcut-confirm），让用户能再次触发"用这个"重试 onboarding_complete
+    currentStep.value = 'shortcut-confirm'
     finalizing.value = false
   }
 }
@@ -67,6 +73,7 @@ async function finalizeOnboarding() {
 <template>
   <SoulPledgeView v-if="currentStep === 'soul-pledge'" @done="advanceStep" />
   <PersonaPickerView v-else-if="currentStep === 'persona-picker'" @done="advanceStep" />
+  <ShortcutConfirmView v-else-if="currentStep === 'shortcut-confirm'" @done="advanceStep" />
 </template>
 
 <style scoped></style>

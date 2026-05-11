@@ -17,7 +17,7 @@ pub async fn probe_global_shortcut(
 
 #[tauri::command]
 pub async fn set_shortcut_chat(app: AppHandle, shortcut: String) -> Result<(), String> {
-    shortcuts::set_chat_shortcut(&app, &shortcut)
+    shortcuts::set_chat_shortcut(&app, &shortcut).await
 }
 
 /// 返回当前 chat 快捷键状态。
