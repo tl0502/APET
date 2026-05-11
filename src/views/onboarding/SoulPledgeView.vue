@@ -13,13 +13,16 @@
 // 6. Alt+F4 等同退出（同上路径，统一）
 // 7. 不做 reconsent UI 分支（v2 上线时再扩；M3 范围）
 //
+// #21 step router 改造：grant consent 成功后 emit('done')，由父 OnboardingApp 切到下一 step
+// （之前是直接调 invoke('onboarding_complete') 切窗 + emit step-done，那时只有 1 步）。
+// 切窗 IPC 的调用时机挪到 OnboardingApp 的最后一步完成时。
+//
 // dev mode 入口：浏览器直访 http://localhost:1420/onboarding.html
-//   IPC 调用（grantConsentSafe / invoke onboarding_complete / window.close）在浏览器无 Tauri
+//   IPC 调用（grantConsentSafe / window.close）在浏览器无 Tauri
 //   上下文会抛 → 全部 try/catch + console.warn，不阻断界面验收。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElButton } from 'element-plus'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { invoke } from '@tauri-apps/api/core'
 import { marked } from 'marked'
 import PetCanvas from '@/components/PetCanvas.vue'
 import StandardDialog from '@/components/feedback/StandardDialog.vue'
@@ -30,6 +33,8 @@ import { grantConsentSafe } from '@/services/consent'
 // bundle.resources 配置是为了 #17 状态机将来需要 fs.readResource 时的路径占位。
 import soulPledgeText from '../../../src-tauri/assets/onboarding/soul_pledge_v1.txt?raw'
 import dataPolicyMarkdown from '../../../src-tauri/assets/legal/data_policy_v1.md?raw'
+
+const emit = defineEmits<{ done: [] }>()
 
 const toast = useToast()
 
@@ -132,13 +137,9 @@ async function onAgree() {
   if (!buttonsEnabled.value) return
   agreeing.value = true
 
-  // 分两段 try：grant（写 DB）与 complete（切窗）失败语义不同。
-  // - grant 失败：DB 没写 → 用户可重试 → 复位 agreeing 让按钮启用
-  // - grant 成功 + complete 失败：DB 已写（consent.granted=1），但窗口没切 → toast 改"已保存
-  //   但切窗失败"，避免"同意写入失败"误导（grant 是 UPDATE id=1 idempotent，复位让用户能再
-  //   点"我懂了"重试 invoke('onboarding_complete')；重复 grant 也是安全 no-op）
+  // grantConsentSafe 内部先 fetch CURRENT_CONSENT_VERSION 再 grant（防硬编码 stale）
+  // 失败 → DB 没写 → 复位 agreeing 让用户能重试
   try {
-    // grantConsentSafe 内部先 fetch CURRENT_CONSENT_VERSION 再 grant（防硬编码 stale）
     await grantConsentSafe('soul_pledge')
   } catch (e) {
     console.error('[SoulPledgeView] grant failed:', e)
@@ -147,14 +148,11 @@ async function onAgree() {
     return
   }
 
-  try {
-    // onboarding_complete：后端统一切窗 + emit step-done；成功后本视图被 hide
-    await invoke('onboarding_complete')
-  } catch (e) {
-    console.error('[SoulPledgeView] complete failed (consent already saved):', e)
-    toast.warn('同意已保存，但窗口切换失败，请重试或重启应用。', { duration: 8000 })
-    agreeing.value = false
-  }
+  // grant 成功 → 通知父级 OnboardingApp 切到 Step 2（PersonaPicker）。
+  // 切窗 IPC（onboarding_complete）由 OnboardingApp 在最后一步完成时调用，
+  // 不在本视图，避免本视图同时负责"step 1 业务"+"整个 onboarding 切窗"两种角色。
+  // 不复位 agreeing：父级切走后本组件会被销毁，复位反而短暂闪烁。
+  emit('done')
 }
 
 function onShowPolicy() {

@@ -1,25 +1,46 @@
 <script setup lang="ts">
-// Persona tab：M1 占位（issue #9）。
-// 接 persona_load('momo') 仅展示当前激活人格；工坊按钮灰显，等 M2 启用。
-// 当前 IPC 仅 persona_load + persona_activate（#5），无 persona_list；M1 W1 只 seed momo
-// 一个内置人格，直接 load 'momo' 即可；H.2/H.3 工坊上线后再加列表。
-import { onMounted, ref } from 'vue'
+// Persona tab：M1 占位（issue #9） + #21 接入「显示当前 active 而非硬编码 momo」+
+// 监听 persona:activated 事件跨窗口刷新（onboarding 窗 / 设置面板自身切换都会触发）。
+// 工坊按钮灰显，等 M2 启用（H.2/H.3 列表 / 编辑 / 切换 UI）。
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElButton, ElDescriptions, ElDescriptionsItem, ElTag } from 'element-plus'
-import { loadPersona } from '@/services/persona'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getActivePersona } from '@/services/persona'
 import type { PersonaSummary } from '@/types/persona'
 
 const persona = ref<PersonaSummary | null>(null)
 const errorMsg = ref<string | null>(null)
 const loading = ref(true)
+let unlistenActivated: UnlistenFn | null = null
 
-onMounted(async () => {
+async function refresh() {
   try {
-    persona.value = await loadPersona('momo')
+    persona.value = await getActivePersona()
+    errorMsg.value = null
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
   }
+}
+
+onMounted(async () => {
+  await refresh()
+  loading.value = false
+  // 跨窗口监听：onboarding 窗 / 后续工坊 UI 切人格后,本面板自动刷新。
+  // ElTabPane 是 v-show（不销毁），首次 mount 后用户切到其他 tab 再回来不会重 onMounted；
+  // 没有 listener 的话 active 显示会停在首次拉取的值。
+  try {
+    unlistenActivated = await listen('persona:activated', () => {
+      void refresh()
+    })
+  } catch (e) {
+    // dev 浏览器模式下 listen 抛错；不阻断面板基本渲染。
+    console.warn('[PersonaPanel] listen persona:activated failed:', e)
+  }
+})
+
+onBeforeUnmount(() => {
+  unlistenActivated?.()
+  unlistenActivated = null
 })
 </script>
 
