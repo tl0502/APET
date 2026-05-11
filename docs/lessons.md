@@ -166,6 +166,24 @@ related:
 
 ---
 
+## 10. Tauri 2 `#[tauri::command] async` 内部链路不能 `block_on` tokio future
+
+**症状**：前端调某 IPC 命令永不返回，UI 卡死 loading（看不到错误、看不到超时）。后端 cargo check 过、无 panic、无 stderr。
+
+**根因**：Rust 服务层 sync 函数内部用 `tauri::async_runtime::block_on(some_async_future)`，而该 sync 函数被 `#[tauri::command] async fn` 调入——此时已在 tokio runtime worker 上跑，再 `block_on` 一个 tokio future 相当于要求当前 worker 让出来跑该 future，但 worker 自身被 `block_on` 占着 → 死锁。tokio 不会报错，IPC 永远不返回，前端 `await invoke()` 永远 pending。
+
+`lib.rs::setup` 里的 `block_on` 没事是因为它在**同步启动期**跑（`setup` callback 不是 async）；同一 service fn 被两条路径调入就会一边正常、一边卡死。`#11 set_chat_shortcut` 就是这样：启动期 `register_chat_on_startup` 用得好好的，#21 Step 3 第一个真用 setter 的前端 caller 把 latent bug 触发出来。
+
+**处理**：
+- 从 `#[tauri::command] async fn` 调入的服务函数链路**全程保持 async + await**
+- 只在 `lib.rs::setup` / 其他确认是同步上下文的入口用 `block_on` 包 async future
+- 判别法：服务 fn 可能从 `#[tauri::command]` 直接或间接调入吗？是 → 改 async
+- 单测覆盖不到这个坑（cargo test 跑在独立 tokio runtime，不复现 nested block_on）。**只能靠前端真调 IPC 实测**
+
+**出处**：[#11](https://github.com/tl0502/APET/issues/11) `set_chat_shortcut` latent bug → [#21](https://github.com/tl0502/APET/issues/21) Step 3 触发 → fix `afae148`，2026-05-11
+
+---
+
 ## 添加新 lesson 的判据
 
 只在以下情况追加：
