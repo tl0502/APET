@@ -32,7 +32,17 @@ use super::types::{
 };
 use super::LLMProvider;
 
-const DEFAULT_TIMEOUT_SECS: u64 = 60;
+/// TCP + TLS 握手必须在此时间内完成（端点不可达 / DNS 挂掉时快速失败）。
+const CONNECT_TIMEOUT_SECS: u64 = 15;
+/// 单次 read 卡住超过此时间才视为断流。**短于总 timeout 就足够检测 stall**。
+/// 注意：deepseek-reasoner / o1 等推理模型在 thinking 阶段可能 30s+ 不出 token；
+/// 60s 已留出充足余量，再长就是真的卡死了。
+const READ_TIMEOUT_SECS: u64 = 60;
+/// 整请求绝对死线兜底（防止 drip-feed 慢服务器永不释放连接）。
+/// 历史回归（2026-05-10）：曾用 `Client::timeout(60s)` 做总死线，导致历史对话
+/// （长 prompt，TTFB 易超 60s）触发 timeout → `LLMError::Network` → 离线模板覆盖
+/// 正常 placeholder。改 `connect_timeout + read_timeout + 大兜底 timeout` 后此 footgun 关闭。
+const TOTAL_TIMEOUT_SECS: u64 = 600;
 
 pub struct OpenAIProvider {
     client: Client,
@@ -61,7 +71,9 @@ impl OpenAIProvider {
         model_default: impl Into<String>,
     ) -> Result<Self, LLMError> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .read_timeout(Duration::from_secs(READ_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(TOTAL_TIMEOUT_SECS))
             .build()
             .map_err(|e| LLMError::Network(format!("build reqwest client: {e}")))?;
         Ok(Self {
@@ -164,7 +176,12 @@ pub(crate) fn parse_finish_reason(s: &str) -> FinishReason {
         "length" => FinishReason::Length,
         "tool_calls" | "function_call" => FinishReason::ToolCalls,
         "content_filter" => FinishReason::ContentFilter,
-        _ => FinishReason::Error,
+        // 上游返了未知 finish_reason 字符串：透传原始值，调用方能区分"真 error"与"新协议变体"。
+        // 历史上这里把所有未知值映射到 FinishReason::Error，丢了诊断信息。
+        other => {
+            eprintln!("[llm] unknown finish_reason from upstream: {other}");
+            FinishReason::Unknown(other.to_string())
+        }
     }
 }
 
@@ -187,7 +204,7 @@ where
     loop {
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Err(LLMError::Cancelled),
+            _ = cancel.cancelled() => return Err(LLMError::Cancelled { partial_usage: last_usage }),
             evt = sse_stream.next() => {
                 let Some(evt) = evt else { break; };
                 let evt = evt.map_err(|e| LLMError::ParseError(format!("SSE: {e}")))?;
@@ -296,7 +313,7 @@ impl LLMProvider for OpenAIProvider {
             .send();
         let response = tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Err(LLMError::Cancelled),
+            _ = cancel.cancelled() => return Err(LLMError::Cancelled { partial_usage: None }),
             r = send_fut => r.map_err(LLMError::from)?,
         };
 
@@ -310,7 +327,11 @@ impl LLMProvider for OpenAIProvider {
         let (reason, usage) = process_event_stream(bytes_stream, cancel, &*on_delta).await?;
 
         // 末尾 emit Finish delta，让 callback 消费方知道流已结束 + 拿 token 用量
-        on_delta(StreamDelta::Finish { reason, usage });
+        // FinishReason 不再 Copy（Unknown(String) 持有堆数据），双用必须显式 clone。
+        on_delta(StreamDelta::Finish {
+            reason: reason.clone(),
+            usage,
+        });
         Ok(ChatStreamFinish { reason, usage })
     }
 
@@ -412,7 +433,15 @@ mod tests {
             parse_finish_reason("content_filter"),
             FinishReason::ContentFilter
         );
-        assert_eq!(parse_finish_reason("garbage"), FinishReason::Error);
+        // 未知值现在透传原文为 Unknown(String)，不再被吞成 Error
+        assert_eq!(
+            parse_finish_reason("garbage"),
+            FinishReason::Unknown("garbage".to_string())
+        );
+        assert_eq!(
+            parse_finish_reason("safety_filter_v2"),
+            FinishReason::Unknown("safety_filter_v2".to_string())
+        );
     }
 
     /// 合成一个 OpenAI 风格的 SSE bytes 流，验证 process_event_stream 解析正确。
@@ -465,7 +494,34 @@ data: [DONE]\n\n";
             cancel_for_task.cancel();
         });
         let r = process_event_stream(stream, cancel, &*cb).await;
-        assert!(matches!(r, Err(LLMError::Cancelled)));
+        assert!(matches!(r, Err(LLMError::Cancelled { .. })));
+    }
+
+    /// cancel 触发时，若中段已收到 usage chunk，应通过 `partial_usage` 透传（issue #6 修复）。
+    #[tokio::test]
+    async fn process_event_stream_cancel_carries_partial_usage() {
+        // 一个 chunk 携带 usage，再之后流挂起 → cancel 50ms 后触发 → Err 应带 partial_usage Some
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n\
+data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n";
+        let head = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(sse))]);
+        let tail = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
+        let stream = head.chain(tail);
+        let cb: Box<dyn Fn(StreamDelta) + Send + Sync> = Box::new(|_d| {});
+        let cancel = CancellationToken::new();
+        let cancel_for_task = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            cancel_for_task.cancel();
+        });
+        let r = process_event_stream(stream, cancel, &*cb).await;
+        match r {
+            Err(LLMError::Cancelled { partial_usage }) => {
+                let u = partial_usage.expect("usage already received before cancel");
+                assert_eq!(u.total_tokens, 12);
+            }
+            other => panic!("expected Cancelled with partial_usage, got {other:?}"),
+        }
     }
 
     /// 解析失败 → ParseError（防御性：DeepSeek/Moonshot 偶有非标准 chunk）

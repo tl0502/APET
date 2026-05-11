@@ -167,15 +167,22 @@ pub enum StreamDelta {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// 流结束原因。
+///
+/// `Unknown(String)` 是兜底变体：上游返了我们不认识的 `finish_reason` 字符串时透传原始值，
+/// 让前端能区分"上游真返 error"与"上游返了新协议变体"——比早先把未知值统一吞成 `Error` 友好。
+/// 去 `Copy`：`Unknown(String)` 持有堆数据，调用方需要显式 `.clone()`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
     Length,
     ToolCalls,
     ContentFilter,
-    /// 兜底（stream 中途断）
+    /// 兜底（stream 中途断 / provider 自身报错）
     Error,
+    /// 上游返了未知 finish_reason 字符串；透传原始值便于诊断
+    Unknown(String),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

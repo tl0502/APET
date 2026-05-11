@@ -13,6 +13,7 @@
 
 pub mod error;
 pub mod openai;
+pub mod probe;
 pub mod types;
 
 // 这两个 use 让 services::llm::* 直接拿到 LLMError / OpenAIProvider；types::* 全量再导出。

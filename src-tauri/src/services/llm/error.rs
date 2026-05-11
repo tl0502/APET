@@ -6,6 +6,8 @@
 
 use thiserror::Error;
 
+use super::types::Usage;
+
 #[derive(Debug, Clone, Error)]
 pub enum LLMError {
     #[error("network error: {0}")]
@@ -18,8 +20,10 @@ pub enum LLMError {
     BadRequest(String),
     #[error("server error (HTTP 5xx): {0}")]
     ServerError(String),
+    /// 取消时若已经收到过 usage chunk（OpenAI stream_options.include_usage 在中段就可能下发）
+    /// 通过 `partial_usage` 透传给 ChatService，让取消流的 Done 事件仍能报已烧 token 数。
     #[error("cancelled by caller")]
-    Cancelled,
+    Cancelled { partial_usage: Option<Usage> },
     #[error("parse error: {0}")]
     ParseError(String),
 }
