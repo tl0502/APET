@@ -66,8 +66,12 @@ pub async fn persona_activate(app: AppHandle, id: String) -> Result<(), String> 
     activate_persona(&app, &id)
         .await
         .map_err(lookup_err_to_string)?;
-    // 与 nickname:changed 同款契约：跨窗口（M3 设置面板）切人格后角色窗能 listen 到刷新
-    app.emit(PERSONA_ACTIVATED_EVENT, &id)
-        .map_err(|e| format!("emit persona:activated failed: {e}"))?;
+    // 与 nickname:changed 同款契约：跨窗口（M3 设置面板）切人格后角色窗能 listen 到刷新。
+    // emit 失败仅 eprintln 不向上抛：DB 写入已成功（active 已切换），把 emit 故障暴露给前端
+    // 会让用户误以为 activate 没生效并触发 retry；retry 在 DB 端是 idempotent，但 UI 上会闪
+    // 误报 toast，体验更糟。emit 故障本身极罕见（webview event 通道挂掉），降级为日志即可。
+    if let Err(e) = app.emit(PERSONA_ACTIVATED_EVENT, &id) {
+        eprintln!("[persona_activate] emit persona:activated failed: {e}");
+    }
     Ok(())
 }

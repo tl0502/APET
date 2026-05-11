@@ -58,8 +58,13 @@ export class VRMRuntime {
   /** 眨眼间隔下限（秒）：成人静息状态平均 15-20 次/分钟，对应间隔 3-4s；放宽到 4s 避免单调。 */
   private static readonly BLINK_INTERVAL_MIN_S = 4
   private static readonly BLINK_INTERVAL_MAX_S = 8
-  /** lookAt 平滑系数：每帧目标向当前位置插值的比例，0.15 ≈ 60fps 下 ~150ms 跟到位。 */
-  private static readonly LOOK_AT_SMOOTH = 0.15
+  /**
+   * lookAt 平滑时间常数（秒）：每经过 τ 秒，目标到当前位置的距离衰减到 1/e（≈37%）。
+   *
+   * τ=0.1s 等价于原版"60fps 下 α=0.15/帧"的指数衰减速度（数学上 0.85^60 ≈ exp(-1/0.1006)），
+   * 但帧率无关：30fps 下跟随时间不会翻倍。每帧 α = 1 - exp(-dt/τ)。
+   */
+  private static readonly LOOK_AT_TAU_S = 0.1
 
   private renderer: THREE.WebGLRenderer | null = null
   private scene: THREE.Scene | null = null
@@ -80,6 +85,8 @@ export class VRMRuntime {
    * 鼠标在 canvas 内偏移 → 这个本地位置 x/y 跟着偏移，角色眼神就跟过来。
    */
   private lookAtSmoothed = new THREE.Vector3()
+  /** 复用的 desired 缓冲，避免 RAF 热路径每帧 new Vector3() 触发 GC 压力。 */
+  private lookAtDesired = new THREE.Vector3()
   /** 当前取景模式；init() 时确定，运行期通过 setView() 切换。 */
   private view: AvatarView = 'half'
   private rafId: number | null = null
@@ -223,7 +230,7 @@ export class VRMRuntime {
         // 或被错误地"先解算后修改"（参考 pixiv/three-vrm 多个 spring/lookAt 抖动 issue）。
         this.applyBreathing(dt)
         this.applyBlink(dt)
-        this.applyLookAt()
+        this.applyLookAt(dt)
         this.vrm.update(dt)
       }
       if (this.renderer && this.scene && this.camera) {
@@ -288,27 +295,30 @@ export class VRMRuntime {
 
   /**
    * 视线跟随：鼠标 NDC 直接作为 lookAt target 的**相机本地坐标**。
-   * 平滑插值避免目标突跳引发头部抖动。
+   * 帧率无关的指数平滑避免目标突跳引发头部抖动，且在低 fps 下跟随时间稳定。
    * - target 是 camera 子节点（loadModel 里 setup），position=(0,0,0) 即"看用户"
-   * - cursorNdc=null（鼠标离开 canvas）→ 回归 (0,0,0)（视线归正，直视用户）
+   * - cursorNdc=null（鼠标离开 canvas）→ desired 归零（视线归正，直视用户）
    * - VRM 没 lookAt 组件 → 静默跳过
    *
    * 选 0.6 倍 NDC 作为偏移系数：鼠标到 canvas 角时偏移 0.6 单位（相机本地），
    * 配合 fov 30° / 半身距离 1.5，约对应视线偏角 ±22°，自然但不夸张。
    */
-  private applyLookAt(): void {
+  private applyLookAt(dt: number): void {
     if (!this.vrm?.lookAt || !this.lookAtTarget) return
 
-    const desired = new THREE.Vector3()
     if (this.cursorNdc) {
       // 相机本地系：+x 右、+y 上；NDC y 已翻转过（PetCanvas 里），这里直接用
       // z 留 0：目标恰好在相机所在平面上 ≈ 看用户脸的位置（z 略负会让目标在相机前方 = 视线穿过用户）
-      desired.set(this.cursorNdc.x * 0.6, this.cursorNdc.y * 0.6, 0)
+      this.lookAtDesired.set(this.cursorNdc.x * 0.6, this.cursorNdc.y * 0.6, 0)
+    } else {
+      // cursorNdc=null：归零 = 直视相机/用户，最自然的"待机"视线
+      this.lookAtDesired.set(0, 0, 0)
     }
-    // cursorNdc=null：desired 默认 (0,0,0) = 直视相机/用户，最自然的"待机"视线
 
-    // 指数平滑：smoothed += (desired - smoothed) * α
-    this.lookAtSmoothed.lerp(desired, VRMRuntime.LOOK_AT_SMOOTH)
+    // 帧率无关指数平滑：α = 1 - exp(-dt / τ)，等价于"每经过 τ 秒衰减 63%"。
+    // 第一帧 dt=0 → α=0 → 不动；正常 60fps 下 dt≈0.0167 → α≈0.154，与原 0.15 几乎一致。
+    const alpha = 1 - Math.exp(-dt / VRMRuntime.LOOK_AT_TAU_S)
+    this.lookAtSmoothed.lerp(this.lookAtDesired, alpha)
     this.lookAtTarget.position.copy(this.lookAtSmoothed)
   }
 
