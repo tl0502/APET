@@ -210,9 +210,10 @@ pub fn run() {
             commands::window::chat_toggle,
             // #16 灵魂宣誓"我懂了"切窗 IPC（hide onboarding + show pet + emit step-done）
             commands::window::onboarding_complete,
-            // #11 shortcuts（probe + set chat）
+            // #11 shortcuts（probe + set chat + get chat）
             commands::shortcuts::probe_global_shortcut,
             commands::shortcuts::set_shortcut_chat,
+            commands::shortcuts::get_chat_shortcut,
             // 用户增补 LLM Providers（多 provider 实例 CRUD + activate + test，参考 cc-switch UI）
             commands::llm_providers::llm_list_providers,
             commands::llm_providers::llm_get_provider,

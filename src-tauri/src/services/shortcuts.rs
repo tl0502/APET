@@ -116,6 +116,11 @@ fn unregister_current<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 
 /// 测试快捷键是否可用（被其他 app 占用 → false）。试 register → 立刻 unregister。
 /// 给 #17 Onboarding Step 3 冲突探测用。
+///
+/// **fast-path**：如果探测目标 == 本应用当前已注册的快捷键，直接返 available=true。
+/// 没有这条路径时，"探测默认值"会假报占用 —— register_chat_on_startup 已注册默认键,
+/// 再 register 同 key 会被 plugin 拒绝（HotKey already registered）。fast-path 让
+/// onboarding Step 3 显示"默认可用"成立。
 pub fn probe<R: Runtime>(app: &AppHandle<R>, shortcut_str: &str) -> ProbeResult {
     let s = match parse_shortcut(shortcut_str) {
         Ok(s) => s,
@@ -126,6 +131,17 @@ pub fn probe<R: Runtime>(app: &AppHandle<R>, shortcut_str: &str) -> ProbeResult 
             }
         }
     };
+    // fast-path：自己已注册的不算占用
+    if let Some(registry) = app.try_state::<ShortcutRegistry>() {
+        if let Ok(slot) = registry.current_chat.lock() {
+            if slot.as_deref() == Some(shortcut_str) {
+                return ProbeResult {
+                    available: true,
+                    error: None,
+                };
+            }
+        }
+    }
     match app.global_shortcut().register(s) {
         Ok(()) => {
             // 立刻清理（probe 不应残留注册）
@@ -140,6 +156,19 @@ pub fn probe<R: Runtime>(app: &AppHandle<R>, shortcut_str: &str) -> ProbeResult 
             error: Some(e.to_string()),
         },
     }
+}
+
+/// 读取当前已注册的 chat 快捷键。
+///
+/// Some(s) = 启动期 register 成功，s 是当前生效值；
+/// None = 启动期 register 失败（系统占用 / 解析失败 / 平台异常），当前没快捷键能用。
+///
+/// 给 Onboarding Step 3 用：前端拿到准确状态后渲染（None → 显示 DEFAULT + 真实 probe；
+/// Some → 显示 s + fast-path probe），避免前后端 default 字面不一致带来的漂移。
+pub fn current_chat_shortcut<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let registry = app.try_state::<ShortcutRegistry>()?;
+    let slot = registry.current_chat.lock().ok()?;
+    slot.clone()
 }
 
 /// 改 chat 快捷键：unregister 旧 + register 新 + 落 config。
