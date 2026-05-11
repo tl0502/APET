@@ -7,16 +7,20 @@
 // #16：复用到 onboarding 窗时通过 `:draggable="false"` 关掉拖动（onboarding 窗用系统 decorations
 // 标题栏拖动，且窗口固定不应被 webview 内 startDragging 移动）；并 emit `loaded`/`error` 让
 // SoulPledgeView 在 VRM 就绪 / 失败后再开播文案（用户拍板：等 isLoaded === true 再开播）。
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useVRMModel } from '@/composables/useVRMModel'
+import type { AvatarView } from '@/services/vrm'
 
 interface Props {
   draggable?: boolean
+  /** 取景模式，'half'（默认，胸口以上）/ 'full'（全身）。运行期变化会触发 runtime.setView() */
+  view?: AvatarView
 }
 
 const props = withDefaults(defineProps<Props>(), {
   draggable: true,
+  view: 'half',
 })
 
 const emit = defineEmits<{
@@ -29,7 +33,32 @@ const canvasRef = ref<HTMLCanvasElement | null>(null)
 // public/avatar/avatar.vrm 由 Vite static serve；用户私有，.gitignore 已忽略。
 const MODEL_URL = '/avatar/avatar.vrm'
 
-const { isLoaded, errorMessage } = useVRMModel(canvasRef, MODEL_URL)
+const { isLoaded, errorMessage, runtime } = useVRMModel(canvasRef, MODEL_URL, props.view)
+
+// 父级运行期切视角（如 Settings 改"角色窗 → 视角"）：用 setView 平移相机，不重挂模型。
+// 注意：父级若同时改 canvas 尺寸（aspect ratio 联动），需自行调 runtime.resize()，
+// 或更简单地让本组件 :key 绑定到外部 size 上强制重 mount（M1 阶段尺寸固定，暂不需要）。
+watch(
+  () => props.view,
+  (v) => {
+    runtime.setView(v)
+  },
+)
+
+// dev-only：按 V 键切换全身/半身视角，便于实测 full 视角参数（camera pos / lookAt fallback）。
+// vite import.meta.env.DEV 在 prod build 时为 false，整块会被 esbuild tree-shake 剥离 → 不进生产包。
+// 注意：和父组件 props.view 同步是单向的（dev 切换不通知父），M1 后由 Settings UI 接管，此 dev hook 可删除。
+if (import.meta.env.DEV) {
+  let devView: AvatarView = props.view
+  const onKeydown = (e: KeyboardEvent) => {
+    if (e.key.toLowerCase() !== 'v') return
+    devView = devView === 'half' ? 'full' : 'half'
+    runtime.setView(devView)
+    console.log(`[PetCanvas:dev] view toggled → ${devView}`)
+  }
+  window.addEventListener('keydown', onKeydown)
+  onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+}
 
 // 把 composable 的 ref 翻译成 event；SoulPledgeView 只关心"何时可以开播"
 // （成功 → loaded；失败 → error，view 也应开播，不能让 VRM 缺失卡死宣誓流程）。
@@ -56,6 +85,23 @@ async function onPointerDown(event: PointerEvent) {
     console.error('[PetCanvas] startDragging failed:', e)
   }
 }
+
+// 视线跟随：canvas 内鼠标位置 → NDC（x/y ∈ [-1,1]，y 翻转）。
+// 整窗只有 320×320，pointermove 频次可接受不做节流；
+// 离开 canvas → 视线回中（避免桌宠"盯着窗外某个固定方向"显得呆滞）。
+function onPointerMove(event: PointerEvent) {
+  const canvas = canvasRef.value
+  if (!canvas) return
+  const rect = canvas.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) return
+  const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  const y = -(((event.clientY - rect.top) / rect.height) * 2 - 1)
+  runtime.setCursorNdc({ x, y })
+}
+
+function onPointerLeave() {
+  runtime.setCursorNdc(null)
+}
 </script>
 
 <template>
@@ -63,6 +109,8 @@ async function onPointerDown(event: PointerEvent) {
     class="pet-stage"
     :class="{ 'pet-stage--draggable': draggable }"
     @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerleave="onPointerLeave"
   >
     <canvas ref="canvasRef" class="pet-canvas" width="320" height="320"></canvas>
     <div v-if="!isLoaded && !errorMessage" class="hint">Loading VRM…</div>

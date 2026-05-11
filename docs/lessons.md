@@ -147,6 +147,25 @@ related:
 
 ---
 
+## 9. three-vrm lookAt target：相机子节点 + 本地坐标，模型 rig 缺失会静默降级
+
+**症状**：手实现"鼠标跟随视线"时，写成 `scene.add(lookAtTarget)` + `unproject(NDC, z=0.5/-1)` 把鼠标反投影到世界坐标 —— **头/眼完全不动**。
+
+**根因**：three-vrm 官方示例 `lookat.html` 的标准做法是把 target 挂到 **camera 子节点**下，`target.position` 用**相机本地坐标**（(0,0,0) = 直视相机/用户）。挂到 scene 下虽然语义上也通，但 `VRMLookAt` 内部读 `target.getWorldPosition()` 依赖 `target.matrixWorld` 已更新 —— `scene.add` 路径在 `vrm.update()` 调用前是否完成 `updateMatrixWorld` 没保证；而 camera 子节点的 worldMatrix 由 renderer 维护，子节点 worldPosition 自动正确，无时序坑。
+
+**处理**：跟着官方 lookat.html 走 ——
+1. `camera.add(lookAtTarget)`（**不是** `scene.add`）
+2. `target.position` 用本地坐标：鼠标 NDC × ~0.6 直接做 x/y 偏移，z 留 0
+3. `vrm.update(dt)` 之前修改 target.position 即可，不需要手动 `updateMatrixWorld(true)` 兜底
+
+**附带降级行为**：`vrm.lookAt` 在模型没烘焙 firstPerson + lookAt rig 时为 `null`（VRoid Studio 导出默认有，但用户自带的 .vrm 不一定）。当前兜底是 `console.warn` 一次 + 视线跟随完全降级（呼吸/眨眼仍工作）。**未写 head bone 手动 fallback** —— M1 范围外；真要做用 `humanoid.getNormalizedBoneNode('head')` + `head.rotation` 手动 clamp ±45°/±30° yaw/pitch，30-50 行，但只能转头不动眼球，机械感强。
+
+**判别要点**：实测时观察 console —— `[vrm] lookAt enabled, applier=VRMLookAtBoneApplier` = 有 rig；`no lookAt rig` warn = 模型限制，不是代码 bug。
+
+**出处**：[#21](https://github.com/tl0502/APET/issues/21) VRM 微动作层；官方参考 [pixiv/three-vrm examples/lookat.html](https://github.com/pixiv/three-vrm/blob/dev/packages/three-vrm/examples/lookat.html)
+
+---
+
 ## 添加新 lesson 的判据
 
 只在以下情况追加：

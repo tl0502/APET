@@ -1,5 +1,5 @@
 import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
-import { VRMRuntime } from '@/services/vrm'
+import { VRMRuntime, type AvatarView } from '@/services/vrm'
 
 interface MemoryInfo {
   usedJSHeapSize: number
@@ -8,8 +8,14 @@ interface MemoryInfo {
 /**
  * VRM 模型挂载 composable：负责 init + loadModel + dispose 生命周期。
  * 性能日志（start_ms / heap_mb）仅 dev 期可见；prod build 时 vite esbuild.drop 会清掉 console。
+ *
+ * @param view 取景模式，'half'（默认，胸口以上）/ 'full'（全身）。运行期切换走 runtime.setView()，不重挂。
  */
-export function useVRMModel(canvasRef: Ref<HTMLCanvasElement | null>, modelUrl: string) {
+export function useVRMModel(
+  canvasRef: Ref<HTMLCanvasElement | null>,
+  modelUrl: string,
+  view: AvatarView = 'half',
+) {
   const runtime = new VRMRuntime()
   const isLoaded = ref(false)
   const errorMessage = ref<string | null>(null)
@@ -19,7 +25,7 @@ export function useVRMModel(canvasRef: Ref<HTMLCanvasElement | null>, modelUrl: 
 
     performance.mark('vrm-start')
     try {
-      runtime.init(canvasRef.value)
+      runtime.init(canvasRef.value, view)
       await runtime.loadModel(modelUrl)
       performance.mark('vrm-loaded')
 
