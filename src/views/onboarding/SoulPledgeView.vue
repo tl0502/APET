@@ -16,7 +16,7 @@
 // dev mode 入口：浏览器直访 http://localhost:1420/onboarding.html
 //   IPC 调用（grantConsentSafe / invoke onboarding_complete / window.close）在浏览器无 Tauri
 //   上下文会抛 → 全部 try/catch + console.warn，不阻断界面验收。
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElButton } from 'element-plus'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
@@ -162,6 +162,20 @@ function onShowPolicy() {
   showPolicy.value = true
 }
 
+// 弹窗每次打开重置滚动到顶：EP ElDialog 默认 destroy-on-close=false，DOM 持久化，
+// 上次滚动位置会残留。watch false→true 时 nextTick 后把 scrollable 容器 scrollTop 归零。
+const policyScrollRef = ref<HTMLDivElement | null>(null)
+
+watch(showPolicy, async (open) => {
+  if (!open) return
+  // nextTick 等 ElDialog v-show=true 切到 DOM 可见；再加一次 RAF 等浏览器布局应用，
+  // 否则 scrollTop=0 可能在 transition 完成前被 EP 覆盖（实测过 EP 弹窗 transition 期间
+  // scrollTop 偶发被 reset 到上次值的 bug）。
+  await nextTick()
+  await new Promise((r) => requestAnimationFrame(r))
+  if (policyScrollRef.value) policyScrollRef.value.scrollTop = 0
+})
+
 async function onExit() {
   if (!buttonsEnabled.value) return
   // close → Rust on_window_event CloseRequested(onboarding) → app.exit(0)（不写 consent）
@@ -199,6 +213,7 @@ onBeforeUnmount(() => {
 <template>
   <section
     class="soul-pledge"
+    :class="{ 'soul-pledge--played': !isPlaying }"
     role="dialog"
     aria-modal="true"
     aria-labelledby="soul-pledge-title"
@@ -253,12 +268,12 @@ onBeforeUnmount(() => {
     <StandardDialog
       v-model="showPolicy"
       title="完整数据策略 v1.0"
-      :width="560"
+      width="90%"
     >
       <!-- dataPolicyHtml 来自构建期嵌入的本地 data_policy_v1.md（?raw + marked），非用户输入；
            外链已替换为 .onboarding-link-disabled span，无 XSS 风险 -->
       <!-- eslint-disable-next-line vue/no-v-html -->
-      <div class="soul-pledge__policy" v-html="dataPolicyHtml"></div>
+      <div ref="policyScrollRef" class="soul-pledge__policy" v-html="dataPolicyHtml"></div>
       <template #footer>
         <ElButton type="primary" @click="showPolicy = false">我读完了</ElButton>
       </template>
@@ -277,8 +292,13 @@ onBeforeUnmount(() => {
   background: var(--aipet-color-bg);
   box-sizing: border-box;
   user-select: none;
-  /* 鼠标 cursor 提示"可点击全显" */
+  /* 文案播放期间 stage 整体可点击跳过 → cursor:pointer 提示；
+     播完后（.soul-pledge--played）skip 已无效，cursor 恢复 default 避免误导 */
   cursor: pointer;
+}
+
+.soul-pledge--played {
+  cursor: default;
 }
 
 .soul-pledge__avatar {
