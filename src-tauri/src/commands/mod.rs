@@ -10,6 +10,7 @@
 // 后续：interaction / wardrobe / 等。
 pub mod chat;
 pub mod consent;
+pub mod living_pet;
 pub mod llm_providers;
 pub mod memory;
 pub mod nickname;

@@ -285,6 +285,8 @@ pub fn run() {
             commands::shortcuts::set_shortcut_chat,
             commands::shortcuts::get_chat_shortcut,
             commands::shortcuts::get_chat_register_status,
+            // #21 收尾 #2 L1：用户拖动 / 唤起 chat 时取消进行中的 wander tween
+            commands::living_pet::living_pet_cancel_wander,
             // 用户增补 LLM Providers（多 provider 实例 CRUD + activate + test，参考 cc-switch UI）
             commands::llm_providers::llm_list_providers,
             commands::llm_providers::llm_get_provider,

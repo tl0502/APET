@@ -10,6 +10,7 @@
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useVRMModel } from '@/composables/useVRMModel'
+import { cancelWander } from '@/services/livingPet'
 import type { AvatarView } from '@/services/vrm'
 
 interface Props {
@@ -79,6 +80,11 @@ async function onPointerDown(event: PointerEvent) {
   if (import.meta.env.DEV) {
     console.log('[PetCanvas] pointerdown @', event.clientX, event.clientY, 'target=', event.target)
   }
+  // #21 收尾 L1：拖动前先取消正在进行的 wander tween。fire-and-forget 不 await
+  // 避免 IPC 往返延迟 startDragging（IPC <5ms 但保守起见不等）。无 wander 时是 no-op。
+  void cancelWander().catch((e) => {
+    console.warn('[PetCanvas] cancelWander failed (non-fatal):', e)
+  })
   try {
     await getCurrentWindow().startDragging()
   } catch (e) {
