@@ -11,6 +11,8 @@ pub mod memory;
 pub mod config;
 // #16 ConsentService：consent 表读写 + 版本路由判定（启动期 / Onboarding 用）
 pub mod consent;
+// #21 OnboardingService：onboarding 进度持久化（ADR-019）— current_step KV 读写。
+pub mod onboarding;
 // #13 ChatService 业务编排层（M1 W2 ADR-018 Layer 2）— commands::chat 已真消费。
 pub mod chat;
 // #12 LLMProvider trait + OpenAIProvider（ADR-018 Layer 1）— #13 ChatService 真消费

@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 决策记录
-updated: 2026-05-07
+updated: 2026-05-12
 related:
   - README.md
   - WORKFLOW.md
@@ -128,13 +128,19 @@ related:
 
 - **为什么**：M1 #12 LLMProvider 设计若按 issue body 字面 `content: String` 实现，M3 接多模态（图/音/文件输入）+ Claude Code 级本地文件能力（Read/Edit/Write/Glob/Grep/Bash 等 agent 工具调用）会被迫重写 trait，所有上游 caller（ChatService / LLMGameRunner 等）跟着改；2026 年实测调研：OpenAI Chat Completions / Anthropic messages / DeepSeek / Moonshot / Qwen / Ollama 已全部走 parts 数组 + tool_calls 协议，按 issue body 字面写 = 已知未来负债。
 - **选了什么**：三层分离 — **Layer 1 LLMProvider**（消息进 token 出 + tool_call 透传，#12 M1 落地；types 用 `Vec<ContentPart>` parts 数组 + `ToolCall` / `ToolDefinition` typed 但 M1 只走 `Text` variant + `tools=vec![]`；M3 接多模态 / 工具调用 = 添 impl 路径不动 trait）；**Layer 2 ChatService**（编排 Persona + Memory + SecurityGuard，#13 起逐步完整；M1 不实现）；**Layer 3 AgentService + ToolRegistry**（Claude Code 风格 agent loop + 内置 tool — Read / Edit / Write / Glob / Grep / Bash 等 6 个起步，M3+ 新增；具体路径白名单 / 命令沙盒细则待 ADR-019 决议）。stream 接口选 callback `Box<dyn Fn(StreamDelta) + Send>` 而非架构 §6.1 字面的 `impl Stream<Item=Result<...>>`（callback 转 Tauri emit 一行；Stream 在 trait object 上需 `Pin<Box<dyn Stream...>>` 写法繁琐；调用方无 take_while / buffer 等组合需求）。OpenAI 协议序列化策略：单 `ContentPart::Text` 序列化成旧 string `{role,content:"s"}`（兼容老 model 与 Ollama / Qwen / Moonshot 各家 fallback 路径），多 part 或非 Text → parts 数组；`messages.content` SQLite 列保留 TEXT，多模态消息 JSON-encode `Vec<ContentPart>` 内嵌（`[{` 前缀探嗅区分），守"27 表零迁移"D5 原则。M1 API key 走 `config` 表 KV 明文（key=`llm:openai:api_key`，与 #10 #11 同款偏离 issue body 的"settings 表"），M3 G CryptoService 上线后迁移到 `secrets` 表 DPAPI 加密（ADR-005 已说明可推迟）。
-- **代价**：M1 多写 ~50 行类型定义（ContentPart 5 variant + ToolCall + ToolDefinition + StreamDelta enum + FinishReason），M1 不消费；M3 才有真消费方。架构 §6.1 stream 形状字面被本 ADR 覆盖（已在原章节追加 *Superseded by ADR-018* 跳转）。tool 沙盒细则未定，M3 G 模块前必须 ADR-019 拍板，否则 AgentService 不能开工。
+- **代价**：M1 多写 ~50 行类型定义（ContentPart 5 variant + ToolCall + ToolDefinition + StreamDelta enum + FinishReason），M1 不消费；M3 才有真消费方。架构 §6.1 stream 形状字面被本 ADR 覆盖（已在原章节追加 *Superseded by ADR-018* 跳转）。tool 沙盒细则未定，M3 G 模块前必须**独立 ADR**（编号届时分配）拍板，否则 AgentService 不能开工。
 - **Updated 2026-05-08**：Layer 2 ChatService → 前端的流式 IPC 契约从全局 `app.emit("chat:stream:*")` 改为 `tauri::ipc::Channel<StreamEvent>`（`#13` 修正）。原契约下 `chat_send` 直到流式跑完才 resolve，前端拿不到 messageId 全程导致 cancel 死锁；新契约 IPC 立即返 IDs + 流式走专属 channel，类型安全 + 并发隔离 + 零 messageId 路由。`llm:test:delta` 暂保留（独立 issue 处理）；`nickname:changed` / `persona:activated` / `shortcut:chat` 保留 emit（真广播事件多窗口都要听）。详 [docs/lessons.md #6](lessons.md)。
+
+### ADR-019 Onboarding 进度持久化与续接
+
+- **为什么**：flows §1.5 原写"任意 Step 关窗 → 配置不写入 → 下次启动重头"。但 Step 1 完成时 `consent.granted=true` 已入库，后续任意 step 关窗 → 重启后 `consent::check_version` 返 `Match` → onboarding 窗**根本不开** → 用户永远走不完 Step 2-6（#21 实施期发现的 latent bug）。同时"走到 Step 5 才关窗 → 全部重做"对用户也是 UX 灾难（重选人格、重设快捷键等）。
+- **选了什么**：**续接 + 用户选**。KV `onboarding:current_step`（config 表，与 `window:pet:last_position` / `shortcut:chat` 同段）记录当前停留 step；每次 advanceStep 前写入，`onboarding_complete` 时 `delete` KV（= "已完成" 信号）。启动期路由（lib.rs::setup）扩展为"`consent::check_version=Match` 但 KV 存在 → 仍开 onboarding"。onboarding 窗 onMounted 检测到 KV 存在 → 弹「继续 X / 重来 / 退出」三选模态：「继续」= 跳到 saved step；「重来」= 清 KV + 跳回 `soul-pledge`，**不动 `consent.granted`**（合规标记不被 UX 流程 reset，避免假"我撤回同意"路径）；「退出」= `app.exit(0)`，下次启动仍是续接状态。
+- **代价**：每个 step 切换多一次轻量 KV 写 IPC（毫秒级，可忽略）；前端启动期多一次 IPC 等待 + 可能的模态。「重来」不能表达"我撤回数据同意" — 这类需求由 M3 G 设置面板的"重置数据"入口承担（清 consent + 删库 + 重启）。**Supersedes**：requirements/flows.md §1.5 「中途退出重头」（已在 flows.md §1.5 加 Superseded 跳转）。
 
 ---
 
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-019**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-020**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。

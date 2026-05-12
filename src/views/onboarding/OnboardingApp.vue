@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// OnboardingApp：onboarding 窗口的 root（#16 起，#21 step router 扩展）。
+// OnboardingApp：onboarding 窗口的 root（#16 起，#21 step router 扩展，ADR-019 续接）。
 //
 // 当前接入 step（按 flows §1.2 顺序）：
 // - soul-pledge（#16 Step 1）：灵魂宣誓 + grant consent
@@ -14,13 +14,18 @@
 // 1. 子 view 完成自己的业务（写 DB / activate persona / set shortcut / set KV）后 emit('done'),
 //    由本 router 决定下一步
 // 2. 切窗 IPC（onboarding_complete）集中在本 router 调，子 view 不感知"我是最后一步吗"
-// 3. 进度持久化（KV `onboarding:current_step`）+ 续接 弹窗在 #21 后续 commit 加（ADR-019）
+// 3. ADR-019 进度持久化：每次 advance 前 saveStep KV `onboarding:current_step`；
+//    onMounted 时检测 KV 存在 → 弹"继续 / 重来 / 退出"模态。
 //
-// dev mode（浏览器直访 onboarding.html）：onboarding_complete IPC 抛错 → console.warn 不阻断；
+// dev mode（浏览器直访 onboarding.html）：所有 IPC 抛错 → console.warn 不阻断；
 // 子 view 自身的 IPC 失败也由各自 toast 处理，本 router 只负责调度。
-import { ref } from 'vue'
+
+import { onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ElButton } from 'element-plus'
 import { useToast } from '@/composables/useToast'
+import { loadOnboardingStep, resetOnboarding, saveOnboardingStep } from '@/services/onboarding'
 import SoulPledgeView from './SoulPledgeView.vue'
 import PersonaPickerView from './PersonaPickerView.vue'
 import ShortcutConfirmView from './ShortcutConfirmView.vue'
@@ -35,33 +40,85 @@ type OnboardingStep =
   | 'summon-invite'
   | 'completed'
 
+/** 续接模态展示用 step 标题（不包括 'completed' / 'soul-pledge'，后者直接 NotGranted 走重头）。 */
+const STEP_DISPLAY_NAMES: Record<OnboardingStep, string> = {
+  'soul-pledge': '灵魂宣誓',
+  'persona-picker': '选择人格',
+  'shortcut-confirm': '确认快捷键',
+  'reminder-intents': '提醒偏好',
+  'summon-invite': '准备完成',
+  completed: '完成',
+}
+
+const RESUMABLE_STEPS: ReadonlySet<OnboardingStep> = new Set([
+  'persona-picker',
+  'shortcut-confirm',
+  'reminder-intents',
+  'summon-invite',
+])
+
 const toast = useToast()
 const currentStep = ref<OnboardingStep>('soul-pledge')
 const finalizing = ref(false)
+/** 启动期 load KV 中；期间不渲染任何 view,避免 SoulPledgeView 闪现然后切到续接模态。 */
+const initializing = ref(true)
+/** 非 null = 显示续接模态；null = 正常 view 流程。 */
+const resumePrompt = ref<{ step: OnboardingStep } | null>(null)
+
+onMounted(async () => {
+  try {
+    const saved = await loadOnboardingStep()
+    if (saved && isResumableStep(saved)) {
+      resumePrompt.value = { step: saved }
+    }
+    // else：KV 不存在（首次 / 已完成 / 已重置）或 saved='soul-pledge'（语义同首次,走重头）
+    //   → currentStep 保持默认 'soul-pledge'
+  } catch (e) {
+    console.warn('[OnboardingApp] loadOnboardingStep failed, fallback to fresh start:', e)
+  } finally {
+    initializing.value = false
+  }
+})
+
+function isResumableStep(s: string): s is OnboardingStep {
+  return RESUMABLE_STEPS.has(s as OnboardingStep)
+}
 
 async function advanceStep() {
-  switch (currentStep.value) {
+  const next = nextStepOf(currentStep.value)
+  if (!next) return
+  // KV 写"下一步要恢复到哪";completed 不写（onboarding_complete 会 clear KV）
+  if (next !== 'completed') {
+    try {
+      await saveOnboardingStep(next)
+    } catch (e) {
+      console.warn('[OnboardingApp] saveOnboardingStep failed (non-fatal):', e)
+    }
+  }
+  if (next === 'completed') {
+    currentStep.value = 'completed'
+    await finalizeOnboarding()
+  } else {
+    currentStep.value = next
+  }
+}
+
+function nextStepOf(s: OnboardingStep): OnboardingStep | null {
+  switch (s) {
     case 'soul-pledge':
-      currentStep.value = 'persona-picker'
-      break
+      return 'persona-picker'
     case 'persona-picker':
-      currentStep.value = 'shortcut-confirm'
-      break
+      return 'shortcut-confirm'
     case 'shortcut-confirm':
-      currentStep.value = 'reminder-intents'
-      break
+      return 'reminder-intents'
     case 'reminder-intents':
       // Step 5（番茄演示）跳过 → 直接到 Step 6
-      currentStep.value = 'summon-invite'
-      break
+      return 'summon-invite'
     case 'summon-invite':
-      currentStep.value = 'completed'
-      await finalizeOnboarding()
-      break
+      return 'completed'
     case 'completed':
-      // 防御：completed 状态被重复触发（理论不该发生）
       console.warn('[OnboardingApp] advanceStep called in completed state')
-      break
+      return null
   }
 }
 
@@ -69,7 +126,7 @@ async function finalizeOnboarding() {
   if (finalizing.value) return
   finalizing.value = true
   try {
-    // onboarding_complete：后端 hide onboarding + show pet + emit 'onboarding:step-done'
+    // onboarding_complete：后端 clear KV + hide onboarding + show pet + emit 'onboarding:step-done'
     await invoke('onboarding_complete')
     // 成功后本窗口被 hide；视图不会再被看到
   } catch (e) {
@@ -84,14 +141,126 @@ async function finalizeOnboarding() {
     finalizing.value = false
   }
 }
+
+// ───── 续接模态 ─────
+
+function onResumeContinue() {
+  if (!resumePrompt.value) return
+  currentStep.value = resumePrompt.value.step
+  resumePrompt.value = null
+}
+
+async function onResumeRestart() {
+  // 清 KV;不动 consent.granted（ADR-019：合规标记不被 UX 流程 reset）
+  // 失败也仍跳回 Step 1 让用户重走（后续 advance 会再写 KV 覆盖旧值）
+  try {
+    await resetOnboarding()
+  } catch (e) {
+    console.warn('[OnboardingApp] resetOnboarding failed (non-fatal):', e)
+  }
+  currentStep.value = 'soul-pledge'
+  resumePrompt.value = null
+}
+
+async function onResumeExit() {
+  // onboarding 窗口的 close 事件已被 lib.rs::on_window_event 绑定到 app.exit(0)（#16）
+  // 所以 getCurrentWindow().close() = 进程退出。dev 模式（浏览器直访）下走 window.close()
+  // 等价路径或抛错（前端兜底打 log 即可）。
+  try {
+    await getCurrentWindow().close()
+  } catch (e) {
+    console.warn('[OnboardingApp] window.close failed:', e)
+  }
+}
 </script>
 
 <template>
-  <SoulPledgeView v-if="currentStep === 'soul-pledge'" @done="advanceStep" />
-  <PersonaPickerView v-else-if="currentStep === 'persona-picker'" @done="advanceStep" />
-  <ShortcutConfirmView v-else-if="currentStep === 'shortcut-confirm'" @done="advanceStep" />
-  <ReminderIntentsView v-else-if="currentStep === 'reminder-intents'" @done="advanceStep" />
-  <SummonInviteView v-else-if="currentStep === 'summon-invite'" @done="advanceStep" />
+  <!-- 续接模态：onMounted 检测到 KV 存在 → 显示 -->
+  <div
+    v-if="resumePrompt"
+    class="resume-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="resume-title"
+  >
+    <div class="resume-card">
+      <h2 id="resume-title" class="resume-card__title">欢迎回来 👋</h2>
+      <p class="resume-card__hint">
+        上次我们在
+        <strong>{{ STEP_DISPLAY_NAMES[resumePrompt.step] }}</strong>
+        这步停下了。
+      </p>
+      <p class="resume-card__hint resume-card__hint--small">
+        想接着走完，还是从头开始?
+      </p>
+      <div class="resume-card__actions">
+        <ElButton type="primary" @click="onResumeContinue">继续</ElButton>
+        <ElButton @click="onResumeRestart">重来</ElButton>
+        <ElButton text @click="onResumeExit">退出</ElButton>
+      </div>
+    </div>
+  </div>
+  <!-- 启动期等 KV load 完;期间不渲染 view,避免短暂闪现 -->
+  <template v-else-if="!initializing">
+    <SoulPledgeView v-if="currentStep === 'soul-pledge'" @done="advanceStep" />
+    <PersonaPickerView v-else-if="currentStep === 'persona-picker'" @done="advanceStep" />
+    <ShortcutConfirmView v-else-if="currentStep === 'shortcut-confirm'" @done="advanceStep" />
+    <ReminderIntentsView v-else-if="currentStep === 'reminder-intents'" @done="advanceStep" />
+    <SummonInviteView v-else-if="currentStep === 'summon-invite'" @done="advanceStep" />
+  </template>
 </template>
 
-<style scoped></style>
+<style scoped>
+.resume-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: var(--aipet-space-6);
+  background: var(--aipet-color-bg);
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.resume-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  max-width: 360px;
+  padding: var(--aipet-space-6) var(--aipet-space-8);
+  border: 1px solid var(--aipet-color-border);
+  border-radius: var(--aipet-radius-lg);
+  background: var(--aipet-color-surface);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+}
+
+.resume-card__title {
+  margin: 0 0 var(--aipet-space-3);
+  font-size: var(--aipet-font-size-xl);
+  font-weight: 600;
+  color: var(--aipet-color-text-1);
+  text-align: center;
+}
+
+.resume-card__hint {
+  margin: 0 0 var(--aipet-space-2);
+  font-size: var(--aipet-font-size-base);
+  color: var(--aipet-color-text-2);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.resume-card__hint--small {
+  margin-bottom: var(--aipet-space-5);
+  font-size: var(--aipet-font-size-sm);
+  color: var(--aipet-color-text-3);
+}
+
+.resume-card__actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--aipet-space-3);
+}
+</style>

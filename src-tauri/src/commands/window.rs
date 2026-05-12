@@ -6,6 +6,7 @@
 // - chat show/hide/toggle（#14；接 #11 全局快捷键 + 关闭按钮 / ESC）
 // - onboarding_complete（#16；"我懂了"路径切窗 + emit step-done 给 #17 状态机用）
 
+use crate::services::onboarding;
 use crate::services::window_actions::{
     hide_chat, hide_onboarding, hide_settings, show_chat, show_pet, show_settings, toggle_chat,
 };
@@ -71,6 +72,12 @@ pub async fn chat_toggle(app: AppHandle) -> Result<(), String> {
 ///   pet webview 收不到——后端 emit 是全局广播，所有 webview 都能监听
 #[tauri::command]
 pub async fn onboarding_complete(app: AppHandle) -> Result<(), String> {
+    // ADR-019：先 clear KV `onboarding:current_step`（"已完成" 信号 = KV 不存在）。
+    // 失败 → 不阻断切窗：用户体验上 onboarding 已经完成，下次启动多弹一次"继续/重来/退出"
+    // 比"切窗失败困在 onboarding"更友好。eprintln 暴露给开发期。
+    if let Err(e) = onboarding::clear_current_step(&app).await {
+        eprintln!("[onboarding_complete] clear_current_step failed (non-fatal): {e}");
+    }
     hide_onboarding(&app);
     show_pet(&app);
     // 事件 payload 用对象而非裸字符串，给 #17 状态机扩展空间（如 step 字段 + reconsent 标记）

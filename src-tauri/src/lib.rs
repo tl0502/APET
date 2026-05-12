@@ -110,7 +110,10 @@ pub fn run() {
                 }
             });
             // #16 启动期 consent 路由：seed_builtin 后 DB 已可用 → 查 consent_check_version。
-            // - Match → 不动（pet 默认 visible，onboarding 默认 hidden）
+            // - Match + KV `onboarding:current_step` 不存在 → 不动（pet visible, onboarding hidden）
+            // - Match + KV 存在 → onboarding 续接（ADR-019）：用户走完 Step 1 grant 后中途关窗,
+            //   下次启动 consent=Match 但 onboarding 未完成 → 仍开 onboarding 让用户继续/重来/退出。
+            //   修一个 latent bug：原逻辑 Match → 直接进 pet 主态，用户永远走不完 Step 2-6。
             // - NotGranted / NeedReconsent → 隐藏 pet 窗 + 显示 onboarding 窗
             //   （用户必须完成宣誓才能用桌宠；onboarding 窗的 close 走 app.exit(0) 分支）
             // 失败仅 eprintln 不阻断启动：最坏情况是 pet 窗显示而 consent 未同意，
@@ -118,7 +121,22 @@ pub fn run() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::block_on(async move {
                 match crate::services::consent::check_version(&app_handle).await {
-                    Ok(crate::services::consent::ConsentStatus::Match) => {}
+                    Ok(crate::services::consent::ConsentStatus::Match) => {
+                        // ADR-019 续接判定
+                        match crate::services::onboarding::load_current_step(&app_handle).await {
+                            Ok(Some(_)) => {
+                                if let Some(pet) = app_handle.get_webview_window(PET_WINDOW_LABEL)
+                                {
+                                    let _ = pet.hide();
+                                }
+                                crate::services::window_actions::show_onboarding(&app_handle);
+                            }
+                            Ok(None) => {} // 已完成
+                            Err(e) => {
+                                eprintln!("[setup] onboarding::load_current_step failed: {e}");
+                            }
+                        }
+                    }
                     Ok(_) => {
                         if let Some(pet) = app_handle.get_webview_window(PET_WINDOW_LABEL) {
                             let _ = pet.hide();
@@ -210,6 +228,10 @@ pub fn run() {
             commands::window::chat_toggle,
             // #16 灵魂宣誓"我懂了"切窗 IPC（hide onboarding + show pet + emit step-done）
             commands::window::onboarding_complete,
+            // #21 ADR-019 Onboarding 进度持久化（current_step KV + 续接 / 重来 / 退出）
+            commands::onboarding::onboarding_save_step,
+            commands::onboarding::onboarding_load_step,
+            commands::onboarding::onboarding_reset,
             // #11 shortcuts（probe + set chat + get chat）
             commands::shortcuts::probe_global_shortcut,
             commands::shortcuts::set_shortcut_chat,

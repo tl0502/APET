@@ -13,6 +13,7 @@ pub mod consent;
 pub mod llm_providers;
 pub mod memory;
 pub mod nickname;
+pub mod onboarding;
 pub mod persona;
 pub mod shortcuts;
 pub mod system;

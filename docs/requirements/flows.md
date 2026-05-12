@@ -100,7 +100,13 @@ related:
 
 ### 1.5 中途退出
 
-任意 Step 关闭窗口 → 配置不写入 → 下次启动重头开始。保护用户"半完成"状态不会留下脏数据。
+> **Updated 2026-05-12（ADR-019 superseded）**:原"重头开始"策略已替换为"续接 + 用户选"。
+>
+> KV `onboarding:current_step` 在每次 advanceStep 前写入（config 表），onboarding_complete 时删除。任意 Step 关窗 → 进程退出（Alt+F4 / 系统关闭都 `app.exit(0)`）→ 下次启动期 `consent::check_version=Match` 但 KV 仍存在 → 启动 onboarding 窗 → 前端 onMounted 弹「继续 X / 重来 / 退出」三选模态。
+>
+> 「继续」= 跳到 saved step；「重来」= 清 KV + 跳回 Step 1（不动 consent.granted，避免 UX 流程误改合规标记）；「退出」= app.exit(0)。
+>
+> 详见 [decisions.md ADR-019](../decisions.md#adr-019-onboarding-进度持久化与续接)。
 
 ## 2. 快捷唤起对话流
 
