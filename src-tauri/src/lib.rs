@@ -179,6 +179,11 @@ pub fn run() {
             // #11 启动期注册 chat 快捷键（DB 无记录 → 默认 Ctrl+Alt+Space）。
             // 失败仅 emit shortcut:register-failed 不阻断启动。
             crate::services::shortcuts::register_chat_on_startup(app.handle());
+            // #21 M1 收尾：LivingPet 调度器（5-15min 抖动 → 25% wander）。
+            // 状态机容器先 manage 让 scheduler task 能 app.state::<LivingPet>()。
+            // dev 期实测设 env LIVING_PET_DEV_INTERVAL=5（秒）可强制 5s 间隔。
+            app.manage(crate::services::living_pet::LivingPet::default());
+            crate::services::living_pet::start_scheduler(app.handle().clone());
             Ok(())
         })
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
