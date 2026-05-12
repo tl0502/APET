@@ -6,14 +6,15 @@
 // - persona-picker（#21 Step 2）：3 内置人格选择
 // - shortcut-confirm（#21 Step 3）：chat 全局快捷键确认 + 占用探测
 // - reminder-intents（#21 Step 4）：提醒模板多选,写 KV onboarding:reminder_intents
+// - Step 5（番茄演示）：完全跳过（issue #21 拍板：M2 真番茄上线前不假演示）
+// - summon-invite（#21 Step 6）：显示 chat 快捷键 + "开始陪伴" 按钮 → 调 finalize
 // - completed：调 invoke('onboarding_complete') 切窗到 pet + 广播 onboarding:step-done
 //
 // 设计点：
 // 1. 子 view 完成自己的业务（写 DB / activate persona / set shortcut / set KV）后 emit('done'),
 //    由本 router 决定下一步
 // 2. 切窗 IPC（onboarding_complete）集中在本 router 调，子 view 不感知"我是最后一步吗"
-// 3. 未来 Step 5/6 接入时：扩 OnboardingStep 联合类型 + 在 advanceStep 加分支即可
-// 4. 进度持久化（KV `onboarding:current_step`）+ 续接 弹窗在 #21 后续 commit 加（ADR-019）
+// 3. 进度持久化（KV `onboarding:current_step`）+ 续接 弹窗在 #21 后续 commit 加（ADR-019）
 //
 // dev mode（浏览器直访 onboarding.html）：onboarding_complete IPC 抛错 → console.warn 不阻断；
 // 子 view 自身的 IPC 失败也由各自 toast 处理，本 router 只负责调度。
@@ -24,12 +25,14 @@ import SoulPledgeView from './SoulPledgeView.vue'
 import PersonaPickerView from './PersonaPickerView.vue'
 import ShortcutConfirmView from './ShortcutConfirmView.vue'
 import ReminderIntentsView from './ReminderIntentsView.vue'
+import SummonInviteView from './SummonInviteView.vue'
 
 type OnboardingStep =
   | 'soul-pledge'
   | 'persona-picker'
   | 'shortcut-confirm'
   | 'reminder-intents'
+  | 'summon-invite'
   | 'completed'
 
 const toast = useToast()
@@ -48,7 +51,10 @@ async function advanceStep() {
       currentStep.value = 'reminder-intents'
       break
     case 'reminder-intents':
-      // M1 阶段 Step 4 是最后一个已实现 step；Step 5/6 接入后挪到对应 step done
+      // Step 5（番茄演示）跳过 → 直接到 Step 6
+      currentStep.value = 'summon-invite'
+      break
+    case 'summon-invite':
       currentStep.value = 'completed'
       await finalizeOnboarding()
       break
@@ -69,12 +75,12 @@ async function finalizeOnboarding() {
   } catch (e) {
     console.error('[OnboardingApp] onboarding_complete failed:', e)
     toast.warn(
-      '提醒偏好已保存,但窗口切换失败,请重启应用。错误：' +
+      '准备就绪,但窗口切换失败,请重启应用。错误：' +
         (e instanceof Error ? e.message : String(e)),
       { duration: 8000 },
     )
-    // 切回上一 step（reminder-intents），让用户能再次触发"用这些"重试 onboarding_complete
-    currentStep.value = 'reminder-intents'
+    // 切回 summon-invite，让用户能再次点"开始陪伴"重试 onboarding_complete
+    currentStep.value = 'summon-invite'
     finalizing.value = false
   }
 }
@@ -85,6 +91,7 @@ async function finalizeOnboarding() {
   <PersonaPickerView v-else-if="currentStep === 'persona-picker'" @done="advanceStep" />
   <ShortcutConfirmView v-else-if="currentStep === 'shortcut-confirm'" @done="advanceStep" />
   <ReminderIntentsView v-else-if="currentStep === 'reminder-intents'" @done="advanceStep" />
+  <SummonInviteView v-else-if="currentStep === 'summon-invite'" @done="advanceStep" />
 </template>
 
 <style scoped></style>
