@@ -119,10 +119,16 @@ pub fn run() {
             // - NotGranted / NeedReconsent → 隐藏 pet 窗 + 显示 onboarding 窗
             //   **先 clear 续接 KV**:NeedReconsent 必须重新同意 v2,不允许用旧 KV 跳过 Step 1
             //   绕过新版本条款（合规);NotGranted 下 KV 通常不存在,clear 是 no-op。
-            // 失败仅 eprintln 不阻断启动：最坏情况是 pet 窗显示而 consent 未同意，
-            // 用户调用任何需要 consent 的功能时再次被引导（M3 数据治理才会强校验，M1 不致命）。
+            // - consent check Err 分支：原逻辑只 eprintln 后任由 pet 默认 visible —— 实测下
+            //   所谓的"再次被引导"逻辑根本不存在，所有主体功能开放给未同意用户。
+            //   #21 锁死边界：改为按"最保守"等同 NotGranted —— hide pet + show onboarding，
+            //   并初始化 ConsentGate=false。让用户走一次 onboarding，比"放任 pet 默认可见"安全。
+            //
+            // #21 锁死边界 ConsentGate：block_on 返回 gate_open，紧接着同步 manage(ConsentGate)。
+            // 初值与分支判定结果一致（Match+KV None → true；其余 → false）。后续所有
+            // `show_*` / `toggle_*` / 全局快捷键 handler / LivingPet scheduler 都过此门。
             let app_handle = app.handle().clone();
-            tauri::async_runtime::block_on(async move {
+            let gate_open = tauri::async_runtime::block_on(async move {
                 match crate::services::consent::check_version(&app_handle).await {
                     Ok(crate::services::consent::ConsentStatus::Match) => {
                         // ADR-019 续接判定
@@ -133,8 +139,9 @@ pub fn run() {
                                     let _ = pet.hide();
                                 }
                                 crate::services::window_actions::show_onboarding(&app_handle);
+                                false
                             }
-                            Ok(None) => {} // 已完成
+                            Ok(None) => true, // 已完成 → gate=open
                             Err(e) => {
                                 // 保守:db 故障下视同"KV 存在",show onboarding
                                 eprintln!(
@@ -145,6 +152,7 @@ pub fn run() {
                                     let _ = pet.hide();
                                 }
                                 crate::services::window_actions::show_onboarding(&app_handle);
+                                false
                             }
                         }
                     }
@@ -163,12 +171,26 @@ pub fn run() {
                             let _ = pet.hide();
                         }
                         crate::services::window_actions::show_onboarding(&app_handle);
+                        false
                     }
                     Err(e) => {
-                        eprintln!("[setup] consent check_version failed: {e}");
+                        // #21 锁死边界：原逻辑只 eprintln 后让 pet 默认 visible —— 等同绕过
+                        // consent 把所有主体功能开放给未同意用户。改为同 NotGranted 路径。
+                        eprintln!(
+                            "[setup] consent check_version failed, conservative show onboarding: {e}"
+                        );
+                        if let Some(pet) = app_handle.get_webview_window(PET_WINDOW_LABEL) {
+                            let _ = pet.hide();
+                        }
+                        crate::services::window_actions::show_onboarding(&app_handle);
+                        false
                     }
                 }
             });
+            // 必须在 register_chat_on_startup / LivingPet scheduler / 任何 window_actions
+            // 调用之前 manage —— 这些路径会 try_state::<ConsentGate>()，state 未 manage 时
+            // 保守返 false（行为正确但不必要地走"未完成"分支）。
+            app.manage(crate::services::consent_gate::ConsentGate::new(gate_open));
             // #10 桌宠位置还原：读 last_position（无则 fallback 主屏右下角偏左 80px）
             // + 当前 monitor 边界裁剪（16px 安全边距）。同步 block_on 与 seed_builtin 同款理由。
             if let Err(e) = crate::services::window_state::apply_initial_position(app.handle()) {

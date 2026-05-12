@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState as GsState};
 
 use crate::services::config;
+use crate::services::consent_gate::ConsentGate;
 
 pub const CONFIG_KEY_SHORTCUT_CHAT: &str = "shortcut:chat";
 pub const DEFAULT_SHORTCUT_CHAT: &str = "Ctrl+Alt+Space";
@@ -243,6 +244,18 @@ pub fn handle_shortcut_pressed<R: Runtime>(
         event.state()
     );
     if event.state() == GsState::Pressed {
+        // #21 锁死边界：onboarding 未完成时静默不 emit。pet 窗虽 hidden 但其 webview
+        // 仍 alive（hide 不卸载），App.vue 的 'shortcut:chat' listener 仍在跑——若放行
+        // emit，会一路触发 chat_toggle → chat 窗冒出来，绕过宣誓页。
+        // 不 unregister 快捷键、只在 handler 单点拦截：注册保持简单，行为可预测。
+        let gate_open = app
+            .try_state::<ConsentGate>()
+            .map(|g| g.is_open())
+            .unwrap_or(false);
+        if !gate_open {
+            eprintln!("[shortcut] suppressed (onboarding not complete)");
+            return;
+        }
         let payload = ShortcutChatPayload {
             source: "global_shortcut",
             timestamp_ms: chrono::Utc::now().timestamp_millis(),

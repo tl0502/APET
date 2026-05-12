@@ -11,6 +11,10 @@ pub mod memory;
 pub mod config;
 // #16 ConsentService：consent 表读写 + 版本路由判定（启动期 / Onboarding 用）
 pub mod consent;
+// #21 onboarding 锁死边界：进程级 AtomicBool 闸门，gate=true 等价"已可进 pet 主态"
+// （consent.granted && version OK && onboarding KV 不存在）。所有"让主体窗口可见"
+// 的路径前置检查；gate=false 时 show 路径改为引导回 onboarding 窗，避免绕过宣誓。
+pub mod consent_gate;
 // #21 OnboardingService：onboarding 进度持久化（ADR-019）— current_step KV 读写。
 pub mod onboarding;
 // #13 ChatService 业务编排层（M1 W2 ADR-018 Layer 2）— commands::chat 已真消费。

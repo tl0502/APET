@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, LogicalPosition, Manager, Runtime};
 
+use crate::services::consent_gate::ConsentGate;
 use crate::services::window_actions::PET_WINDOW_LABEL;
 
 /// 主状态机；M1 实际只有 Idle 路径有代码消费，其余 variant 给 M2-M3 接入用
@@ -159,6 +160,17 @@ pub fn start_scheduler<R: Runtime>(app: AppHandle<R>) {
         loop {
             let sleep_sec = next_interval_sec();
             tokio::time::sleep(Duration::from_secs(sleep_sec)).await;
+
+            // #21 锁死边界：onboarding 未完成时跳过 wander。pet 窗 hidden 时 set_position
+            // 仍会改实际位置，dev `LIVING_PET_DEV_INTERVAL=5` 下 5s 就触发，完成 onboarding
+            // 后用户会看到 pet 在被偷偷移动过的奇怪位置。状态机不进 Wandering，下次调度仍可正常工作。
+            let gate_open = app
+                .try_state::<ConsentGate>()
+                .map(|g| g.is_open())
+                .unwrap_or(false);
+            if !gate_open {
+                continue;
+            }
 
             let living = app.state::<LivingPet>();
             let s = living.snapshot();

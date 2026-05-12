@@ -6,12 +6,13 @@
 // - chat show/hide/toggle（#14；接 #11 全局快捷键 + 关闭按钮 / ESC）
 // - onboarding_complete（#16；"我懂了"路径切窗 + emit step-done 给 #17 状态机用）
 
+use crate::services::consent_gate::ConsentGate;
 use crate::services::onboarding;
 use crate::services::window_actions::{
     hide_chat, hide_onboarding, hide_settings, show_chat, show_pet, show_settings, toggle_chat,
 };
 use crate::services::window_state::{self, LastPosition};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[tauri::command]
 pub async fn settings_show(app: AppHandle) -> Result<(), String> {
@@ -86,6 +87,10 @@ pub async fn onboarding_complete(app: AppHandle) -> Result<(), String> {
     {
         eprintln!("[onboarding_complete] inject announcement failed (non-fatal): {e}");
     }
+    // #21 锁死边界：翻 ConsentGate 必须在 show_pet 之前——show_pet 内部 gate 检查通过
+    // 才会真正显示 pet 窗。顺序反了会被 show_pet 回路引导回 onboarding（gate 仍是 false
+    // 时它会改调 show_onboarding），陷入"刚 hide 又 show"的逻辑回环。
+    app.state::<ConsentGate>().open();
     hide_onboarding(&app);
     show_pet(&app);
     // 事件 payload 用对象而非裸字符串，给 #17 状态机扩展空间（如 step 字段 + reconsent 标记）
