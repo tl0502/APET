@@ -78,6 +78,14 @@ pub async fn onboarding_complete(app: AppHandle) -> Result<(), String> {
     if let Err(e) = onboarding::clear_current_step(&app).await {
         eprintln!("[onboarding_complete] clear_current_step failed (non-fatal): {e}");
     }
+    // #21 M1 收尾：往 active conversation 写一条 system 转场消息（与 nickname_announcement
+    // 同款 System Prompt Inconsistency 治理套路）。失败仅 eprintln 不阻断主路径——掉这条
+    // system 行只会让 LLM 首句问候稍微平淡，不应让 onboarding 完成卡住。
+    if let Err(e) =
+        crate::services::onboarding_announcement::inject_onboarding_complete(&app).await
+    {
+        eprintln!("[onboarding_complete] inject announcement failed (non-fatal): {e}");
+    }
     hide_onboarding(&app);
     show_pet(&app);
     // 事件 payload 用对象而非裸字符串，给 #17 状态机扩展空间（如 step 字段 + reconsent 标记）

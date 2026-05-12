@@ -26,6 +26,9 @@ pub mod nickname;
 // 2026-05-09：user_nickname 切换转场注入（解决 System Prompt Inconsistency 污染对话）。
 // nickname::set_user_nickname 成功后调 maybe_inject_user_change 写 system 转场消息。
 pub mod nickname_announcement;
+// #21 M1 收尾：onboarding 完成转场注入（与 nickname_announcement 同款套路）。
+// onboarding_complete IPC 成功路径中调 inject_onboarding_complete 写 system 首聊消息。
+pub mod onboarding_announcement;
 // #21 M1 收尾：LivingPet 自由活动初版（flows §10）— 状态机骨架 + 5-15min 调度器 + wander。
 pub mod living_pet;
 pub mod persona;
