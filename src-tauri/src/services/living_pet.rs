@@ -172,6 +172,21 @@ pub fn start_scheduler<R: Runtime>(app: AppHandle<R>) {
                 continue;
             }
 
+            // 前置检查：pet 窗存在且可见。覆盖"用户托盘隐藏 / 主态 hide"路径——ConsentGate
+            // 仅 gate onboarding 边界，gate.open() 之后用户仍可主动隐藏 pet 窗；hidden 时
+            // wander 会偷偷移动 + 触发 SaveDebouncer 持久化，下次显示位置漂移。
+            match app.get_webview_window(PET_WINDOW_LABEL) {
+                Some(w) => match w.is_visible() {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => {
+                        eprintln!("[living_pet] is_visible failed, skip this tick: {e}");
+                        continue;
+                    }
+                },
+                None => continue,
+            }
+
             let living = app.state::<LivingPet>();
             let s = living.snapshot();
             // 前置检查：主状态必须 Idle + 子状态必须 Still。
@@ -181,8 +196,10 @@ pub fn start_scheduler<R: Runtime>(app: AppHandle<R>) {
                 continue;
             }
 
-            // 25% wander，75% still（M1 still = 跳过本轮，等下一次抖动）
-            if rand_range_f64(0.0, 1.0) >= WANDER_PROB {
+            // dev 实测模式（LIVING_PET_DEV_INTERVAL=N 已生效）强制 wander 概率 100%——
+            // env 设了 5s 间隔但 25% 概率，用户可能等 1 分钟还没命中 wander 误判为 bug。
+            // release build 用户机器不会动这个 env，自然按 25% 正常分布。
+            if !is_dev_mode() && rand_range_f64(0.0, 1.0) >= WANDER_PROB {
                 continue;
             }
 
@@ -204,6 +221,15 @@ fn next_interval_sec() -> u64 {
         }
     }
     rand_range_u64(INTERVAL_MIN_SEC, INTERVAL_MAX_SEC)
+}
+
+/// dev 实测模式判定（与 next_interval_sec 共享同一 env 解析规则）。
+/// 设了有效值的 LIVING_PET_DEV_INTERVAL → true。release build 用户机器不会动此 env。
+fn is_dev_mode() -> bool {
+    std::env::var("LIVING_PET_DEV_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .is_some_and(|n| n > 0)
 }
 
 /// 一次 wander：选目标 → cubic easeInOut tween → 状态回 Still。
