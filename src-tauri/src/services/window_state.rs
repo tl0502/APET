@@ -33,6 +33,9 @@ pub const CONFIG_KEY_PET_POSITION: &str = "window:pet:last_position";
 
 const PET_WINDOW_LOGICAL_W: f64 = 320.0;
 const PET_WINDOW_LOGICAL_H: f64 = 320.0;
+/// 公开供 living_pet 等模块复用,确保 pet 窗口尺寸单一真相源（避免 320 magic number 漂移）。
+pub const PET_LOGICAL_W: f64 = PET_WINDOW_LOGICAL_W;
+pub const PET_LOGICAL_H: f64 = PET_WINDOW_LOGICAL_H;
 /// 主屏右下角偏左/偏上 80px（PRD §7.1 首次启动默认）
 const DEFAULT_OFFSET_FROM_BOTTOM_RIGHT: f64 = 80.0;
 /// 边界裁剪安全边距（让窗口任意一边都距 monitor 边 16px）

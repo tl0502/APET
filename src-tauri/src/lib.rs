@@ -276,10 +276,11 @@ pub fn run() {
             commands::window::chat_toggle,
             // #16 灵魂宣誓"我懂了"切窗 IPC（hide onboarding + show pet + emit step-done）
             commands::window::onboarding_complete,
-            // #21 ADR-019 Onboarding 进度持久化（current_step KV + 续接 / 重来 / 退出）
+            // #21 ADR-019 Onboarding 进度持久化（current_step KV + 续接 / 退出）。
+            // 「重来」改写 KV='soul-pledge' 而非 clear（见 commands/onboarding.rs 注释），
+            // 故无需 onboarding_reset IPC。
             commands::onboarding::onboarding_save_step,
             commands::onboarding::onboarding_load_step,
-            commands::onboarding::onboarding_reset,
             // #11 shortcuts（probe + set chat + get chat + 启动期失败留痕查询）
             commands::shortcuts::probe_global_shortcut,
             commands::shortcuts::set_shortcut_chat,

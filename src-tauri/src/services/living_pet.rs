@@ -31,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::services::consent_gate::ConsentGate;
 use crate::services::window_actions::PET_WINDOW_LABEL;
+use crate::services::window_state::{PET_LOGICAL_H, PET_LOGICAL_W};
 
 /// 主状态机；M1 实际只有 Idle 路径有代码消费，其余 variant 给 M2-M3 接入用
 /// （FocusService 开启专注、GameService 进入 IN_GAME、TaskService REMIND、模块 K 摸鱼）。
@@ -154,21 +155,33 @@ impl LivingPet {
 // ───── xorshift64 伪随机 ─────
 // 用 static AtomicU64 持种子；首次 load=0 时用 chrono 纳秒补初值（避免 panic on unwrap）。
 // 比 SystemTime 路径更可控（chrono 已是项目依赖）；比 thread_rng 省一个 crate。
+//
+// 使用 fetch_update（CAS RMW）保证多线程并发调用时不丢/不重复:即使将来 M2 引入其他
+// rand_u64 消费者（mood/energy 抖动等）也安全。当前实际只有 start_scheduler 单 task 调用,
+// fetch_update 在单消费者下基本一次成功 = 零开销。
 
 static RNG_STATE: AtomicU64 = AtomicU64::new(0);
 
 fn rand_u64() -> u64 {
-    let mut s = RNG_STATE.load(Ordering::Relaxed);
-    if s == 0 {
-        // 纳秒做种；timestamp_nanos_opt 在 2262 年后才会返 None（远超本应用生命周期）
-        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(1) as u64;
-        s = nanos | 1; // 保证非 0
-    }
-    s ^= s << 13;
-    s ^= s >> 7;
-    s ^= s << 17;
-    RNG_STATE.store(s, Ordering::Relaxed);
-    s
+    // fetch_update 返回 update 前的值,我们要 update 后的新值 → 闭包外 capture。
+    // 闭包永不返 None,所以 fetch_update 必返 Ok（但仍 unwrap_or 兜底以防类型签名变化）。
+    let mut new_state: u64 = 0;
+    let _ = RNG_STATE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+        let mut s = if s == 0 {
+            // 纳秒做种;timestamp_nanos_opt 在 2262 年后才会返 None（远超本应用生命周期）。
+            // | 1 保证非 0,xorshift64 一旦初始化非 0 后续状态恒非 0（period = 2^64 - 1）。
+            let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(1) as u64;
+            nanos | 1
+        } else {
+            s
+        };
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        new_state = s;
+        Some(s)
+    });
+    new_state
 }
 
 fn rand_range_u64(min: u64, max_inclusive: u64) -> u64 {
@@ -212,9 +225,9 @@ const HOME_DRIFT_THRESHOLD_RATIO: f64 = 0.10;
 /// 0.7 = 偏离阈值的 2 倍时几乎"直奔 home"，避免桌宠在远端拐弯磨蹭。
 const HOME_PULL_WEIGHT_MAX: f64 = 0.7;
 
-/// 桌宠窗口逻辑尺寸（与 window_state.rs 一致；提到 const 避免 magic number）。
-const PET_W: f64 = 320.0;
-const PET_H: f64 = 320.0;
+/// 桌宠窗口逻辑尺寸:从 window_state 复用,避免两处 hardcoded 漂移（M2 改尺寸时单点改）。
+const PET_W: f64 = PET_LOGICAL_W;
+const PET_H: f64 = PET_LOGICAL_H;
 /// 边界裁剪安全边距，与 #10 apply_initial_position 一致。
 const SAFE_MARGIN: f64 = 16.0;
 

@@ -93,8 +93,13 @@ pub async fn onboarding_complete(app: AppHandle) -> Result<(), String> {
     app.state::<ConsentGate>().open();
     hide_onboarding(&app);
     show_pet(&app);
-    // 事件 payload 用对象而非裸字符串，给 #17 状态机扩展空间（如 step 字段 + reconsent 标记）
-    app.emit("onboarding:step-done", serde_json::json!({ "step": "soul-pledge" }))
-        .map_err(|e| e.to_string())?;
+    // 事件 payload 用对象而非裸字符串，给 #17 状态机扩展空间（如 step 字段 + reconsent 标记）。
+    // emit 失败仅 eprintln 不返 Err：到此为止所有 side-effect（clear KV / inject / gate.open /
+    // hide onboarding / show pet）都已成功，IPC 返 Err 会让前端 catch toast 在已 hidden 的
+    // onboarding 窗里渲染（用户看不到）+ 误把"已成功的主态切换"标记为失败。emit 是给 #17
+    // 状态机的辅助广播，M1 无消费方，丢一次不影响主流程。
+    if let Err(e) = app.emit("onboarding:step-done", serde_json::json!({ "step": "soul-pledge" })) {
+        eprintln!("[onboarding_complete] emit step-done failed (non-fatal): {e}");
+    }
     Ok(())
 }
