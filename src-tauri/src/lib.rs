@@ -258,10 +258,11 @@ pub fn run() {
             commands::onboarding::onboarding_save_step,
             commands::onboarding::onboarding_load_step,
             commands::onboarding::onboarding_reset,
-            // #11 shortcuts（probe + set chat + get chat）
+            // #11 shortcuts（probe + set chat + get chat + 启动期失败留痕查询）
             commands::shortcuts::probe_global_shortcut,
             commands::shortcuts::set_shortcut_chat,
             commands::shortcuts::get_chat_shortcut,
+            commands::shortcuts::get_chat_register_status,
             // 用户增补 LLM Providers（多 provider 实例 CRUD + activate + test，参考 cc-switch UI）
             commands::llm_providers::llm_list_providers,
             commands::llm_providers::llm_get_provider,

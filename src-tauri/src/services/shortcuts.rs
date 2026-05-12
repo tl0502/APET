@@ -45,9 +45,15 @@ pub struct ProbeResult {
 
 /// 当前已注册的 chat 快捷键。set_shortcut_chat 用它 unregister 旧值。
 /// Mutex<Option<String>>：存原始字符串（解析后的 Shortcut 不实现 Clone in 2.x，重新 parse 即可）
+///
+/// `last_chat_error`：启动期 register 失败的留痕，给前端 App.vue mount 时查询用（#21
+/// 收尾 #2）。解决 setup 内 emit 早于 webview 完成 JS 初始化 / listener 挂载的 race：
+/// emit `shortcut:register-failed` 单走会丢，listener 挂之后查 registry 兜底拿到状态。
+/// set_chat_shortcut 成功路径中 clear；后续动态 register 失败时（M2 摸鱼快捷键场景）也走这里。
 #[derive(Default)]
 pub struct ShortcutRegistry {
     pub current_chat: Mutex<Option<String>>,
+    pub last_chat_error: Mutex<Option<ShortcutRegisterFailedPayload>>,
 }
 
 fn parse_shortcut(s: &str) -> Result<Shortcut, String> {
@@ -56,7 +62,9 @@ fn parse_shortcut(s: &str) -> Result<Shortcut, String> {
 }
 
 /// 启动期入口：从 config 读 shortcut:chat（无则用默认）→ register。
-/// 失败 emit `shortcut:register-failed` 不阻断启动（PRD §7.2.2 fallback 文字 chat）。
+/// 失败 emit `shortcut:register-failed` + 写 last_chat_error 不阻断启动（PRD §7.2.2
+/// fallback 文字 chat）。emit + 留痕双路径解决 setup 内 emit 早于前端 listener 挂载
+/// 的 race（详 ShortcutRegistry.last_chat_error 注释）。
 pub fn register_chat_on_startup<R: Runtime>(app: &AppHandle<R>) {
     let stored = block_on(config::get(app, CONFIG_KEY_SHORTCUT_CHAT)).unwrap_or(None);
     let shortcut_str = stored.unwrap_or_else(|| DEFAULT_SHORTCUT_CHAT.to_string());
@@ -64,18 +72,44 @@ pub fn register_chat_on_startup<R: Runtime>(app: &AppHandle<R>) {
     match register_internal(app, &shortcut_str) {
         Ok(()) => {
             eprintln!("[shortcut] registered chat shortcut: {shortcut_str}");
+            clear_last_chat_error(app);
         }
         Err(e) => {
             eprintln!("[shortcut] register failed for '{shortcut_str}': {e}");
-            let _ = app.emit(
-                SHORTCUT_REGISTER_FAILED_EVENT,
-                ShortcutRegisterFailedPayload {
-                    shortcut: shortcut_str,
-                    error: e,
-                },
-            );
+            let payload = ShortcutRegisterFailedPayload {
+                shortcut: shortcut_str,
+                error: e,
+            };
+            set_last_chat_error(app, payload.clone());
+            let _ = app.emit(SHORTCUT_REGISTER_FAILED_EVENT, payload);
         }
     }
+}
+
+fn set_last_chat_error<R: Runtime>(app: &AppHandle<R>, payload: ShortcutRegisterFailedPayload) {
+    if let Some(registry) = app.try_state::<ShortcutRegistry>() {
+        if let Ok(mut slot) = registry.last_chat_error.lock() {
+            *slot = Some(payload);
+        }
+    }
+}
+
+fn clear_last_chat_error<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(registry) = app.try_state::<ShortcutRegistry>() {
+        if let Ok(mut slot) = registry.last_chat_error.lock() {
+            *slot = None;
+        }
+    }
+}
+
+/// 读取启动期 register 留痕。前端 App.vue mount 时查询，None = 当前无错误（启动期 OK 或
+/// 用户已通过 set_chat_shortcut 改键成功）；Some(p) = 启动期未恢复的失败，需提示用户。
+pub fn last_chat_register_error<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<ShortcutRegisterFailedPayload> {
+    let registry = app.try_state::<ShortcutRegistry>()?;
+    let slot = registry.last_chat_error.lock().ok()?;
+    slot.clone()
 }
 
 fn register_internal<R: Runtime>(app: &AppHandle<R>, shortcut_str: &str) -> Result<(), String> {
@@ -190,6 +224,8 @@ pub async fn set_chat_shortcut<R: Runtime>(
     config::set(app, CONFIG_KEY_SHORTCUT_CHAT, new_shortcut)
         .await
         .map_err(|e| e.to_string())?;
+    // 用户改键成功 → 清启动期遗留的失败留痕，避免后续 mount 还 toast
+    clear_last_chat_error(app);
     Ok(())
 }
 
