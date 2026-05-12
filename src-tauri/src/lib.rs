@@ -114,8 +114,11 @@ pub fn run() {
             // - Match + KV 存在 → onboarding 续接（ADR-019）：用户走完 Step 1 grant 后中途关窗,
             //   下次启动 consent=Match 但 onboarding 未完成 → 仍开 onboarding 让用户继续/重来/退出。
             //   修一个 latent bug：原逻辑 Match → 直接进 pet 主态，用户永远走不完 Step 2-6。
+            // - Match + KV 读失败 → 保守路径同"KV 存在":hide pet + show onboarding。
+            //   db 暂时故障下,误进 pet 主态使用未完成状态比"短暂多走一次 onboarding"风险更大。
             // - NotGranted / NeedReconsent → 隐藏 pet 窗 + 显示 onboarding 窗
-            //   （用户必须完成宣誓才能用桌宠；onboarding 窗的 close 走 app.exit(0) 分支）
+            //   **先 clear 续接 KV**:NeedReconsent 必须重新同意 v2,不允许用旧 KV 跳过 Step 1
+            //   绕过新版本条款（合规);NotGranted 下 KV 通常不存在,clear 是 no-op。
             // 失败仅 eprintln 不阻断启动：最坏情况是 pet 窗显示而 consent 未同意，
             // 用户调用任何需要 consent 的功能时再次被引导（M3 数据治理才会强校验，M1 不致命）。
             let app_handle = app.handle().clone();
@@ -133,11 +136,29 @@ pub fn run() {
                             }
                             Ok(None) => {} // 已完成
                             Err(e) => {
-                                eprintln!("[setup] onboarding::load_current_step failed: {e}");
+                                // 保守:db 故障下视同"KV 存在",show onboarding
+                                eprintln!(
+                                    "[setup] load_current_step failed, conservative show onboarding: {e}"
+                                );
+                                if let Some(pet) = app_handle.get_webview_window(PET_WINDOW_LABEL)
+                                {
+                                    let _ = pet.hide();
+                                }
+                                crate::services::window_actions::show_onboarding(&app_handle);
                             }
                         }
                     }
                     Ok(_) => {
+                        // NotGranted | NeedReconsent：先 clear KV 防"绕过重新同意"。
+                        // NeedReconsent 场景下若旧 KV 残留,前端 onMounted 会弹续接模态,
+                        // 用户点"继续"就跳过 SoulPledgeView,导致用 v2 client 但 consent 仍是 v1。
+                        if let Err(e) =
+                            crate::services::onboarding::clear_current_step(&app_handle).await
+                        {
+                            eprintln!(
+                                "[setup] clear_current_step on reconsent/not-granted failed (non-fatal): {e}"
+                            );
+                        }
                         if let Some(pet) = app_handle.get_webview_window(PET_WINDOW_LABEL) {
                             let _ = pet.hide();
                         }

@@ -136,6 +136,7 @@ related:
 - **为什么**：flows §1.5 原写"任意 Step 关窗 → 配置不写入 → 下次启动重头"。但 Step 1 完成时 `consent.granted=true` 已入库，后续任意 step 关窗 → 重启后 `consent::check_version` 返 `Match` → onboarding 窗**根本不开** → 用户永远走不完 Step 2-6（#21 实施期发现的 latent bug）。同时"走到 Step 5 才关窗 → 全部重做"对用户也是 UX 灾难（重选人格、重设快捷键等）。
 - **选了什么**：**续接 + 用户选**。KV `onboarding:current_step`（config 表，与 `window:pet:last_position` / `shortcut:chat` 同段）记录当前停留 step；每次 advanceStep 前写入，`onboarding_complete` 时 `delete` KV（= "已完成" 信号）。启动期路由（lib.rs::setup）扩展为"`consent::check_version=Match` 但 KV 存在 → 仍开 onboarding"。onboarding 窗 onMounted 检测到 KV 存在 → 弹「继续 X / 重来 / 退出」三选模态：「继续」= 跳到 saved step；「重来」= 清 KV + 跳回 `soul-pledge`，**不动 `consent.granted`**（合规标记不被 UX 流程 reset，避免假"我撤回同意"路径）；「退出」= `app.exit(0)`，下次启动仍是续接状态。
 - **代价**：每个 step 切换多一次轻量 KV 写 IPC（毫秒级，可忽略）；前端启动期多一次 IPC 等待 + 可能的模态。「重来」不能表达"我撤回数据同意" — 这类需求由 M3 G 设置面板的"重置数据"入口承担（清 consent + 删库 + 重启）。**Supersedes**：requirements/flows.md §1.5 「中途退出重头」（已在 flows.md §1.5 加 Superseded 跳转）。
+- **Updated 2026-05-12（修「重来」启动期跳过 SoulPledge bug）**：原文写"「重来」= 清 KV"。实测发现：用户「重来」后停在 SoulPledge 关窗 → 启动期 `consent.granted=true` + KV 不存在 → 错认为"已完成 onboarding" → 跳过 SoulPledge 直接进 pet 主态。修正：「重来」改为 **写 KV='soul-pledge'**（不 clear）。`'soul-pledge'` 不在前端 RESUMABLE_STEPS 中,onMounted 看到该值不弹模态,正常显示 Step 1;但 KV 存在足以让启动期路由保持"未完成 onboarding"判定,开 onboarding 窗。`onboarding_reset` IPC / `resetOnboarding` 前端函数保留(M3 G "重置应用数据" 入口未来可用),当前 onboarding 流程不再调用。
 
 ---
 

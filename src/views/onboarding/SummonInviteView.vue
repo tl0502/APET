@@ -34,7 +34,14 @@ onMounted(async () => {
 function onStart() {
   if (submitting.value) return
   submitting.value = true
-  emit('done')
+  try {
+    emit('done')
+  } finally {
+    // finally 复位:成功路径下父组件 advanceStep 切 currentStep='completed',本组件
+    // 即将卸载,复位 no-op;失败回退父组件会重挂本组件,新实例 submitting=false。
+    // 若未来接 KeepAlive 也保证按钮不卡 disabled(与 ReminderIntentsView Bug 3 同款修复)。
+    submitting.value = false
+  }
 }
 </script>
 

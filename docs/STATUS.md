@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-08
+updated: 2026-05-11
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -19,25 +19,30 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M1 W1-W2（壳层 + 对话）
-- **当前 session 在做**：#13 修正落地（IPC 流式契约从全局 emit 迁移到 `tauri::ipc::Channel<StreamEvent>`，cancel/切换会话死锁修复）；#14/#15/#16 余下 bug 待下次 session 处理
-- **下一步**：处理 #14（ChatPanel 流式 + ProviderDrawer create 模式 test 误关 drawer bug）/ #15（昵称切换污染对话，需注入 system 转场消息 + persona 切换清旧 nickname）/ #16（视图层 SoulPledgeView）相关 bug 与增强（详 plan：模型探测 / 昵称污染解决方案）
+- **当前 milestone**：M1 W1-W2 收尾期（M1 出口 1 issue 未完）
+- **当前 session 在做**：规划 M1 收尾 + M2 双子刀（#21/#22/#23 已创建入库；本 session 未动代码）
+- **下一步**：进入 [#21](https://github.com/tl0502/APET/issues/21) 实施（Onboarding Step 2-6 + LivingPet 自由活动 + VRM 微动作），完成后跨入 M2
 - **阻塞**：无
 
 ---
 
 ## Milestone 进度
 
-### M1 W1-W2（壳层 + 对话）— 进行中（13/18 issue 完成）
+### M1 W1-W2（壳层 + 对话）— 收尾中（17/18 issue 完成）
 
 - W1（数据层 + 渲染）✅ #1-#5 完成
-- W2（主态可达 + 对话）✅ #6-#13 完成
-- 剩余：#14 ChatPanel / #15 昵称 UI / #16 灵魂宣誓 / #17 Onboarding 骨架 / #18 LivingPet
+- W2（主态可达 + 对话）✅ #6-#16 + #20 完成
+- 剩余：[#21](https://github.com/tl0502/APET/issues/21) M1 收尾（Onboarding Step 2-6 + LivingPet + VRM 微动作）
+
+### M2 W3-W4（任务三件套 + 物理交互）— 待启动（0/2 计划 issue）
+
+- [#22](https://github.com/tl0502/APET/issues/22) C+D+E TaskService MVP（提醒 + 番茄 + 待办 + Scheduler + OS 通知）
+- [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
 ### 立项准备期（2026-04-30 → 2026-05-05）✅
 
-15 项 ADR 敲定 + 6 份基线文档归档 + 文档工程化 + GitHub 仓库接入 + 项目记忆系统。
+15 项 ADR 敲定 + 6 份基线文档归档 + 文档工程化 + GitHub 仓库接入 + 项目记忆系统。实施期新增 ADR-016/017/018（脚手架 / EP 选型 / LLM 三层抽象）。
 
 ---
 
-> **历史详情**：每个 issue 完整落地报告在 GitHub 关闭的 issue body+comment 里；每天 session 深度回看在 [_archive/sessions/2026-05.md](_archive/sessions/2026-05.md)。
+> **历史详情**：每个 issue 完整落地报告在 GitHub 关闭的 issue body+comment 里；每天 session 深度回看在 [_archive/sessions/docs/session记录.md](_archive/sessions/session记录.md)。

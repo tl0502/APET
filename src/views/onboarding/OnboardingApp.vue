@@ -25,7 +25,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ElButton } from 'element-plus'
 import { useToast } from '@/composables/useToast'
-import { loadOnboardingStep, resetOnboarding, saveOnboardingStep } from '@/services/onboarding'
+import { loadOnboardingStep, saveOnboardingStep } from '@/services/onboarding'
 import SoulPledgeView from './SoulPledgeView.vue'
 import PersonaPickerView from './PersonaPickerView.vue'
 import ShortcutConfirmView from './ShortcutConfirmView.vue'
@@ -151,12 +151,17 @@ function onResumeContinue() {
 }
 
 async function onResumeRestart() {
-  // 清 KV;不动 consent.granted（ADR-019：合规标记不被 UX 流程 reset）
-  // 失败也仍跳回 Step 1 让用户重走（后续 advance 会再写 KV 覆盖旧值）
+  // 写 KV='soul-pledge';不动 consent.granted（ADR-019：合规标记不被 UX 流程 reset）。
+  //
+  // 为什么写 KV 而非 clear KV：原实现 clear KV 后,如果用户在 SoulPledge 关窗,
+  // 下次启动 consent.granted=true + KV 不存在 → 启动期错认为"已完成 onboarding"
+  // 直接进 pet 主态 → SoulPledge 被跳过(实测 bug)。
+  // 写 KV='soul-pledge' 后,启动期看 KV 存在 → 仍开 onboarding;前端 onMounted
+  // 读到 'soul-pledge'(不在 RESUMABLE_STEPS)→ 不弹模态,正常显示 Step 1 重头。
   try {
-    await resetOnboarding()
+    await saveOnboardingStep('soul-pledge')
   } catch (e) {
-    console.warn('[OnboardingApp] resetOnboarding failed (non-fatal):', e)
+    console.warn('[OnboardingApp] saveOnboardingStep on restart failed (non-fatal):', e)
   }
   currentStep.value = 'soul-pledge'
   resumePrompt.value = null
