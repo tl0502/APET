@@ -467,6 +467,11 @@ function msgOf(e: unknown): string {
 .preset-tag {
   cursor: pointer;
   user-select: none;
+  transition: opacity var(--aipet-duration-fast) var(--aipet-ease-standard);
+}
+
+.preset-tag:hover {
+  opacity: 0.85;
 }
 
 .provider-form {

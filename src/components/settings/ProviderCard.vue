@@ -43,7 +43,7 @@ const hue = computed(() => {
 })
 
 const logoStyle = computed(() => ({
-  background: `hsl(${hue.value}, 70%, 55%)`,
+  '--logo-h': String(hue.value),
 }))
 
 function onCardClick() {
@@ -140,6 +140,7 @@ function onDeleteConfirm() {
 .provider-card--active {
   border-color: var(--aipet-color-primary);
   background: var(--aipet-color-surface-raised);
+  box-shadow: var(--aipet-ring-focus);
   cursor: default;
 }
 
@@ -166,10 +167,20 @@ function onDeleteConfirm() {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  /* P1 微调:hue 哈希 → 中等饱和度软色块,6 色调有可见区分度。
+   *   亮:S=45% L=85%,文字 L=25% 同 hue(深);
+   *   暗:S=55% L=35%,文字 L=85% 同 hue(浅)。
+   * 原 S=25% 6 色调几乎全是灰白,失去 hue 区分意义。 */
+  background: hsl(var(--logo-h), 45%, 85%);
+  color: hsl(var(--logo-h), 50%, 25%);
   font-size: var(--aipet-font-size-lg);
   font-weight: 700;
   user-select: none;
+}
+
+:root.dark .provider-card__logo {
+  background: hsl(var(--logo-h), 55%, 35%);
+  color: hsl(var(--logo-h), 35%, 88%);
 }
 
 .provider-card__main {

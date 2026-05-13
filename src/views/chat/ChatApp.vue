@@ -19,7 +19,8 @@
 // 自带 channel/conn —— 后端早已支持并发，只是前端单状态模型把它锁死了。
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElButton, ElMessageBox } from 'element-plus'
+import { ElButton, ElIcon, ElMessageBox } from 'element-plus'
+import { Close, Expand, Fold } from '@element-plus/icons-vue'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { listen } from '@tauri-apps/api/event'
 import AppShell from '@/components/layouts/AppShell.vue'
@@ -27,6 +28,7 @@ import ChatInput from '@/components/chat/ChatInput.vue'
 import ConversationSidebar from '@/components/chat/ConversationSidebar.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import { useToast } from '@/composables/useToast'
+import { useNicknameStore } from '@/stores/nickname'
 import {
   Channel,
   archiveConversation,
@@ -46,6 +48,7 @@ import { hideChat } from '@/services/window'
 import type { ConversationSummary, Message, StreamEvent } from '@/types/chat'
 
 const toast = useToast()
+const nicknameStore = useNicknameStore()
 
 // === 状态模型 ===
 
@@ -78,6 +81,15 @@ interface ConvState {
 const personaName = ref<string>('')
 const conversations = ref<ConversationSummary[]>([])
 const conversationId = ref<string | null>(null)
+/** P0 美化:会话栏折叠状态。默认展开,☰ 按钮切换。 */
+const sidebarCollapsed = ref(false)
+/** 头像加载失败:img onError 翻 true,降级到首字母占位圆。 */
+const avatarFailed = ref(false)
+/** Header 副标题 micro-copy:替换通用"在线"文字。
+ *  保持中性灰风格,无 emoji,语气拟人但克制。挂载时随机选一条(每窗口生命周期固定),
+ *  桌宠"真正状态机"接入前的占位实现。 */
+const MOODS = ['等你来', '刚刚醒了', '在听呢', '想你了', '安静等着', '随你说', '今天还好吗'] as const
+const currentMood = ref<string>(MOODS[0])
 /** V3 核心 state：所有按对话独立的状态。
  *  reactive(Map) 让 .set/.delete + 内部字段变化都触发依赖重渲。 */
 const convStates = reactive(new Map<string, ConvState>())
@@ -201,6 +213,9 @@ function flushDraftIfPending(convId: string) {
 const unlistenFns: UnlistenFn[] = []
 
 onMounted(async () => {
+  // 随机挑一条 mood(每窗口生命周期固定一次)
+  currentMood.value = MOODS[Math.floor(Math.random() * MOODS.length)]
+
   try {
     personaName.value = (await getActivePersona()).name
   } catch (e) {
@@ -208,6 +223,14 @@ onMounted(async () => {
     // toast 引导去设置面板（典型场景：persona 表被外部清空 / DB 迁移失败）。
     console.warn('[ChatApp] getActivePersona failed:', e)
     toast.error('未能加载当前人格，请到设置面板检查或激活一个人格', { duration: 5000 })
+  }
+
+  // P0 美化:载入用户昵称,user 气泡头像首字符依赖。失败 toast.error 已由 store 透出,本处兜底 warn。
+  try {
+    if (!nicknameStore.loaded) await nicknameStore.load()
+    await nicknameStore.ensureListener()
+  } catch (e) {
+    console.warn('[ChatApp] nickname store load failed:', e)
   }
 
   const unPersona = await listen('persona:activated', async () => {
@@ -691,6 +714,10 @@ async function handleHide() {
   await hideChat()
 }
 
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+}
+
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
@@ -702,6 +729,7 @@ function msgOf(e: unknown): string {
       :conversations="conversations"
       :active-id="conversationId"
       :locked-ids="streamingConvIds"
+      :collapsed="sidebarCollapsed"
       @select="switchConversation"
       @create="onCreateConversation"
       @rename="onRenameConversation"
@@ -712,10 +740,50 @@ function msgOf(e: unknown): string {
     <div class="chat-main">
       <AppShell variant="standalone">
         <template #header>
-          <span v-if="personaName" class="chat-header__title">{{ personaName }}</span>
-          <span v-else class="chat-header__title chat-header__title--placeholder" />
-          <ElButton size="small" link data-tauri-drag-region="false" @click="handleHide">
-            关闭
+          <ElButton
+            link
+            class="chat-header__sidebar-toggle"
+            :title="sidebarCollapsed ? '展开会话栏' : '收起会话栏'"
+            :aria-label="sidebarCollapsed ? '展开会话栏' : '收起会话栏'"
+            data-tauri-drag-region="false"
+            @click="toggleSidebar"
+          >
+            <ElIcon>
+              <Expand v-if="sidebarCollapsed" />
+              <Fold v-else />
+            </ElIcon>
+          </ElButton>
+
+          <div class="chat-header__identity">
+            <div class="chat-header__avatar" aria-hidden="true">
+              <img
+                v-if="!avatarFailed"
+                src="/avatar/momo-avatar.svg"
+                alt=""
+                class="chat-header__avatar-img"
+                @error="avatarFailed = true"
+              />
+              <span v-else class="chat-header__avatar-fallback">M</span>
+            </div>
+            <div class="chat-header__name-wrap">
+              <span v-if="personaName" class="chat-header__title">{{ personaName }}</span>
+              <span v-else class="chat-header__title chat-header__title--placeholder" />
+              <span class="chat-header__status">
+                <span class="chat-header__status-dot" aria-hidden="true" />
+                {{ currentMood }}
+              </span>
+            </div>
+          </div>
+
+          <ElButton
+            link
+            class="chat-header__close"
+            title="关闭"
+            aria-label="关闭"
+            data-tauri-drag-region="false"
+            @click="handleHide"
+          >
+            <ElIcon><Close /></ElIcon>
           </ElButton>
         </template>
 
@@ -748,18 +816,120 @@ function msgOf(e: unknown): string {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  min-width: 0; /* 让 AppShell flex 子元素可缩 */
+  min-width: 0;
+}
+
+/* === Header === */
+/* AppShell 的 header 是水平 flex,直接给子元素布局即可 */
+.chat-header__sidebar-toggle,
+.chat-header__close {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--aipet-color-text-2);
+  border-radius: var(--aipet-radius-base);
+  /* P1:hover 过渡曲线,跟整窗 120ms ease-standard 节奏一致(原来瞬切) */
+  transition: color var(--aipet-duration-fast) var(--aipet-ease-standard),
+    background-color var(--aipet-duration-fast) var(--aipet-ease-standard);
+}
+
+.chat-header__sidebar-toggle:hover,
+.chat-header__close:hover {
+  color: var(--aipet-color-primary);
+  background: color-mix(in srgb, var(--aipet-color-primary) 10%, transparent);
+}
+
+.chat-header__identity {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--aipet-space-2);
+  min-width: 0;
+  margin-left: var(--aipet-space-2);
+}
+
+.chat-header__avatar {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: hidden;
+  /* 用 surface-soft 让头像在 header 上浮起一档(亮:#f5f5f5 / 暗:#1c1c1c) */
+  background: var(--aipet-color-surface-soft);
+  border: 1px solid var(--aipet-color-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 桌宠头像:hover 时 4 度倾斜 + 微放大,给"她看了你一眼"的反应 */
+  transition: transform 0.6s var(--aipet-ease-emphasized);
+  cursor: default;
+}
+
+.chat-header__avatar:hover {
+  transform: rotate(4deg) scale(1.04);
+}
+
+.chat-header__avatar-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.chat-header__avatar-fallback {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--aipet-color-primary);
+}
+
+.chat-header__name-wrap {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
 }
 
 .chat-header__title {
-  flex: 1 1 auto;
   font-size: var(--aipet-font-size-base);
   font-weight: 600;
   color: var(--aipet-color-text-1);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* personaName 异步加载期间占位（保持 header 高度稳定，不出现晃动） */
 .chat-header__title--placeholder {
   min-height: 1em;
+}
+
+.chat-header__status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--aipet-font-size-xs);
+  color: var(--aipet-color-text-3);
+  line-height: 1;
+}
+
+.chat-header__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--aipet-color-online);
+  /* 慢呼吸(1.5s),呼应流式光标节奏;桌宠"她在的"暗示。 */
+  animation: aipet-status-pulse 1.5s var(--aipet-ease-standard) infinite;
+}
+
+@keyframes aipet-status-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 </style>

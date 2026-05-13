@@ -20,3 +20,50 @@ html.dark body,
 html.dark #app {
   background: var(--aipet-color-bg);
 }
+
+/* 极淡 dot-grid 背景(同 chat / onboarding 窗,纸质质感)。 */
+#app {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 25%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  background-position: 0 0;
+}
+
+html.dark #app {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 30%, transparent) 1px,
+    transparent 1px
+  );
+}
+
+/* === Vercel 风 AppShell overrides(P1)===
+ * 跟 chat 窗规则对齐:header 用 bg 纯色 + 1px border-bottom;body 0 padding(内部 ElTabs 控制)。
+ * 仅 settings.css 加载,只作用于 settings 窗。
+ */
+.aipet-shell--standalone .aipet-shell__header {
+  padding: var(--aipet-space-2) var(--aipet-space-3);
+  background: var(--aipet-color-bg);
+  border-bottom: 1px solid var(--aipet-color-border);
+}
+
+.aipet-shell--standalone .aipet-shell__body {
+  padding: 0;
+}
+
+/* === prefers-reduced-motion 兜底(P1)===
+ * 用户系统层开 Reduce Motion 时,关闭装饰性动画/过渡;仅作用于 settings 窗。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

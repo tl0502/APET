@@ -34,11 +34,14 @@ interface Props {
    *  这些行的 rename/archive/delete 被禁用 + 显示 spinner；其他行完全可用。
    *  切到 streaming 行查看是允许的（不算"对它的操作"）。 */
   lockedIds?: Set<string>
+  /** P0 美化:折叠态。父组件 ChatApp 控制;折叠时宽度 280ms 动画到 0,内容隐藏。 */
+  collapsed?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   disabled: false,
   lockedIds: () => new Set<string>(),
+  collapsed: false,
 })
 const emit = defineEmits<{
   select: [string]
@@ -157,7 +160,11 @@ function onDeleteRequest(id: string) {
 </script>
 
 <template>
-  <aside class="conv-sidebar" data-tauri-drag-region="false">
+  <aside
+    class="conv-sidebar"
+    :class="{ 'conv-sidebar--collapsed': collapsed }"
+    data-tauri-drag-region="false"
+  >
     <div class="conv-sidebar__head">
       <ElButton
         type="primary"
@@ -171,7 +178,10 @@ function onDeleteRequest(id: string) {
     </div>
 
     <ul class="conv-sidebar__list">
-      <li v-if="items.length === 0" class="conv-sidebar__empty">还没有对话，开始第一句吧 ~</li>
+      <li v-if="items.length === 0" class="conv-sidebar__empty">
+        <span class="conv-sidebar__empty-emoji" aria-hidden="true">💭</span>
+        <span>还没有对话,开始第一句吧 ~</span>
+      </li>
       <li
         v-for="item in items"
         :key="item.id"
@@ -246,21 +256,35 @@ function onDeleteRequest(id: string) {
 .conv-sidebar {
   display: flex;
   flex-direction: column;
-  width: 200px;
-  flex: 0 0 200px;
+  width: 220px;
+  flex: 0 0 220px;
   border-right: 1px solid var(--aipet-color-border);
-  background: var(--aipet-color-surface);
+  /* Vercel 风:用 neutral-50/-900 底色跟主区 white/near-black 做色差 */
+  background: var(--aipet-color-surface-soft);
   overflow: hidden;
+  transition: width var(--aipet-duration-slow) var(--aipet-ease-standard),
+    flex-basis var(--aipet-duration-slow) var(--aipet-ease-standard),
+    opacity var(--aipet-duration-base) var(--aipet-ease-standard);
+}
+
+.conv-sidebar--collapsed {
+  width: 0;
+  flex-basis: 0;
+  opacity: 0;
+  border-right-color: transparent;
+  pointer-events: none;
 }
 
 .conv-sidebar__head {
   flex: 0 0 auto;
   padding: var(--aipet-space-3);
-  border-bottom: 1px solid var(--aipet-color-border);
 }
 
 .conv-sidebar__new {
   width: 100%;
+  /* Vercel 风:中等圆角,加粗字 */
+  border-radius: var(--aipet-radius-lg);
+  font-weight: 600;
 }
 
 .conv-sidebar__list {
@@ -271,36 +295,59 @@ function onDeleteRequest(id: string) {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--aipet-space-1);
+  gap: 2px;
 }
 
 .conv-sidebar__empty {
-  padding: var(--aipet-space-4) var(--aipet-space-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--aipet-space-2);
+  padding: var(--aipet-space-6) var(--aipet-space-3);
   text-align: center;
   color: var(--aipet-color-text-3);
   font-size: var(--aipet-font-size-sm);
 }
 
+.conv-sidebar__empty-emoji {
+  font-size: 28px;
+  opacity: 0.7;
+}
+
 .conv-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--aipet-space-1);
   padding: var(--aipet-space-2) var(--aipet-space-2) var(--aipet-space-2) var(--aipet-space-3);
-  border-radius: var(--aipet-radius-base);
+  border-radius: var(--aipet-radius-lg);
   cursor: pointer;
   transition: background var(--aipet-duration-fast) var(--aipet-ease-standard);
 }
 
 .conv-item:hover {
-  background: var(--aipet-color-surface-raised);
+  /* hover 用 surface(亮色=#ffffff 从 sidebar #f5f5f5 浮起,暗色=#262626 从 sidebar #1c1c1c 浮起) */
+  background: var(--aipet-color-surface);
 }
 
+/* active:在 surface 层基础上加 3px 紫色左条(品牌色保留) */
 .conv-item--active {
-  background: color-mix(in srgb, var(--aipet-color-primary) 14%, transparent);
+  background: var(--aipet-color-surface);
+}
+
+.conv-item--active::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--aipet-color-active-bar);
 }
 
 .conv-item--active:hover {
-  background: color-mix(in srgb, var(--aipet-color-primary) 18%, transparent);
+  background: var(--aipet-color-surface);
 }
 
 .conv-item--disabled {
@@ -312,10 +359,11 @@ function onDeleteRequest(id: string) {
   cursor: text;
 }
 
-/* B12（V2+B）：流式中的对话视觉提示——spinner + 弱加边框
- * 不改 active 高亮（in-flight 不一定是当前 active；用户切走查看其他对话时它仍流式中）。 */
+/* 流式中的对话视觉提示——保留 spinner;边框用 outline 不占布局(原 border 1px 会让
+   整行 +2px 抖动,改 outline + offset:-1 与 border-radius 兼容)。 */
 .conv-item--locked {
-  border: 1px solid color-mix(in srgb, var(--aipet-color-primary) 40%, transparent);
+  outline: 1px solid var(--aipet-color-border);
+  outline-offset: -1px;
 }
 
 .conv-item__spinner {
@@ -363,15 +411,16 @@ function onDeleteRequest(id: string) {
 
 .conv-item__actions {
   flex: 0 0 auto;
-  visibility: hidden;
+  opacity: 0;
   display: flex;
   align-items: center;
+  transition: opacity var(--aipet-duration-base) var(--aipet-ease-standard);
 }
 
-/* hover / active 项始终显示三点；其他项 hover 才显示 */
+/* hover / active 项始终显示三点;其他项 hover 才显示 */
 .conv-item:hover .conv-item__actions,
 .conv-item--active .conv-item__actions {
-  visibility: visible;
+  opacity: 1;
 }
 
 .conv-item__more {

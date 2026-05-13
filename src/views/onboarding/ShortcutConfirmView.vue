@@ -15,9 +15,14 @@
 // 4. 占用 / 仍在捕获 / 探测中 → "用这个"按钮 disable
 // 5. "用这个"= setShortcutChat（幂等，重写当前值也安全）→ emit('done')
 // 6. 摸鱼快捷键 M2 上线后再加；本 view 只确认 chat 一键
+//
+// P1 美化（Vercel/Apple-Bear）:
+// - ✓ / ⚠ 文本 glyph 换 ElIcon（CircleCheckFilled / WarningFilled）走 EP design system
+// - 状态文本颜色仍用 success/danger token,保持语义清晰
 
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElButton } from 'element-plus'
+import { ElButton, ElIcon } from 'element-plus'
+import { CircleCheckFilled, WarningFilled } from '@element-plus/icons-vue'
 import { getChatShortcut, probeGlobalShortcut, setShortcutChat } from '@/services/shortcut'
 import type { ProbeResult } from '@/types/shortcut'
 import { useToast } from '@/composables/useToast'
@@ -204,8 +209,14 @@ async function onConfirm() {
         probeResult.available ? 'shortcut-status--ok' : 'shortcut-status--bad',
       ]"
     >
-      <template v-if="probeResult.available">✓ 可用</template>
-      <template v-else>⚠ 已被其他应用占用,请改个组合</template>
+      <template v-if="probeResult.available">
+        <ElIcon class="shortcut-status__icon"><CircleCheckFilled /></ElIcon>
+        可用
+      </template>
+      <template v-else>
+        <ElIcon class="shortcut-status__icon"><WarningFilled /></ElIcon>
+        已被其他应用占用,请改个组合
+      </template>
     </p>
     <p v-else-if="mode === 'display' && probing" class="shortcut-status">检测中...</p>
     <p v-if="captureHint" class="shortcut-status shortcut-status--bad">{{ captureHint }}</p>
@@ -240,10 +251,12 @@ async function onConfirm() {
 
 .shortcut-confirm__title {
   margin: 0 0 var(--aipet-space-2);
-  font-size: var(--aipet-font-size-xl);
+  font-size: var(--aipet-font-size-2xl);
   font-weight: 600;
   color: var(--aipet-color-text-1);
   text-align: center;
+  line-height: var(--aipet-line-height-display);
+  letter-spacing: -0.01em;
 }
 
 .shortcut-confirm__hint {
@@ -275,6 +288,7 @@ async function onConfirm() {
 .shortcut-box--capturing {
   border-color: var(--aipet-color-primary);
   background: color-mix(in srgb, var(--aipet-color-primary) 10%, var(--aipet-color-surface));
+  box-shadow: var(--aipet-ring-focus);
 }
 
 .shortcut-box__combo {
@@ -303,110 +317,18 @@ async function onConfirm() {
 }
 
 .shortcut-status {
-  margin: 0 0 var(--aipet-space-4);
-  font-size: var(--aipet-font-size-sm);
-  color: var(--aipet-color-text-3);
-}
-
-.shortcut-status--ok {
-  color: var(--aipet-color-success);
-}
-
-.shortcut-status--bad {
-  color: var(--aipet-color-danger);
-}
-
-.shortcut-confirm__footer-hint {
-  margin: var(--aipet-space-4) 0 0;
-  font-size: var(--aipet-font-size-xs);
-  color: var(--aipet-color-text-3);
-  text-align: center;
-}
-
-.shortcut-confirm__actions {
-  display: flex;
-  justify-content: center;
-  margin-top: auto;
-}
-</style>
-
-
-<style scoped>
-.shortcut-confirm {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  width: 100%;
-  height: 100%;
-  padding: var(--aipet-space-6) var(--aipet-space-8) var(--aipet-space-8);
-  background: var(--aipet-color-bg);
-  box-sizing: border-box;
-  user-select: none;
-}
-
-.shortcut-confirm__title {
-  margin: 0 0 var(--aipet-space-2);
-  font-size: var(--aipet-font-size-xl);
-  font-weight: 600;
-  color: var(--aipet-color-text-1);
-  text-align: center;
-}
-
-.shortcut-confirm__hint {
-  margin: 0 0 var(--aipet-space-6);
-  font-size: var(--aipet-font-size-sm);
-  color: var(--aipet-color-text-3);
-  text-align: center;
-}
-
-.shortcut-row {
   display: flex;
   align-items: center;
-  gap: var(--aipet-space-3);
-  margin-bottom: var(--aipet-space-2);
-}
-
-.shortcut-box {
-  flex: 1 1 auto;
-  padding: var(--aipet-space-3) var(--aipet-space-4);
-  border: 1px solid var(--aipet-color-border);
-  border-radius: var(--aipet-radius-base);
-  background: var(--aipet-color-surface);
-  font-family: var(--aipet-font-family-mono);
-  font-size: var(--aipet-font-size-base);
-  color: var(--aipet-color-text-1);
-  transition: border-color var(--aipet-duration-fast) var(--aipet-ease-standard);
-}
-
-.shortcut-box--capturing {
-  border-color: var(--aipet-color-primary);
-  background: color-mix(in srgb, var(--aipet-color-primary) 10%, var(--aipet-color-surface));
-}
-
-.shortcut-box__combo {
-  letter-spacing: 0.5px;
-}
-
-.shortcut-box__hint {
-  font-family: var(--aipet-font-family-base);
-  color: var(--aipet-color-text-2);
-}
-
-.shortcut-box__kbd {
-  display: inline-block;
-  margin: 0 var(--aipet-space-1);
-  padding: 0 var(--aipet-space-1);
-  border: 1px solid var(--aipet-color-border);
-  border-radius: var(--aipet-radius-sm);
-  background: var(--aipet-color-code-bg);
-  font-family: var(--aipet-font-family-mono);
-  font-size: var(--aipet-font-size-xs);
-}
-
-.shortcut-status {
+  gap: var(--aipet-space-1);
   margin: 0 0 var(--aipet-space-4);
   font-size: var(--aipet-font-size-sm);
   color: var(--aipet-color-text-3);
+}
+
+.shortcut-status__icon {
+  /* 跟随文本 currentColor;轻微 baseline 修正让圆形跟汉字下沿对齐 */
+  font-size: 14px;
+  vertical-align: middle;
 }
 
 .shortcut-status--ok {

@@ -238,15 +238,17 @@ async function onResumeExit() {
   border: 1px solid var(--aipet-color-border);
   border-radius: var(--aipet-radius-lg);
   background: var(--aipet-color-surface);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--aipet-shadow-lg);
 }
 
 .resume-card__title {
   margin: 0 0 var(--aipet-space-3);
-  font-size: var(--aipet-font-size-xl);
+  font-size: var(--aipet-font-size-2xl);
   font-weight: 600;
   color: var(--aipet-color-text-1);
   text-align: center;
+  line-height: var(--aipet-line-height-display);
+  letter-spacing: -0.01em;
 }
 
 .resume-card__hint {

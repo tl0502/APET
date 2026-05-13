@@ -1,6 +1,7 @@
-/* chat 窗口专用全局样式（issue #14）。
-   - 与 settings.css 同款：不透明 + reset；不强制 user-select:none（消息文本要可选可拷贝）
-   - 内部由 .aipet-shell__body / .chat-messages 自己滚动，html/body 关 overflow
+/* chat 窗口专用全局样式（issue #14 + Vercel 风重做）。
+   - 不透明 + reset；不强制 user-select:none（消息文本要可选可拷贝）
+   - Vercel 风:背景 = bg 纯色,无毛玻璃,无渐变;层级靠 1px border 表达
+   - 暗色 bg = #171717(neutral-900,见 tokens.css);不用纯黑
 */
 html,
 body,
@@ -13,10 +14,69 @@ body,
   color: var(--aipet-color-text-1);
   overflow: hidden;
   font-family: var(--aipet-font-family-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html.dark,
 html.dark body,
 html.dark #app {
   background: var(--aipet-color-bg);
+}
+
+/* 极淡 dot-grid 背景:1px dot @ 24px 间距,纸质质感。
+   亮色 text-3(neutral-400)兑 25% alpha;暗色 30% alpha 保对比。
+   AppShell body / MessageList 等子区背景 transparent → 自然透出。 */
+#app {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 25%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  background-position: 0 0;
+}
+
+html.dark #app {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 30%, transparent) 1px,
+    transparent 1px
+  );
+}
+
+/* chat 窗专属:AppShell header / footer 改 Vercel 风纯色 + 1px border
+   去掉所有 backdrop-filter,层级靠灰阶 + border */
+.chat-main .aipet-shell--standalone .aipet-shell__header {
+  padding: var(--aipet-space-2) var(--aipet-space-3);
+  gap: var(--aipet-space-1);
+  background: var(--aipet-color-bg);
+  border-bottom: 1px solid var(--aipet-color-border);
+}
+
+.chat-main .aipet-shell--standalone .aipet-shell__footer {
+  padding: var(--aipet-space-3) var(--aipet-space-4);
+  background: transparent;
+  border-top: 0;
+}
+
+.chat-main .aipet-shell--standalone .aipet-shell__body {
+  /* MessageList 自己 padding 20;AppShell body 不再加 24 padding 避免双重 */
+  padding: 0;
+}
+
+/* === prefers-reduced-motion 兜底(P1)===
+ * 用户在系统层开 Reduce Motion 时,关闭所有装饰性动画/过渡;
+ * scrollToBottom 仍然工作(逻辑用 el.scrollTop 直赋,不依赖 scroll-behavior:smooth)。
+ * 仅作用于 chat 窗;Onboarding / Settings 后续美化时各自加。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

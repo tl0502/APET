@@ -31,3 +31,39 @@
   --el-transition-duration: var(--aipet-duration-base);
   --el-transition-duration-fast: var(--aipet-duration-fast);
 }
+
+/* === 滚动条美化(P1)===
+ * Vercel / Apple 风:细 6px 条,track 透明,thumb 用 border 色,hover 进 text-3。
+ * 亮:#e5e5e5 → #a3a3a3 暗:#262626 → #737373。
+ * 全局规则;EP textarea / ConversationSidebar / MessageList 等所有滚动元素同步继承。
+ * 暗色 thumb #262626 对 bg #171717 对比 1.13:1(非文本装饰可接受);用户反馈不够明显时
+ * 把默认 thumb 提到 #404040。
+ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--aipet-color-border);
+  border-radius: 3px;
+  transition: background var(--aipet-duration-fast) var(--aipet-ease-standard);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--aipet-color-text-3);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox:无伪元素,用单独 property */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--aipet-color-border) transparent;
+}

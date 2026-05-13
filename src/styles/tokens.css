@@ -1,29 +1,69 @@
+/* AIPET design tokens — Apple/Bear 纯中灰(neutral)路线
+ *
+ * 调色板原则(参考 Linear 暗色设计文档 + Tailwind neutral scale):
+ *  - 4 层 surface elevation(base / soft / surface / raised),非"一种灰"
+ *  - 暗色不用纯黑;bg = neutral-900 (#171717),Apple/Bear app 同款
+ *  - 紫色 primary 出现位收窄(发送按钮 / focus ring / active bar / 流式光标 / 头像首字符)
+ *  - 无毛玻璃,无渐变;层级靠纯色阶梯 + 1px border 表达
+ *  - 阴影用极淡(0.04-0.1 alpha,亮色);PetCanvas/OnboardingApp/EP 弹层 fallback 在用
+ *
+ * 亮色 elevation(2 档):
+ *   bg(#ffffff,主区) → surface-soft(#f5f5f5 neutral-100,sidebar) → surface/raised(#ffffff 浮起)
+ *
+ * 暗色 elevation(4 档,Linear 风):
+ *   bg(#171717 neutral-900,主区) → surface-soft(#1c1c1c,sidebar)
+ *     → surface(#262626 neutral-800,卡片/hover/气泡) → surface-raised(#2e2e2e,modal/dropdown)
+ */
+
 :root {
+  /* === 品牌色 === */
   --aipet-color-primary: #7c5cff;
   --aipet-color-primary-hover: #6b4df2;
-  --aipet-color-bg: #f7f5ff;
-  --aipet-color-surface: rgba(255, 255, 255, 0.9);
-  --aipet-color-surface-raised: rgba(255, 255, 255, 0.96);
-  --aipet-color-text-1: #24212f;
-  --aipet-color-text-2: #5a5368;
-  --aipet-color-text-3: #827a91;
-  --aipet-color-border: rgba(76, 65, 111, 0.16);
-  --aipet-color-success: #3aa981;
-  --aipet-color-warning: #d88a22;
-  --aipet-color-danger: #cf4b5f;
-  --aipet-color-overlay: rgba(36, 33, 47, 0.36);
-  --aipet-color-code-bg: rgba(36, 33, 47, 0.07);
-  --aipet-color-error-surface: rgba(255, 232, 235, 0.96);
 
+  /* === 灰阶 elevation(亮色) === */
+  --aipet-color-bg: #ffffff; /* chat 主区 / 全窗背景 */
+  --aipet-color-surface-soft: #f5f5f5; /* sidebar / 二级面板(neutral-100) */
+  --aipet-color-surface: #ffffff; /* 卡片 / hover / 气泡浮起层 */
+  --aipet-color-surface-raised: #ffffff; /* dropdown / modal / dialog 顶层 */
+
+  /* === 文字三档(neutral-900/600/400) === */
+  --aipet-color-text-1: #171717; /* 主文 neutral-900,比纯黑柔 */
+  --aipet-color-text-2: #525252; /* 次文 neutral-600 */
+  --aipet-color-text-3: #a3a3a3; /* 弱文/时间戳 neutral-400 */
+
+  /* === 边框(细灰边) === */
+  --aipet-color-border: #e5e5e5; /* neutral-200 */
+  --aipet-color-border-strong: #d4d4d4; /* neutral-300,active/focus 卡片用 */
+
+  /* === 状态色 === */
+  --aipet-color-success: #16a34a;
+  --aipet-color-warning: #d97706;
+  --aipet-color-danger: #dc2626;
+  --aipet-color-overlay: rgba(0, 0, 0, 0.4);
+  --aipet-color-code-bg: #f5f5f5;
+  --aipet-color-error-surface: #fef2f2;
+
+  /* === 气泡 === */
+  --aipet-color-bubble-user: #7c5cff; /* user 气泡纯色,无渐变 */
+  --aipet-color-bubble-assistant: #fafafa; /* neutral-50,比 surface-soft 略亮 */
+
+  /* === 会话栏 active 左色条(品牌色保留) === */
+  --aipet-color-active-bar: #7c5cff;
+  /* 在线状态点 */
+  --aipet-color-online: #16a34a;
+
+  /* === 间距 === */
   --aipet-space-1: 4px;
   --aipet-space-2: 8px;
   --aipet-space-3: 12px;
   --aipet-space-4: 16px;
+  --aipet-space-5: 20px;
   --aipet-space-6: 24px;
   --aipet-space-8: 32px;
   --aipet-space-12: 48px;
   --aipet-space-16: 64px;
 
+  /* === 字体 === */
   --aipet-font-family-base: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --aipet-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
   --aipet-font-size-xs: 10px;
@@ -31,25 +71,38 @@
   --aipet-font-size-base: 14px;
   --aipet-font-size-lg: 16px;
   --aipet-font-size-xl: 20px;
+  --aipet-font-size-2xl: 28px; /* onboarding 标题 / chat empty 主标题 */
+  --aipet-font-size-3xl: 36px; /* 品牌区/欢迎页大标题 */
   --aipet-line-height-tight: 1.2;
   --aipet-line-height-base: 1.4;
   --aipet-line-height-loose: 1.6;
+  --aipet-line-height-display: 1.15; /* 2xl/3xl 标题专用,字间收紧 */
 
-  --aipet-radius-sm: 3px;
+  /* === 圆角(Apple 风偏柔但克制) === */
+  --aipet-radius-sm: 4px;
   --aipet-radius-base: 6px;
-  --aipet-radius-lg: 12px;
+  --aipet-radius-lg: 8px;
+  --aipet-radius-bubble: 12px; /* 气泡 10 → 12,Apple/Bear 更"柔"一点 */
   --aipet-radius-full: 999px;
 
-  --aipet-shadow-sm: 0 2px 8px rgba(36, 33, 47, 0.08);
-  --aipet-shadow-base: 0 8px 24px rgba(36, 33, 47, 0.12);
-  --aipet-shadow-lg: 0 16px 48px rgba(36, 33, 47, 0.16);
-  --aipet-shadow-float: 0 10px 32px rgba(36, 33, 47, 0.18);
+  /* === 阴影(0.04-0.1 alpha 极淡;PetCanvas/OnboardingApp/EP 弹层 fallback 在用) === */
+  --aipet-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --aipet-shadow-base: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --aipet-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --aipet-shadow-float: 0 8px 24px rgba(0, 0, 0, 0.1);
 
+  /* === 动效 === */
   --aipet-duration-fast: 120ms;
   --aipet-duration-base: 180ms;
   --aipet-duration-slow: 280ms;
   --aipet-ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --aipet-ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
+
+  /* === Focus ring(统一,所有可聚焦/激活卡片用)===
+   * 2px primary 20% alpha,无 spread,克制不抢戏。
+   * 暗色 alpha 提到 30%(暗底 primary 视感偏弱)。
+   */
+  --aipet-ring-focus: 0 0 0 2px color-mix(in srgb, var(--aipet-color-primary) 20%, transparent);
 
   --aipet-z-floating: 100;
   --aipet-z-dialog: 1000;
@@ -58,24 +111,43 @@
 }
 
 :root.dark {
+  /* === 暗色 ===
+   * bg = #171717 (neutral-900),非纯黑;Apple/Bear app 暗色同款
+   * 4 层 elevation:bg → surface-soft → surface → surface-raised
+   */
   --aipet-color-primary: #9a86ff;
   --aipet-color-primary-hover: #b0a1ff;
-  --aipet-color-bg: #171421;
-  --aipet-color-surface: rgba(34, 29, 47, 0.9);
-  --aipet-color-surface-raised: rgba(43, 37, 59, 0.96);
-  --aipet-color-text-1: #f4f1ff;
-  --aipet-color-text-2: #c9c2da;
-  --aipet-color-text-3: #9c94ad;
-  --aipet-color-border: rgba(220, 212, 255, 0.18);
-  --aipet-color-success: #54c8a1;
-  --aipet-color-warning: #f0aa4d;
-  --aipet-color-danger: #ff7a8c;
-  --aipet-color-overlay: rgba(7, 6, 10, 0.56);
-  --aipet-color-code-bg: rgba(244, 241, 255, 0.1);
-  --aipet-color-error-surface: rgba(71, 34, 45, 0.96);
 
-  --aipet-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.22);
-  --aipet-shadow-base: 0 8px 24px rgba(0, 0, 0, 0.3);
-  --aipet-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.38);
-  --aipet-shadow-float: 0 10px 32px rgba(0, 0, 0, 0.42);
+  --aipet-color-bg: #171717; /* L0:主区 / 全窗背景(neutral-900) */
+  --aipet-color-surface-soft: #1c1c1c; /* L1:sidebar / 二级面板 */
+  --aipet-color-surface: #262626; /* L2:卡片 / hover / 气泡浮起(neutral-800) */
+  --aipet-color-surface-raised: #2e2e2e; /* L3:dropdown / modal / dialog 顶层 */
+
+  --aipet-color-text-1: #fafafa; /* neutral-50 */
+  --aipet-color-text-2: #a3a3a3; /* neutral-400 */
+  --aipet-color-text-3: #737373; /* neutral-500 */
+
+  --aipet-color-border: #333333; /* 提到 #333,与 surface #262626 拉开一档(原 #262626 与 surface 同色,border 不可见) */
+  --aipet-color-border-strong: #3f3f3f; /* active/focus 卡片 */
+
+  --aipet-color-success: #22c55e;
+  --aipet-color-warning: #f59e0b;
+  --aipet-color-danger: #ef4444;
+  --aipet-color-overlay: rgba(0, 0, 0, 0.6);
+  --aipet-color-code-bg: #262626;
+  --aipet-color-error-surface: #2a1a1d;
+
+  --aipet-color-bubble-user: #9a86ff;
+  --aipet-color-bubble-assistant: #262626; /* L2 浮层,在 bg #171717 上是"卡片"感 */
+
+  --aipet-color-active-bar: #9a86ff;
+  --aipet-color-online: #22c55e;
+
+  --aipet-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --aipet-shadow-base: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --aipet-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.6);
+  --aipet-shadow-float: 0 8px 24px rgba(0, 0, 0, 0.7);
+
+  /* 暗色 focus ring 提到 30% alpha:暗底 primary 视感偏弱 */
+  --aipet-ring-focus: 0 0 0 2px color-mix(in srgb, var(--aipet-color-primary) 30%, transparent);
 }

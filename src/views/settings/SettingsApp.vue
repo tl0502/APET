@@ -6,7 +6,8 @@
 // - 关闭路径走 lib.rs on_window_event 拦截改 hide；activeTab 是组件 ref，hide 后 webview
 //   不销毁，下次唤起自动保留位置
 import { ref } from 'vue'
-import { ElTabPane, ElTabs } from 'element-plus'
+import { ElIcon, ElTabPane, ElTabs } from 'element-plus'
+import { Brush, Connection, EditPen, InfoFilled, User } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
 import ThemePanel from './panels/ThemePanel.vue'
 import ProviderPanel from './panels/ProviderPanel.vue'
@@ -20,19 +21,49 @@ const activeTab = ref<'theme' | 'provider' | 'persona' | 'nickname' | 'about'>('
 <template>
   <AppShell variant="standalone" title="设置">
     <ElTabs v-model="activeTab" tab-position="left" class="settings-tabs">
-      <ElTabPane label="主题" name="theme">
+      <ElTabPane name="theme">
+        <template #label>
+          <span class="settings-tab__label">
+            <ElIcon class="settings-tab__icon"><Brush /></ElIcon>
+            主题
+          </span>
+        </template>
         <ThemePanel />
       </ElTabPane>
-      <ElTabPane label="LLM Provider" name="provider">
+      <ElTabPane name="provider">
+        <template #label>
+          <span class="settings-tab__label">
+            <ElIcon class="settings-tab__icon"><Connection /></ElIcon>
+            LLM Provider
+          </span>
+        </template>
         <ProviderPanel />
       </ElTabPane>
-      <ElTabPane label="人格" name="persona">
+      <ElTabPane name="persona">
+        <template #label>
+          <span class="settings-tab__label">
+            <ElIcon class="settings-tab__icon"><User /></ElIcon>
+            人格
+          </span>
+        </template>
         <PersonaPanel />
       </ElTabPane>
-      <ElTabPane label="昵称" name="nickname">
+      <ElTabPane name="nickname">
+        <template #label>
+          <span class="settings-tab__label">
+            <ElIcon class="settings-tab__icon"><EditPen /></ElIcon>
+            昵称
+          </span>
+        </template>
         <NicknamePanel />
       </ElTabPane>
-      <ElTabPane label="关于" name="about">
+      <ElTabPane name="about">
+        <template #label>
+          <span class="settings-tab__label">
+            <ElIcon class="settings-tab__icon"><InfoFilled /></ElIcon>
+            关于
+          </span>
+        </template>
         <AboutPanel />
       </ElTabPane>
     </ElTabs>
@@ -53,5 +84,56 @@ const activeTab = ref<'theme' | 'provider' | 'persona' | 'nickname' | 'about'>('
 
 .settings-tabs :deep(.el-tab-pane) {
   padding: 0 var(--aipet-space-2);
+}
+
+/* === Vercel/Apple-Bear 风左 tab 改造 ===
+ * EP 默认 active-bar 是细蓝条;隐藏掉,改用伪元素 3px 紫色左条(同 Chat 会话栏 active)。
+ * inactive: text-2 / hover: text-1 + surface 浅底 / active: primary 紫字 + 600 weight + 左条。
+ */
+.settings-tabs :deep(.el-tabs__active-bar) {
+  display: none;
+}
+
+.settings-tabs :deep(.el-tabs__item.is-left) {
+  position: relative;
+  color: var(--aipet-color-text-2);
+  font-size: var(--aipet-font-size-base);
+  padding: var(--aipet-space-3) var(--aipet-space-4);
+  transition: color var(--aipet-duration-fast) var(--aipet-ease-standard),
+    background-color var(--aipet-duration-fast) var(--aipet-ease-standard);
+}
+
+.settings-tabs :deep(.el-tabs__item.is-left:hover) {
+  color: var(--aipet-color-text-1);
+  background-color: var(--aipet-color-surface);
+}
+
+.settings-tabs :deep(.el-tabs__item.is-left.is-active) {
+  color: var(--aipet-color-primary);
+  font-weight: 600;
+}
+
+.settings-tabs :deep(.el-tabs__item.is-left.is-active)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--aipet-color-primary);
+}
+
+/* tab label slot:icon + 文字水平居中 */
+.settings-tab__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aipet-space-2);
+}
+
+.settings-tab__icon {
+  font-size: 16px;
+  /* 跟随 tab item color(active = primary / hover = text-1 / 默认 = text-2) */
+  color: inherit;
 }
 </style>
