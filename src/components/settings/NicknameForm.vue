@@ -24,6 +24,7 @@ import { ElButton, ElCheckbox, ElForm, ElFormItem, ElInput } from 'element-plus'
 import { useToast } from '@/composables/useToast'
 import { useNicknameStore } from '@/stores/nickname'
 import { getAnnounceUserChange, setAnnounceUserChange } from '@/services/nickname'
+import UserAvatarUploader from './UserAvatarUploader.vue'
 
 const toast = useToast()
 const store = useNicknameStore()
@@ -176,6 +177,9 @@ function msgOf(e: unknown): string {
         </p>
       </ElFormItem>
     </ElForm>
+
+    <!-- #25 用户头像上传：放在昵称下方作为同一 tab 的延伸分区（共享"用户自我"语义） -->
+    <UserAvatarUploader />
   </section>
 </template>
 

@@ -1,17 +1,16 @@
 <script setup lang="ts">
-// MessageBubble：单条消息气泡（issue #14 + P0 美化）。
+// MessageBubble：单条消息气泡（issue #14 + P0 美化 + #25/#26 自定义头像）。
 // - 三种 role 视觉差异:
-//   * user: 靠右 + 28px 昵称首字符头像 + 紫色 135° 渐变 + 白字
-//   * assistant: 靠左 + 28px momo 头像 SVG + 奶油白底 + 柔阴影
+//   * user: 靠右 + 28px 头像（KV `user:avatar_path` → fallback 昵称首字符）+ 紫色单色 + 白字
+//   * assistant: 靠左 + 28px 头像（KV `persona:<active_id>:avatar_path` → fallback /avatar/momo-avatar.svg）+ 奶油白底
 //   * system: 居中灰条（M1 几乎不出现）
+// - 自定义头像通过 useAvatars composable 跨窗口热刷新（avatar:changed event）
 // - streaming=true: 在 content 末尾追加圆点呼吸光标（CSS animation）
 // - mode='offline_rule': 底部加灰色小标"（离线模板）"
 // - mode='cancelled': 底部加灰色小标"（已取消）"
 // - 时间戳 hh:mm 显示 + title 看完整 ISO
-// - assistant 头像通过 /avatar/momo-avatar.svg 静态路径加载,onError 降级"M"占位
-// - user 头像取 nickname store user 字段首字符(中英文都按 Array.from 取第一个码位);
-//   昵称未加载 / 为空时 fallback '我'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useAvatarsStore } from '@/stores/avatars'
 import { useNicknameStore } from '@/stores/nickname'
 import type { Message } from '@/types/chat'
 
@@ -25,6 +24,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const nicknameStore = useNicknameStore()
+const avatarsStore = useAvatarsStore()
 
 const roleClass = computed(() => `msg msg--${props.message.role}`)
 const isOffline = computed(() => props.message.mode === 'offline_rule')
@@ -32,14 +32,47 @@ const isCancelled = computed(() => props.message.mode === 'cancelled')
 const isAssistant = computed(() => props.message.role === 'assistant')
 const isUser = computed(() => props.message.role === 'user')
 
-// 头像加载失败标志:img onError 时翻 true,降级到首字母占位圆。
-const avatarFailed = ref(false)
+// 各类型头像加载失败标志:img onError 时翻 true,降级到下一层 fallback。
+// assistant: 自定义 URL → momo SVG → "M" 字符
+// user: 自定义 URL → 昵称首字符
+//
+// L5 修复：URL 变化时复位 failed flag —— 用户重新导出/上传头像后新 URL 应该重试加载，
+// 不应该因为之前 onError 一次就永久卡在 fallback。watch URL 翻 true→新值 时复位。
+const personaImgFailed = ref(false)
+const momoSvgFailed = ref(false)
+const userImgFailed = ref(false)
+
+watch(
+  () => avatarsStore.personaAvatarUrl,
+  () => {
+    personaImgFailed.value = false
+  },
+)
+watch(
+  () => avatarsStore.userAvatarUrl,
+  () => {
+    userImgFailed.value = false
+  },
+)
 
 /** 用户昵称首字符;Array.from 处理 emoji / 中文 code point。fallback '我'。 */
 const userInitial = computed(() => {
   const n = nicknameStore.user?.trim()
   if (!n) return '我'
   return Array.from(n)[0] ?? '我'
+})
+
+/** assistant 实际显示哪个头像源：自定义 URL（在且未失败）→ momo SVG（未失败）→ 字符 fallback。 */
+const assistantAvatarSrc = computed<string | null>(() => {
+  if (avatarsStore.personaAvatarUrl && !personaImgFailed.value) return avatarsStore.personaAvatarUrl
+  if (!momoSvgFailed.value) return '/avatar/momo-avatar.svg'
+  return null
+})
+
+/** user 头像源：自定义 URL（在且未失败）→ null（走字符 fallback）。 */
+const userAvatarSrc = computed<string | null>(() => {
+  if (avatarsStore.userAvatarUrl && !userImgFailed.value) return avatarsStore.userAvatarUrl
+  return null
 })
 
 // hh:mm 简化展示;hover title 显示原始 ISO（dev 排查用）。
@@ -50,6 +83,16 @@ const timeLabel = computed(() => {
   const mm = String(dt.getMinutes()).padStart(2, '0')
   return `${hh}:${mm}`
 })
+
+/** 区分两层 fallback：自定义 PNG 失败 → 标 personaImgFailed；momo SVG 失败 → 标 momoSvgFailed。
+ *  bind 时根据当前 assistantAvatarSrc 判断 onError 该改哪个 flag。 */
+function onAssistantImgError() {
+  if (avatarsStore.personaAvatarUrl && !personaImgFailed.value) {
+    personaImgFailed.value = true
+  } else {
+    momoSvgFailed.value = true
+  }
+}
 </script>
 
 <template>
@@ -57,18 +100,25 @@ const timeLabel = computed(() => {
     <!-- assistant 左侧头像 -->
     <div v-if="isAssistant" class="msg__avatar msg__avatar--assistant" aria-hidden="true">
       <img
-        v-if="!avatarFailed"
-        src="/avatar/momo-avatar.svg"
+        v-if="assistantAvatarSrc"
+        :src="assistantAvatarSrc"
         alt=""
         class="msg__avatar-img"
-        @error="avatarFailed = true"
+        @error="onAssistantImgError"
       />
       <span v-else class="msg__avatar-fallback">M</span>
     </div>
 
-    <!-- user 右侧头像:昵称首字符占位(P0 最简版);后续支持上传图片见 issue -->
+    <!-- user 右侧头像:自定义图片 → 昵称首字符占位 -->
     <div v-if="isUser" class="msg__avatar msg__avatar--user" aria-hidden="true">
-      <span class="msg__avatar-initial">{{ userInitial }}</span>
+      <img
+        v-if="userAvatarSrc"
+        :src="userAvatarSrc"
+        alt=""
+        class="msg__avatar-img"
+        @error="userImgFailed = true"
+      />
+      <span v-else class="msg__avatar-initial">{{ userInitial }}</span>
     </div>
 
     <div class="msg__column">

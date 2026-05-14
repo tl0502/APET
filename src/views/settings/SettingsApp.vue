@@ -5,7 +5,7 @@
 // - 5 个 tab：theme(完整) / provider(占位) / persona(占位) / nickname(占位) / about(完整)
 // - 关闭路径走 lib.rs on_window_event 拦截改 hide；activeTab 是组件 ref，hide 后 webview
 //   不销毁，下次唤起自动保留位置
-import { ref } from 'vue'
+import { provide, ref } from 'vue'
 import { ElIcon, ElTabPane, ElTabs } from 'element-plus'
 import { Brush, Connection, EditPen, InfoFilled, User } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
@@ -16,6 +16,10 @@ import NicknamePanel from './panels/NicknamePanel.vue'
 import AboutPanel from './panels/AboutPanel.vue'
 
 const activeTab = ref<'theme' | 'provider' | 'persona' | 'nickname' | 'about'>('theme')
+
+// #26 修复 B1：子面板（VrmAvatarExporter）需感知 tab 切换才能 pause/resume RAF + WebGL。
+// 用 provide 暴露当前 active tab 名；ElTabPane v-show 模式下子面板 mount 后不会自动 unmount。
+provide('settings-active-tab', activeTab)
 </script>
 
 <template>

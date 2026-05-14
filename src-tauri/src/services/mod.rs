@@ -8,6 +8,10 @@ pub mod db;
 // list_messages_by_conversation；其余 delete_* / cleanup_* 函数留给 M3 设置面板"清空对话"按钮）。
 pub mod memory;
 
+// #25 用户头像上传 + #26 VRM 头像导出：落盘到 <app_config>/avatars/，配合 assetProtocol scope。
+// 路径由前端通过 memory_set 写到 KV，不另起 DB schema。
+pub mod avatars;
+
 pub mod config;
 // #16 ConsentService：consent 表读写 + 版本路由判定（启动期 / Onboarding 用）
 pub mod consent;

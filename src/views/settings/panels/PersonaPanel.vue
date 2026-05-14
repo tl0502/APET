@@ -7,6 +7,7 @@ import { ElButton, ElDescriptions, ElDescriptionsItem, ElTag } from 'element-plu
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getActivePersona } from '@/services/persona'
 import type { PersonaSummary } from '@/types/persona'
+import VrmAvatarExporter from '@/components/settings/VrmAvatarExporter.vue'
 
 const persona = ref<PersonaSummary | null>(null)
 const errorMsg = ref<string | null>(null)
@@ -73,6 +74,9 @@ onBeforeUnmount(() => {
       <ElButton disabled>打开人格工坊</ElButton>
       <span class="panel__hint">工坊将在 M2 上线</span>
     </div>
+
+    <!-- #26 VRM 头像导出：放在 persona 信息下方，share persona 维度的语义归属 -->
+    <VrmAvatarExporter :persona-id="persona?.id ?? null" />
   </section>
 </template>
 

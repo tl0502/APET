@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力集 — pet / settings 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动。",
+  "description": "默认能力集 — pet / settings / chat 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动 + 头像文件选择（#25 用户头像上传）。",
   "windows": ["pet", "settings", "chat"],
   "permissions": [
     "core:default",
@@ -13,6 +13,7 @@
     "core:window:allow-primary-monitor",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister"
+    "global-shortcut:allow-unregister",
+    "dialog:allow-open"
   ]
 }

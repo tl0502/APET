@@ -19,3 +19,5 @@ pub mod persona;
 pub mod shortcuts;
 pub mod system;
 pub mod window;
+// #25/#26 头像 IPC（user 上传 + persona VRM 导出）
+pub mod avatars;

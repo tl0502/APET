@@ -19,6 +19,16 @@ export interface AvatarBounds {
  */
 export type AvatarView = 'half' | 'full'
 
+/**
+ * VRMRuntime.init 选项。
+ * - `preserveDrawingBuffer`：构造期开 WebGL `preserveDrawingBuffer`，让 captureSnapshot
+ *   能可靠在 render 后任意时刻 toDataURL。**只用于一次性截图场景**（#26 VRM 头像导出）；
+ *   live 桌宠不开（避免不必要的 buffer 持有 + 轻微性能损耗）。
+ */
+export interface VRMRuntimeInitOptions {
+  preserveDrawingBuffer?: boolean
+}
+
 interface ViewConfig {
   /** 相机世界坐标 */
   cameraPos: THREE.Vector3
@@ -90,8 +100,14 @@ export class VRMRuntime {
   /** 当前取景模式；init() 时确定，运行期通过 setView() 切换。 */
   private view: AvatarView = 'half'
   private rafId: number | null = null
+  /** #26 头像导出：camera 距离倍率（1.0 = 默认；< 1 拉近放大头部；> 1 拉远收缩）。
+   *  setCameraZoom() 修改；snapshot 流程实时反映到 camera.position。 */
+  private cameraZoom = 1
+  /** #26 头像导出：camera lookAt 中心相对默认值的偏移（米）。
+   *  +y 让视线焦点上移（拍头），+x 让画面右移（人在左）。 */
+  private cameraPan = { x: 0, y: 0 }
 
-  init(canvas: HTMLCanvasElement, view: AvatarView = 'half'): void {
+  init(canvas: HTMLCanvasElement, view: AvatarView = 'half', opts?: VRMRuntimeInitOptions): void {
     const w = canvas.clientWidth || 320
     const h = canvas.clientHeight || 320
 
@@ -102,6 +118,7 @@ export class VRMRuntime {
       canvas,
       alpha: true,
       antialias: true,
+      preserveDrawingBuffer: opts?.preserveDrawingBuffer ?? false,
     })
     this.renderer.setPixelRatio(window.devicePixelRatio || 1)
     this.renderer.setSize(w, h, false)
@@ -128,10 +145,92 @@ export class VRMRuntime {
   setView(view: AvatarView): void {
     if (!this.camera || this.view === view) return
     this.view = view
-    const cfg = VIEW_CONFIGS[view]
-    this.camera.position.copy(cfg.cameraPos)
-    this.camera.lookAt(cfg.cameraTarget)
+    this.applyCameraTransform()
     // lookAtSmoothed 是相机本地坐标，切视角不影响"看用户"的语义；保持原值即可
+  }
+
+  /**
+   * #26 头像导出：camera 拉近/拉远（zoom > 1 拉远，< 1 拉近）。
+   * 调用方传 0.5-2.0 区间最自然。0.6 ≈ 头部特写，1.0 默认胸口以上，1.5 ≈ 半身。
+   * 立即生效（不平滑），用于实时预览滑块。
+   */
+  setCameraZoom(zoom: number): void {
+    if (!this.camera || !Number.isFinite(zoom) || zoom <= 0) return
+    this.cameraZoom = zoom
+    this.applyCameraTransform()
+  }
+
+  /**
+   * #26 头像导出：camera lookAt 中心偏移（米）。
+   * +y 把视线焦点抬高（拍头部），-y 压低；±x 左右偏移。立即生效。
+   * 范围建议 ±0.3m（再大就出了角色身体）。
+   */
+  setCameraPan(x: number, y: number): void {
+    if (!this.camera || !Number.isFinite(x) || !Number.isFinite(y)) return
+    this.cameraPan = { x, y }
+    this.applyCameraTransform()
+  }
+
+  /** 把 view + zoom + pan 三个状态综合算出最终 camera position + lookAt 并应用。 */
+  private applyCameraTransform(): void {
+    if (!this.camera) return
+    const cfg = VIEW_CONFIGS[this.view]
+    // zoom 调 z 距离 + 同步缩 lookAt 偏移度：cameraPos.z * zoom 直观映射"远近"
+    const pos = cfg.cameraPos.clone()
+    pos.z *= this.cameraZoom
+    // pan 相对 lookAt 中心偏移：camera 也跟着偏移让"看的点"对齐，避免视角穿模
+    pos.x += this.cameraPan.x
+    pos.y += this.cameraPan.y
+    const target = cfg.cameraTarget.clone()
+    target.x += this.cameraPan.x
+    target.y += this.cameraPan.y
+    this.camera.position.copy(pos)
+    this.camera.lookAt(target)
+  }
+
+  /**
+   * #26 头像导出：设 VRM 表情预设（neutral/happy/angry/sad/relaxed/surprised）。
+   *
+   * VRM 1.0 标准 emotion 集合（[VRMC_vrm-1.0 expressions.md]）；VRM 0.x 模型对应映射由 three-vrm
+   * 内部完成（'happy' ≈ 'joy'，'sad' ≈ 'sorrow'）。setValue 是累加权重模式，本方法
+   * 先清除其它 emotion 再设当前 → 给"select one"语义。
+   *
+   * 调 setValue 后无需手动 update —— RAF tick 里 vrm.update(dt) 链路会自动应用表情。
+   * value 范围 0-1；预设 UI 一般直接传 1（全权重）；传 0 等于关闭该表情。
+   *
+   * 诊断（M4）：首次调用 console.log 模型实际烘焙的 expression names，便于排查
+   * 旧 VRM（VRoid 0.x）或简化模型缺某些 emotion 时 UI radio 没反应的边角。
+   */
+  private expressionDiagnosticLogged = false
+  setExpression(name: 'neutral' | 'happy' | 'angry' | 'sad' | 'relaxed' | 'surprised', value = 1): void {
+    if (!this.vrm?.expressionManager) return
+    const em = this.vrm.expressionManager
+    if (!this.expressionDiagnosticLogged) {
+      this.expressionDiagnosticLogged = true
+      const names = em.expressions.map((e) => e.expressionName)
+      console.log(`[vrm] expression names baked in model: [${names.join(', ')}]`)
+      // 提示缺失的标准 emotion（仅 once；UI radio 选了找不到的表情时 setValue 静默 no-op）
+      const standard = ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised']
+      const missing = standard.filter((n) => !names.includes(n))
+      if (missing.length > 0) {
+        console.warn(
+          `[vrm] 模型未烘焙的表情: [${missing.join(', ')}] —— UI 选这些时会静默无变化（VRM 0.x 可能用 joy/sorrow/fun 等旧名）`,
+        )
+      }
+    }
+    // 先把其他 emotion 全清 0（互斥语义；blink / lookAt 不动）
+    const all: Array<'neutral' | 'happy' | 'angry' | 'sad' | 'relaxed' | 'surprised'> = [
+      'neutral',
+      'happy',
+      'angry',
+      'sad',
+      'relaxed',
+      'surprised',
+    ]
+    for (const e of all) {
+      if (e !== name) em.setValue(e, 0)
+    }
+    em.setValue(name, Math.max(0, Math.min(1, value)))
   }
 
   /** 通知 canvas / 窗口尺寸变化，重算渲染器 size 与相机宽高比。 */
@@ -330,6 +429,73 @@ export class VRMRuntime {
     this.cursorNdc = ndc
   }
 
+  /**
+   * 把当前帧渲染并以 PNG data URL 返回（#26 VRM 头像导出）。
+   *
+   * @param size 目标 PNG 边长（正方形）。可选；不传 = 用 canvas 当前 buffer 尺寸。
+   *
+   * 实现要点：
+   * - **同步 render → toDataURL**：WebView2/Chromium 在同步链内即可拿到 buffer，无需
+   *   preserveDrawingBuffer。任何 await / setTimeout 插入这两步之间都可能拿到空白。
+   * - **DPR 处理（H1 修复）**：init 时 `setPixelRatio(devicePixelRatio)`，setSize(N, N) 在
+   *   1.5×/2× DPR 下实际产生 N*dpr × N*dpr 的 PNG。截图前临时 setPixelRatio(1) 保证落盘
+   *   是精确 size×size；截图后恢复原 DPR 让预览渲染保持锐利。
+   * - **视线 / 表情归零**：cursorNdc 可能残留 + applyLookAt 是指数平滑，截图等不起几帧；
+   *   直接清 lookAtSmoothed + blink expression，给静态歇息相。其它 emotion（happy/sad
+   *   等用户主动设的）不动 —— 仅清 blink 的"无意识动作"。
+   * - **vrm.update(0)**：让 expression / lookAt 链路 settle 到归零状态，dt=0 不推进 breath。
+   *
+   * 返 'data:image/png;base64,...' 形式字符串。
+   */
+  captureSnapshot(size?: number): string {
+    if (!this.renderer || !this.scene || !this.camera || !this.vrm) {
+      throw new Error('VRM runtime not ready (init + loadModel must finish first)')
+    }
+
+    // H1 修复：临时降 pixelRatio 到 1，让 setSize(size,size) 输出真实 size×size buffer
+    const originalDpr = this.renderer.getPixelRatio()
+    const dprChanged = size !== undefined && originalDpr !== 1
+    // 记下原 buffer 尺寸（恢复用）
+    const originalSize = new THREE.Vector2()
+    this.renderer.getSize(originalSize)
+    const sizeChanged = size !== undefined && (originalSize.x !== size || originalSize.y !== size)
+
+    try {
+      if (dprChanged) {
+        this.renderer.setPixelRatio(1)
+      }
+      if (sizeChanged && size !== undefined) {
+        this.renderer.setSize(size, size, false)
+        this.camera.aspect = 1
+        this.camera.updateProjectionMatrix()
+      }
+
+      // 1) 视线归正（applyLookAt 指数平滑需几帧才回中，截图等不起）
+      this.cursorNdc = null
+      this.lookAtSmoothed.set(0, 0, 0)
+      if (this.lookAtTarget) this.lookAtTarget.position.set(0, 0, 0)
+      // 2) 清 blink 残留（其他 emotion 不动 —— 用户在 UI 主动选的表情保留）
+      const em = this.vrm.expressionManager
+      if (em) em.setValue('blink', 0)
+      // 3) update(0) 不推进 breath / blink countdown，仅让 lookAt / expression 链路 settle
+      this.vrm.update(0)
+      // 4) 同步 render → toDataURL，buffer 在同链内可读
+      this.renderer.render(this.scene, this.camera)
+      return this.renderer.domElement.toDataURL('image/png')
+    } finally {
+      // 恢复 dpr + size，确保 live 预览继续锐利渲染（finally 保证异常路径也复原）
+      if (dprChanged) {
+        this.renderer.setPixelRatio(originalDpr)
+      }
+      if (sizeChanged) {
+        this.renderer.setSize(originalSize.x, originalSize.y, false)
+        this.camera.aspect = originalSize.x / originalSize.y
+        this.camera.updateProjectionMatrix()
+      }
+    }
+  }
+
+
   /** 把 VRM 3D bbox 投影到 canvas 像素空间，给 Tauri hitbox 用 */
   getBounds(): AvatarBounds | null {
     if (!this.vrm || !this.camera || !this.renderer) return null
@@ -378,6 +544,24 @@ export class VRMRuntime {
     }
 
     return { x: minX, y: minY, width, height }
+  }
+
+  /** 暂停 RAF 循环（不卸载资源）；resumeLoop 恢复。idempotent（已暂停时 no-op）。
+   *  用例：#26 头像导出器在 settings tab 切走 / 窗口隐藏时，省 GPU/CPU 但保留加载好的 VRM。 */
+  pauseLoop(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
+      // 清掉 lastFrameMs，恢复后 dt 从 0 开始（避免大 dt 让 breath/blink 跳跃）
+      this.lastFrameMs = null
+    }
+  }
+
+  /** 恢复 RAF 循环（仅当已 init 且 VRM 已加载时有效）；idempotent。 */
+  resumeLoop(): void {
+    if (this.rafId !== null) return // 已在跑
+    if (!this.vrm || !this.renderer) return // 还没就绪，loadModel 完成时会自然 startLoop
+    this.startLoop()
   }
 
   destroy(): void {

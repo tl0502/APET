@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 # M1-D5 #5：接入 SQL（plugin + sqlx）+ frontmatter 解析 + ULID（messages.id）。
 # 业务依赖（reqwest / global-shortcut / 等）按 milestone 节奏后置：B.1 LLMProvider / N InteractionRouter / 等。
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -61,6 +61,12 @@ bytes = "1"
 # LlmTestRegistry.current —— 无 poison 概念让代码不再 .map_err(|e| ...)，且 panic
 # 后下次锁获取仍工作（std Mutex poison 后整个 chat / test 子系统永久死锁）。
 parking_lot = "0.12"
+
+# #25/#26 头像（user 上传 + VRM 导出）：
+# - tauri-plugin-dialog：前端 open() 弹原生文件选择框拿 PNG/JPG 路径（#25）
+# - base64：解 #26 PetCanvas.toDataURL('image/png') 的 data URL；STANDARD 引擎够用
+tauri-plugin-dialog = "2"
+base64 = "0.22"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

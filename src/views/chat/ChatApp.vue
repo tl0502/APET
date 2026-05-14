@@ -18,7 +18,7 @@
 // 后端 0 改动：active_streams 是 HashMap、run_stream 是 detached spawn、每个 chat_send
 // 自带 channel/conn —— 后端早已支持并发，只是前端单状态模型把它锁死了。
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElButton, ElIcon, ElMessageBox } from 'element-plus'
 import { Close, Expand, Fold } from '@element-plus/icons-vue'
 import type { UnlistenFn } from '@tauri-apps/api/event'
@@ -28,6 +28,7 @@ import ChatInput from '@/components/chat/ChatInput.vue'
 import ConversationSidebar from '@/components/chat/ConversationSidebar.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import { useToast } from '@/composables/useToast'
+import { useAvatarsStore } from '@/stores/avatars'
 import { useNicknameStore } from '@/stores/nickname'
 import {
   Channel,
@@ -49,6 +50,7 @@ import type { ConversationSummary, Message, StreamEvent } from '@/types/chat'
 
 const toast = useToast()
 const nicknameStore = useNicknameStore()
+const avatarsStore = useAvatarsStore()
 
 // === 状态模型 ===
 
@@ -83,8 +85,19 @@ const conversations = ref<ConversationSummary[]>([])
 const conversationId = ref<string | null>(null)
 /** P0 美化:会话栏折叠状态。默认展开,☰ 按钮切换。 */
 const sidebarCollapsed = ref(false)
-/** 头像加载失败:img onError 翻 true,降级到首字母占位圆。 */
+/** Header momo SVG 加载失败:img onError 翻 true,降级到首字母占位圆。
+ *  注:persona 自定义头像（avatarsStore.personaAvatarUrl）失败由独立 personaImgFailed 标记，
+ *  让"自定义 PNG 失败 → 退回 momo SVG → 再失败 → 退回 'M'"三层降级各自独立。
+ *  L5 修复：URL 变化时复位 failed flag（用户重新导出后新 URL 应重试，不被旧 fail 卡住）。 */
 const avatarFailed = ref(false)
+const personaImgFailed = ref(false)
+
+watch(
+  () => avatarsStore.personaAvatarUrl,
+  () => {
+    personaImgFailed.value = false
+  },
+)
 /** Header 副标题 micro-copy:替换通用"在线"文字。
  *  保持中性灰风格,无 emoji,语气拟人但克制。挂载时随机选一条(每窗口生命周期固定),
  *  桌宠"真正状态机"接入前的占位实现。 */
@@ -231,6 +244,15 @@ onMounted(async () => {
     await nicknameStore.ensureListener()
   } catch (e) {
     console.warn('[ChatApp] nickname store load failed:', e)
+  }
+
+  // #25/#26 头像 store：拉 KV + 挂 avatar:changed / persona:activated 跨窗口 listener。
+  // 失败仅 warn 不阻断；MessageBubble / header 会自动 fallback 到 momo SVG / 昵称首字符。
+  try {
+    if (!avatarsStore.loaded) await avatarsStore.load()
+    await avatarsStore.ensureListener()
+  } catch (e) {
+    console.warn('[ChatApp] avatars store load failed:', e)
   }
 
   const unPersona = await listen('persona:activated', async () => {
@@ -756,8 +778,17 @@ function msgOf(e: unknown): string {
 
           <div class="chat-header__identity">
             <div class="chat-header__avatar" aria-hidden="true">
+              <!-- 三层降级：persona 自定义 PNG（#26 导出）→ momo SVG → 'M' 字符
+                   onError 区分两层 flag，让"PNG 失败回退到 momo SVG"独立于"momo SVG 失败回退到字符" -->
               <img
-                v-if="!avatarFailed"
+                v-if="avatarsStore.personaAvatarUrl && !personaImgFailed"
+                :src="avatarsStore.personaAvatarUrl"
+                alt=""
+                class="chat-header__avatar-img"
+                @error="personaImgFailed = true"
+              />
+              <img
+                v-else-if="!avatarFailed"
                 src="/avatar/momo-avatar.svg"
                 alt=""
                 class="chat-header__avatar-img"

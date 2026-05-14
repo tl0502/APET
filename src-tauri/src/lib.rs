@@ -49,6 +49,8 @@ pub fn run() {
         // #11 全局快捷键 plugin：handler 由 register_internal 通过 on_shortcut 逐个绑定
         // （比 plugin 全局 with_handler 更可靠，详 services/shortcuts.rs::register_internal 注释）。
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // #25 文件选择对话框（用户头像上传：前端 open() 拿本地 PNG/JPG 路径）。
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             eprintln!("[setup] reached");
             // #11 ShortcutRegistry：先 manage 让 register_chat_on_startup 能拿到 state
@@ -316,6 +318,13 @@ pub fn run() {
             commands::consent::consent_grant,
             commands::consent::consent_check_version,
             commands::consent::consent_get_current_version,
+            // #25/#26 头像（user 上传 + persona VRM 导出）—— 落盘 <app_config>/avatars/
+            commands::avatars::user_avatar_set,
+            commands::avatars::user_avatar_clear,
+            commands::avatars::avatar_read_to_data_url,
+            commands::avatars::user_avatar_save_data_url,
+            commands::avatars::persona_avatar_save,
+            commands::avatars::persona_avatar_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
