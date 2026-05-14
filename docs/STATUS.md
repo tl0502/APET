@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-13
+updated: 2026-05-14
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -19,9 +19,9 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M1 W1-W2 代码层 18/18 + 美化补丁 [#27](https://github.com/tl0502/APET/issues/27) 完成，待行为层实测
-- **当前 session 在做**：—（[#27](https://github.com/tl0502/APET/issues/27) 三窗 design system 收尾已 commit + close）
-- **下一步**：新 session 行为层验收（6 步 onboarding e2e + LivingPet 视觉 + 性能速测三项 + 快捷键失败兜底 + 三窗美化实测）；过后跨入 M2 / [#22](https://github.com/tl0502/APET/issues/22)
+- **当前 milestone**：M1 收尾 + M2 头像增强（[#25](https://github.com/tl0502/APET/issues/25) + [#26](https://github.com/tl0502/APET/issues/26) 落地），下一步进入 M2 主体 [#22](https://github.com/tl0502/APET/issues/22)
+- **当前 session 在做**：—（#25 #26 已 commit + close）
+- **下一步**：M2 主体启动 → [#22](https://github.com/tl0502/APET/issues/22) C+D+E TaskService MVP（提醒 + 番茄 + 待办 + Scheduler + OS 通知）；或并行 [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互
 - **阻塞**：无
 
 ---
@@ -35,8 +35,10 @@ related:
 - W2 收尾 ✅ [#21](https://github.com/tl0502/APET/issues/21) Onboarding Step 2-6 + LivingPet 自由活动 + VRM 微动作
 - 美化补丁 ✅ [#27](https://github.com/tl0502/APET/issues/27) 三窗 design system 收尾（Apple/Bear neutral + Vercel）
 
-### M2 W3-W4（任务三件套 + 物理交互）— 待启动（0/2 计划 issue）
+### M2 W3-W4（任务三件套 + 物理交互）— 启动中（2/4 计划 issue）
 
+- ✅ [#25](https://github.com/tl0502/APET/issues/25) G: 用户头像上传 v2（cropperjs 圆形裁剪）
+- ✅ [#26](https://github.com/tl0502/APET/issues/26) A: VRM 头像导出（实时预览 + 表情/镜头 + DPR 安全）
 - [#22](https://github.com/tl0502/APET/issues/22) C+D+E TaskService MVP（提醒 + 番茄 + 待办 + Scheduler + OS 通知）
 - [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
