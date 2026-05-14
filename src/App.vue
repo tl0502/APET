@@ -6,19 +6,52 @@
 // #14 ChatPanel：listener 内 invoke('chat_toggle')（独立 chat 窗口可见性切换）。
 // #21 收尾 #2：mount 时查 getChatRegisterStatus 兜底"启动期快捷键注册失败"场景。emit 单走会
 // race（setup 内 emit 早于本 listener 挂），用 IPC 查 last_chat_error 留痕兜底。
-import { onBeforeUnmount, onMounted } from 'vue'
+// #24：pet 主窗是 view_preset 的唯一前端真相源 —— onMounted 拉 KV 初始化 view ref（后端 setup
+// 已 setSize，前端 ref 还要拉一次让 size computed 同步真值）；同时 listen `pet:view-changed`
+// 接 settings 改 preset 的反向通知。onboarding 窗用同款 PetCanvas 但不参与此体系（默认 half）。
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import AppShell from '@/components/layouts/AppShell.vue'
 import PetCanvas from '@/components/PetCanvas.vue'
 import { useToast } from '@/composables/useToast'
 import { getChatRegisterStatus } from '@/services/shortcut'
-import { showSettings, toggleChat } from '@/services/window'
+import {
+  PET_VIEW_CHANGED_EVENT,
+  PET_VIEW_SIZES,
+  getPetViewPreset,
+  showSettings,
+  toggleChat,
+} from '@/services/window'
+import type { PetViewPreset } from '@/services/window'
 import type { ShortcutChatPayload } from '@/types/shortcut'
+import type { AvatarView } from '@/services/vrm'
 
 const toast = useToast()
 let unlistenChat: UnlistenFn | null = null
+let unlistenViewChanged: UnlistenFn | null = null
+
+const view = ref<AvatarView>('half')
+const size = computed(() => PET_VIEW_SIZES[view.value])
+
+function asPreset(payload: unknown): PetViewPreset {
+  return payload === 'full' ? 'full' : 'half'
+}
 
 onMounted(async () => {
+  try {
+    view.value = await getPetViewPreset()
+  } catch (e) {
+    console.warn('[App] getPetViewPreset failed, fallback half:', e)
+  }
+
+  try {
+    unlistenViewChanged = await listen<string>(PET_VIEW_CHANGED_EVENT, (e) => {
+      view.value = asPreset(e.payload)
+    })
+  } catch (e) {
+    console.warn('[App] listen pet:view-changed failed:', e)
+  }
+
   unlistenChat = await listen<ShortcutChatPayload>('shortcut:chat', async () => {
     try {
       await toggleChat()
@@ -55,12 +88,13 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   unlistenChat?.()
+  unlistenViewChanged?.()
 })
 </script>
 
 <template>
   <AppShell variant="transparent">
-    <PetCanvas />
+    <PetCanvas :view="view" :size="size" />
   </AppShell>
 </template>
 

@@ -42,9 +42,11 @@ const VIEW_CONFIGS: Record<AvatarView, ViewConfig> = {
     cameraPos: new THREE.Vector3(0, 1.3, 1.5),
     cameraTarget: new THREE.Vector3(0, 1.3, 0),
   },
-  // 全身：相机看腰部 0.8m，距离 2.8；FOV 30° 下垂直视野 ≈1.5m，覆盖 0.05~1.55m 全身（标准 VRM ≈1.6m）
+  // 全身：相机看腰部 0.8m，距离 3.2；FOV 30° 下垂直视野 = 2 × 3.2 × tan(15°) ≈ 1.72m，
+  // 覆盖 -0.06~1.66m，标准 VRM (≈1.6m) 头脚均在画面内各留 ≈6cm 余量。
+  // （旧值距离 2.8 → 覆盖 0.05~1.55m，会切脚）
   full: {
-    cameraPos: new THREE.Vector3(0, 0.8, 2.8),
+    cameraPos: new THREE.Vector3(0, 0.8, 3.2),
     cameraTarget: new THREE.Vector3(0, 0.8, 0),
   },
 }

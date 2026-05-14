@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// PetCanvas：320×320 透明角色窗主画面（PRD §7.2 角色窗）。
+// PetCanvas：透明角色窗主画面（PRD §7.2 角色窗）。
 // M1 spike 阶段仅渲染 VRM；hitbox 上报推到后续 task（A.6）。
 // #10 拖动：pointerdown → getCurrentWindow().startDragging()（系统级拖动，OS 接管 mouse）。
 // 整窗 100% 可拖（无按钮容器 / 穿透按钮，M2 W3 控制按钮区上线时再加 [data-no-drag] 隔离）。
@@ -7,7 +7,12 @@
 // #16：复用到 onboarding 窗时通过 `:draggable="false"` 关掉拖动（onboarding 窗用系统 decorations
 // 标题栏拖动，且窗口固定不应被 webview 内 startDragging 移动）；并 emit `loaded`/`error` 让
 // SoulPledgeView 在 VRM 就绪 / 失败后再开播文案（用户拍板：等 isLoaded === true 再开播）。
-import { onBeforeUnmount, ref, watch } from 'vue'
+//
+// #24：尺寸不再硬编码 320×320。`size` prop 决定 canvas + container 实际像素；`view` prop
+// 决定相机取景。两者都由父级单一驱动（pet 主窗 App.vue 负责 listen `pet:view-changed` 改 ref，
+// 不让 PetCanvas 自己 listen 反向 emit 造成双 source —— onboarding 窗的 SoulPledgeView 用默认
+// 'half' + 320×320 不参与 view_preset 体系）。
+import { computed, ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useVRMModel } from '@/composables/useVRMModel'
 import { cancelWander } from '@/services/livingPet'
@@ -17,11 +22,14 @@ interface Props {
   draggable?: boolean
   /** 取景模式，'half'（默认，胸口以上）/ 'full'（全身）。运行期变化会触发 runtime.setView() */
   view?: AvatarView
+  /** 容器逻辑像素尺寸。默认 320×320（兼容 onboarding SoulPledgeView 不传场景）。 */
+  size?: { width: number; height: number }
 }
 
 const props = withDefaults(defineProps<Props>(), {
   draggable: true,
   view: 'half',
+  size: () => ({ width: 320, height: 320 }),
 })
 
 const emit = defineEmits<{
@@ -36,9 +44,11 @@ const MODEL_URL = '/avatar/avatar.vrm'
 
 const { isLoaded, errorMessage, runtime } = useVRMModel(canvasRef, MODEL_URL, props.view)
 
-// 父级运行期切视角（如 Settings 改"角色窗 → 视角"）：用 setView 平移相机，不重挂模型。
-// 注意：父级若同时改 canvas 尺寸（aspect ratio 联动），需自行调 runtime.resize()，
-// 或更简单地让本组件 :key 绑定到外部 size 上强制重 mount（M1 阶段尺寸固定，暂不需要）。
+const stageStyle = computed(() => ({
+  width: `${props.size.width}px`,
+  height: `${props.size.height}px`,
+}))
+
 watch(
   () => props.view,
   (v) => {
@@ -46,20 +56,12 @@ watch(
   },
 )
 
-// dev-only：按 V 键切换全身/半身视角，便于实测 full 视角参数（camera pos / lookAt fallback）。
-// vite import.meta.env.DEV 在 prod build 时为 false，整块会被 esbuild tree-shake 剥离 → 不进生产包。
-// 注意：和父组件 props.view 同步是单向的（dev 切换不通知父），M1 后由 Settings UI 接管，此 dev hook 可删除。
-if (import.meta.env.DEV) {
-  let devView: AvatarView = props.view
-  const onKeydown = (e: KeyboardEvent) => {
-    if (e.key.toLowerCase() !== 'v') return
-    devView = devView === 'half' ? 'full' : 'half'
-    runtime.setView(devView)
-    console.log(`[PetCanvas:dev] view toggled → ${devView}`)
-  }
-  window.addEventListener('keydown', onKeydown)
-  onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
-}
+watch(
+  () => [props.size.width, props.size.height] as const,
+  ([w, h]) => {
+    runtime.resize(w, h)
+  },
+)
 
 // 把 composable 的 ref 翻译成 event；SoulPledgeView 只关心"何时可以开播"
 // （成功 → loaded；失败 → error，view 也应开播，不能让 VRM 缺失卡死宣誓流程）。
@@ -114,11 +116,12 @@ function onPointerLeave() {
   <div
     class="pet-stage"
     :class="{ 'pet-stage--draggable': draggable }"
+    :style="stageStyle"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerleave="onPointerLeave"
   >
-    <canvas ref="canvasRef" class="pet-canvas" width="320" height="320"></canvas>
+    <canvas ref="canvasRef" class="pet-canvas"></canvas>
     <div v-if="!isLoaded && !errorMessage" class="hint">Loading VRM…</div>
     <div v-else-if="errorMessage" class="hint hint-error">
       VRM 加载失败：{{ errorMessage }}<br />
@@ -130,8 +133,7 @@ function onPointerLeave() {
 <style scoped>
 .pet-stage {
   position: relative;
-  width: 320px;
-  height: 320px;
+  /* width / height 由 :style="stageStyle" 注入（来自 props.size），#24 视角档位联动 */
 }
 
 /* draggable=true（pet 角色窗默认）：grab cursor 让透明像素也能接 pointerdown */
@@ -145,8 +147,8 @@ function onPointerLeave() {
 
 .pet-canvas {
   display: block;
-  width: 320px;
-  height: 320px;
+  width: 100%;
+  height: 100%;
 }
 
 .hint {

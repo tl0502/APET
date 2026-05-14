@@ -195,7 +195,22 @@ pub fn run() {
             app.manage(crate::services::consent_gate::ConsentGate::new(gate_open));
             // #10 桌宠位置还原：读 last_position（无则 fallback 主屏右下角偏左 80px）
             // + 当前 monitor 边界裁剪（16px 安全边距）。同步 block_on 与 seed_builtin 同款理由。
-            if let Err(e) = crate::services::window_state::apply_initial_position(app.handle()) {
+            //
+            // #24：先 apply_initial_view_preset 让窗口到正确尺寸，再 apply_initial_position
+            // 用同一组 (w,h) 显式 clamp（避免 setSize 后立即读 outer_size 的 Linux 异步 race）。
+            let (pet_w, pet_h) =
+                match crate::services::window_state::apply_initial_view_preset(app.handle()) {
+                    Ok(size) => size,
+                    Err(e) => {
+                        eprintln!(
+                            "[setup] apply_initial_view_preset failed, fallback to (320, 320): {e}"
+                        );
+                        (320.0, 320.0)
+                    }
+                };
+            if let Err(e) =
+                crate::services::window_state::apply_initial_position(app.handle(), pet_w, pet_h)
+            {
                 eprintln!("[setup] apply_initial_position failed: {e}");
             }
             // #10 Moved 防抖保存：高频 Moved 通过 200ms debounce 节流写 DB。
@@ -273,6 +288,9 @@ pub fn run() {
             commands::window::settings_hide,
             commands::window::get_pet_position,
             commands::window::save_pet_position,
+            // #24 视角档位（半身/全身）get/set
+            commands::window::get_pet_view_preset,
+            commands::window::set_pet_view_preset,
             commands::window::chat_show,
             commands::window::chat_hide,
             commands::window::chat_toggle,

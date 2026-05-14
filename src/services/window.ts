@@ -34,3 +34,30 @@ export function hideChat(): Promise<void> {
 export function toggleChat(): Promise<void> {
   return invoke<void>('chat_toggle')
 }
+
+/**
+ * #24 视角档位（pet 角色窗）。
+ * - 'half'：320×320 等比，相机看胸口（默认；对话/表情场景）
+ * - 'full'：320×512（1:1.6），相机看全身（装扮/动作场景）
+ *
+ * 跨窗口同步契约：set 后后端会广播 `pet:view-changed` 事件，pet 窗的 App.vue
+ * listen 该事件调 `runtime.setView()`；settings 自己不需要 listen（自身改的不用回灌）。
+ */
+export type PetViewPreset = 'half' | 'full'
+
+/** preset → 窗口逻辑像素尺寸。与 Rust `preset_to_size` 对齐（跨语言常量两份）。 */
+export const PET_VIEW_SIZES: Record<PetViewPreset, { width: number; height: number }> = {
+  half: { width: 320, height: 320 },
+  full: { width: 320, height: 512 },
+}
+
+/** 视角切换 Tauri event 名；后端 emit 时使用同名字面量。 */
+export const PET_VIEW_CHANGED_EVENT = 'pet:view-changed'
+
+export function getPetViewPreset(): Promise<PetViewPreset> {
+  return invoke<PetViewPreset>('get_pet_view_preset')
+}
+
+export function setPetViewPreset(preset: PetViewPreset): Promise<void> {
+  return invoke<void>('set_pet_view_preset', { preset })
+}

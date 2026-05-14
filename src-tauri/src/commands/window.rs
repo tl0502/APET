@@ -40,6 +40,23 @@ pub async fn save_pet_position(app: AppHandle, pos: LastPosition) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
+/// #24：读当前 view_preset（KV 不存在返回默认 "half"）。Settings 面板 onMounted 用。
+#[tauri::command]
+pub async fn get_pet_view_preset(app: AppHandle) -> Result<String, String> {
+    window_state::get_pet_view_preset(&app)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// #24：切换 view_preset。后端原子完成：写 KV → setSize → clamp 位置 → 写 last_position
+/// → emit `pet:view-changed`。前端只调一次本 IPC，pet 窗 PetCanvas listen event 调 setView。
+#[tauri::command]
+pub async fn set_pet_view_preset(app: AppHandle, preset: String) -> Result<(), String> {
+    window_state::apply_pet_view_preset(&app, &preset)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn chat_show(app: AppHandle) -> Result<(), String> {
     show_chat(&app);

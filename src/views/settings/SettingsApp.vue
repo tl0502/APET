@@ -29,7 +29,7 @@ provide('settings-active-tab', activeTab)
         <template #label>
           <span class="settings-tab__label">
             <ElIcon class="settings-tab__icon"><Brush /></ElIcon>
-            主题
+            外观
           </span>
         </template>
         <ThemePanel />

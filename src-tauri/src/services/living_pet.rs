@@ -31,7 +31,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::services::consent_gate::ConsentGate;
 use crate::services::window_actions::PET_WINDOW_LABEL;
-use crate::services::window_state::{PET_LOGICAL_H, PET_LOGICAL_W};
 
 /// 主状态机；M1 实际只有 Idle 路径有代码消费，其余 variant 给 M2-M3 接入用
 /// （FocusService 开启专注、GameService 进入 IN_GAME、TaskService REMIND、模块 K 摸鱼）。
@@ -225,9 +224,18 @@ const HOME_DRIFT_THRESHOLD_RATIO: f64 = 0.10;
 /// 0.7 = 偏离阈值的 2 倍时几乎"直奔 home"，避免桌宠在远端拐弯磨蹭。
 const HOME_PULL_WEIGHT_MAX: f64 = 0.7;
 
-/// 桌宠窗口逻辑尺寸:从 window_state 复用,避免两处 hardcoded 漂移（M2 改尺寸时单点改）。
-const PET_W: f64 = PET_LOGICAL_W;
-const PET_H: f64 = PET_LOGICAL_H;
+/// 桌宠窗口当前逻辑尺寸：每次 wander 调度时从 OS 读取（#24 视角档位动态化后，
+/// 静态 const 不再可用；OS 窗口本身是单一真相源，setSize 落地后 outer_size 即新值）。
+fn pet_logical_size<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    scale: f64,
+) -> Result<(f64, f64), String> {
+    let physical = window
+        .outer_size()
+        .map_err(|e| format!("outer_size: {e}"))?;
+    let logical = physical.to_logical::<f64>(scale);
+    Ok((logical.width, logical.height))
+}
 /// 边界裁剪安全边距，与 #10 apply_initial_position 一致。
 const SAFE_MARGIN: f64 = 16.0;
 
@@ -335,12 +343,14 @@ async fn run_wander<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let start = LogicalPosition::<f64>::from_physical(pos_physical, scale);
     let mon_size = monitor.size().to_logical::<f64>(scale);
     let mon_origin = monitor.position().to_logical::<f64>(scale);
+    // #24：pet 窗逻辑尺寸跟 view_preset 走，每次 wander 从 OS 读当前值（不再用 const）。
+    let (pet_w, pet_h) = pet_logical_size(&window, scale)?;
 
     // 边界 clamp 参数（每段都用得上，提前算好）
     let min_x = mon_origin.x + SAFE_MARGIN;
     let min_y = mon_origin.y + SAFE_MARGIN;
-    let max_x = mon_origin.x + mon_size.width - PET_W - SAFE_MARGIN;
-    let max_y = mon_origin.y + mon_size.height - PET_H - SAFE_MARGIN;
+    let max_x = mon_origin.x + mon_size.width - pet_w - SAFE_MARGIN;
+    let max_y = mon_origin.y + mon_size.height - pet_h - SAFE_MARGIN;
     // monitor 太小（小于桌宠 + safe margin × 2）时 max < min，用 min.min/max 兜底防 NaN
     let bounds_x = (min_x.min(max_x), min_x.max(max_x));
     let bounds_y = (min_y.min(max_y), min_y.max(max_y));
