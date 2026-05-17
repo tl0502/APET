@@ -142,6 +142,7 @@ pub async fn create<R: Runtime>(
     let priority = input.priority.as_deref().unwrap_or("soft").to_string();
     validate_priority(&priority)?;
     validate_trigger(&input.trigger_type, &input.trigger_spec)?;
+    validate_trigger_future(&input.trigger_type, &input.trigger_spec)?;
 
     let id = Ulid::new().to_string();
     let now = Utc::now();
@@ -186,6 +187,15 @@ pub async fn update<R: Runtime>(
     let mut conn = open_app_db(app).await?;
     let mut r = get_with_conn(&mut conn, &id).await?;
 
+    // P0-1 修复（2026-05-17 review #22）:
+    // 旧版无条件 `snooze_count=0` 并重算 next_fire_at —— 用户改个标题就会清空 snooze 链；
+    // 更糟：一条已 fire 过的 once（trigger_spec 在过去）改标题保存 → compute_next_fire_at
+    // 返 None → next_fire_at=NULL 但 enabled 保持 → "启用但永不触发"僵尸态。
+    // 新策略：只在触发参数或 enabled 实际变化时才重算 next + 重置 snooze；纯改 title/priority
+    // 保留 snooze 链与 next_fire_at。
+    let trigger_changed = input.trigger_type.is_some() || input.trigger_spec.is_some();
+    let enabled_changed = matches!(input.enabled, Some(v) if v != r.enabled);
+
     if let Some(v) = input.title {
         r.title = v;
     }
@@ -203,32 +213,51 @@ pub async fn update<R: Runtime>(
         r.enabled = v;
     }
 
-    validate_trigger(&r.trigger_type, &r.trigger_spec)?;
+    // 只有触发参数变化时才做格式 + future 校验；编辑已 fire 过的 once（trigger_spec 在过去）
+    // 改标题不应被拦。
+    if trigger_changed {
+        validate_trigger(&r.trigger_type, &r.trigger_spec)?;
+        validate_trigger_future(&r.trigger_type, &r.trigger_spec)?;
+    }
 
     let now = Utc::now();
     let now_str = now.to_rfc3339();
-    // update 改触发参数 → 重置 snooze_count 并重算 next_fire_at；enabled=false 时清空 next。
-    let next = if r.enabled {
-        compute_next_fire_at(&r.trigger_type, &r.trigger_spec, now)?
-    } else {
-        None
-    };
-    let next_str = next.map(|dt| dt.to_rfc3339());
 
-    sqlx::query(
-        r#"UPDATE reminders SET title=?, trigger_type=?, trigger_spec=?, priority=?,
-           enabled=?, next_fire_at=?, snooze_count=0, updated_at=? WHERE id=?"#,
-    )
-    .bind(&r.title)
-    .bind(&r.trigger_type)
-    .bind(&r.trigger_spec)
-    .bind(&r.priority)
-    .bind(if r.enabled { 1 } else { 0 })
-    .bind(&next_str)
-    .bind(&now_str)
-    .bind(&id)
-    .execute(&mut conn)
-    .await?;
+    if trigger_changed || enabled_changed {
+        // 重算 next + 重置 snooze（语义上 anchor 重置）。enabled=false → 清空 next。
+        let next = if r.enabled {
+            compute_next_fire_at(&r.trigger_type, &r.trigger_spec, now)?
+        } else {
+            None
+        };
+        let next_str = next.map(|dt| dt.to_rfc3339());
+
+        sqlx::query(
+            r#"UPDATE reminders SET title=?, trigger_type=?, trigger_spec=?, priority=?,
+               enabled=?, next_fire_at=?, snooze_count=0, updated_at=? WHERE id=?"#,
+        )
+        .bind(&r.title)
+        .bind(&r.trigger_type)
+        .bind(&r.trigger_spec)
+        .bind(&r.priority)
+        .bind(if r.enabled { 1 } else { 0 })
+        .bind(&next_str)
+        .bind(&now_str)
+        .bind(&id)
+        .execute(&mut conn)
+        .await?;
+    } else {
+        // 纯改 title/priority —— 保留 snooze_count、next_fire_at、enabled 不动。
+        sqlx::query(
+            "UPDATE reminders SET title=?, priority=?, updated_at=? WHERE id=?",
+        )
+        .bind(&r.title)
+        .bind(&r.priority)
+        .bind(&now_str)
+        .bind(&id)
+        .execute(&mut conn)
+        .await?;
+    }
 
     let out = get_with_conn(&mut conn, &id).await?;
     conn.close().await?;
@@ -359,10 +388,22 @@ pub(crate) async fn find_due<R: Runtime>(
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-/// 触发一条 reminder：写 history + 推进 next_fire_at + emit + OS notification。
+/// 触发一条 reminder：CAS 推进 next_fire_at + 写 history + emit + OS notification。
 ///
-/// 顺序：先写 history 提交（推进 anchor 防重入）→ 再 emit + notification（best-effort，
-/// 失败仅 log，不 rollback——history 已经标记触发；用户已经看到对话/列表里的状态变化）。
+/// 并发安全（fire-fire 竞态修复，2026-05-17 review #22）:
+/// UPDATE 用 `WHERE id=? AND next_fire_at=?` 做 CAS（compare-and-swap），把当前读到的
+/// `next_fire_at` 作为 token。两个并发 fire 拿到同一 token，只有第一个能把 rows_affected
+/// 写成 1；第二个 WHERE 子句不匹配（next_fire_at 已被推进），rows_affected=0 → 视为
+/// no-op 回滚。比单进程 Mutex 简洁、无死锁风险，且不需要新增 schema 列。
+/// 参考：Microsoft.Data.Sqlite Transactions 文档 / EF Core Concurrency 章节标准范式。
+///
+/// 事务一体性（P2-6 修复）:
+/// CAS UPDATE 与 history INSERT 在同一 `conn.begin()` 事务里。任一失败 → drop 自动回滚，
+/// 避免"history 已写但 anchor 未推进"或反过来的半失败状态。
+///
+/// snooze_count 归零（P0-2 修复）:
+/// 推进 anchor 时一并 `snooze_count=0` —— snooze 链是 per-anchor 语义（ADR-014 /
+/// UAT-Reminder-3），recurring 跨次触发不应保留上次 anchor 的累计 snooze。
 pub(crate) async fn fire<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), ReminderError> {
     let mut conn = open_app_db(app).await?;
     let r = get_with_conn(&mut conn, id).await?;
@@ -372,10 +413,52 @@ pub(crate) async fn fire<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(),
         return Ok(());
     }
 
+    // CAS token：本次读到的 next_fire_at。NULL → 无 anchor 可推进（理论不该发生，但稳健）。
+    let old_next = match r.next_fire_at.clone() {
+        Some(s) => s,
+        None => {
+            conn.close().await?;
+            return Ok(());
+        }
+    };
+
     let now = Utc::now();
     let now_str = now.to_rfc3339();
 
-    // 1. 写 history：action='ignored' 是"已触发未操作"占位。用户后续点完成/稍后会写新行。
+    // 算新 anchor 与 enabled 状态。compute 失败 → 不写任何 DB（旧版会留 ignored history 但
+    // 未推进 anchor，next 次 find_due 仍会捞出 → 死循环；新版整体回滚干净）。
+    let (new_next, new_enabled) = match r.trigger_type.as_str() {
+        "once" => (None, false),
+        _ => {
+            let next = compute_next_fire_at(&r.trigger_type, &r.trigger_spec, now)?;
+            (next.map(|dt| dt.to_rfc3339()), true)
+        }
+    };
+
+    // 事务 + CAS
+    let mut tx = conn.begin().await?;
+
+    let res = sqlx::query(
+        "UPDATE reminders SET next_fire_at=?, enabled=?, snooze_count=0, updated_at=?
+         WHERE id=? AND next_fire_at=?",
+    )
+    .bind(&new_next)
+    .bind(if new_enabled { 1 } else { 0 })
+    .bind(&now_str)
+    .bind(id)
+    .bind(&old_next)
+    .execute(&mut *tx)
+    .await?;
+
+    if res.rows_affected() == 0 {
+        // 并发的另一个 fire（polling vs eager）已经推进 anchor → 本次 no-op。
+        // tx drop 自动 rollback，显式调一下表达意图。
+        tx.rollback().await?;
+        conn.close().await?;
+        return Ok(());
+    }
+
+    // history.action='ignored' 是"已触发未操作"占位；后续 snooze/complete 会写新行。
     //    与 telemetry UAT-Reminder-3 中"用户主动忽略"语义略有 overlap，但 M2 范围内本字段
     //    仅作"已触发"标记，详 #22 PR commit message 登记。
     sqlx::query(
@@ -384,31 +467,10 @@ pub(crate) async fn fire<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(),
     .bind(id)
     .bind(&now_str)
     .bind(r.snooze_count as i64)
-    .execute(&mut conn)
+    .execute(&mut *tx)
     .await?;
 
-    // 2. 推进 next_fire_at：once → 清空 + 禁用；recurring → 重算下次。
-    match r.trigger_type.as_str() {
-        "once" => {
-            sqlx::query(
-                "UPDATE reminders SET enabled=0, next_fire_at=NULL, updated_at=? WHERE id=?",
-            )
-            .bind(&now_str)
-            .bind(id)
-            .execute(&mut conn)
-            .await?;
-        }
-        _ => {
-            let next = compute_next_fire_at(&r.trigger_type, &r.trigger_spec, now)?;
-            let next_str = next.map(|dt| dt.to_rfc3339());
-            sqlx::query("UPDATE reminders SET next_fire_at=?, updated_at=? WHERE id=?")
-                .bind(&next_str)
-                .bind(&now_str)
-                .bind(id)
-                .execute(&mut conn)
-                .await?;
-        }
-    }
+    tx.commit().await?;
     conn.close().await?;
 
     // 3. emit + OS notification（best-effort）。
@@ -478,44 +540,50 @@ pub async fn catch_up_overdue<R: Runtime>(
             Err(_) => continue,
         };
 
-        if next_dt < cutoff {
-            // > 30min：标 overdue + 推进 anchor（once → 禁用）。
-            sqlx::query(
-                "INSERT INTO reminder_history (reminder_id, fired_at, action, snooze_count) VALUES (?, ?, 'overdue', 0)",
-            )
-            .bind(&id)
-            .bind(&next_fire_at)
-            .execute(&mut conn)
-            .await?;
+        // P2-5 修复（2026-05-17 review #22）:
+        // 两类都写 history + 推进 anchor —— 否则 scheduler 5s 后启动 polling 会再次
+        // find_due 捞到，对 merged 项产生 toast + bubble 双重通知。区分只体现在分类
+        // （是否发 catch_up toast）与 history.action 值上。
+        let action_label = if next_dt < cutoff { "overdue" } else { "catch_up" };
 
-            match trigger_type.as_str() {
-                "once" => {
-                    sqlx::query(
-                        "UPDATE reminders SET enabled=0, next_fire_at=NULL, updated_at=? WHERE id=?",
-                    )
-                    .bind(&now_str)
-                    .bind(&id)
-                    .execute(&mut conn)
-                    .await?;
-                }
-                _ => {
-                    let next = compute_next_fire_at(&trigger_type, &trigger_spec, now)
-                        .ok()
-                        .flatten();
-                    let next_str = next.map(|dt| dt.to_rfc3339());
-                    sqlx::query(
-                        "UPDATE reminders SET next_fire_at=?, updated_at=? WHERE id=?",
-                    )
-                    .bind(&next_str)
-                    .bind(&now_str)
-                    .bind(&id)
-                    .execute(&mut conn)
-                    .await?;
-                }
+        sqlx::query(
+            "INSERT INTO reminder_history (reminder_id, fired_at, action, snooze_count) VALUES (?, ?, ?, 0)",
+        )
+        .bind(&id)
+        .bind(&next_fire_at)
+        .bind(action_label)
+        .execute(&mut conn)
+        .await?;
+
+        match trigger_type.as_str() {
+            "once" => {
+                sqlx::query(
+                    "UPDATE reminders SET enabled=0, next_fire_at=NULL, snooze_count=0, updated_at=? WHERE id=?",
+                )
+                .bind(&now_str)
+                .bind(&id)
+                .execute(&mut conn)
+                .await?;
             }
+            _ => {
+                let next = compute_next_fire_at(&trigger_type, &trigger_spec, now)
+                    .ok()
+                    .flatten();
+                let next_str = next.map(|dt| dt.to_rfc3339());
+                sqlx::query(
+                    "UPDATE reminders SET next_fire_at=?, snooze_count=0, updated_at=? WHERE id=?",
+                )
+                .bind(&next_str)
+                .bind(&now_str)
+                .bind(&id)
+                .execute(&mut conn)
+                .await?;
+            }
+        }
+
+        if next_dt < cutoff {
             overdue += 1;
         } else {
-            // ≤ 30min：merge 给前端展示一条合并 toast。
             merged.push(CatchUpItem {
                 reminder_id: id,
                 title,
@@ -571,6 +639,27 @@ fn validate_trigger(t: &str, spec: &str) -> Result<(), ReminderError> {
             "unknown trigger_type: {other}"
         ))),
     }
+}
+
+/// 额外校验：once 的 spec 必须在未来。仅在"用户提交了新的触发参数"路径上调用（create
+/// 全调；update 只有当 trigger_type/trigger_spec 实际变化时才调）。这样编辑一条已 fire
+/// 过的 once（trigger_spec 必然在过去）改标题不会被误拦。
+///
+/// P1-4 修复：原 validate_trigger 不查 once 是否在过去，导致用户能 create 一条
+/// trigger_spec=过去时刻的 reminder，compute_next_fire_at 返 None → next_fire_at=NULL
+/// + enabled=1 的"启用但永不触发"僵尸态，用户无任何提示。
+fn validate_trigger_future(t: &str, spec: &str) -> Result<(), ReminderError> {
+    if t == "once" {
+        let dt = DateTime::parse_from_rfc3339(spec)
+            .map_err(|e| ReminderError::InvalidTrigger(format!("once trigger_spec must be RFC3339: {e}")))?
+            .with_timezone(&Utc);
+        if dt <= Utc::now() {
+            return Err(ReminderError::InvalidTrigger(
+                "once trigger_spec must be in the future".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -830,5 +919,28 @@ mod tests {
         // 距离至少 22h（即明天附近的同时刻）
         let delta = next - now;
         assert!(delta.num_minutes() >= 22 * 60);
+    }
+
+    #[test]
+    fn validate_trigger_future_rejects_past_once() {
+        // P1-4: 过去的 once 必须被拒
+        let past_iso = (Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        assert!(validate_trigger_future("once", &past_iso).is_err());
+        // 正好等于 now 也应拒（边界含义：必须严格未来）
+        let now_iso = Utc::now().to_rfc3339();
+        assert!(validate_trigger_future("once", &now_iso).is_err());
+    }
+
+    #[test]
+    fn validate_trigger_future_accepts_future_once() {
+        let future_iso = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert!(validate_trigger_future("once", &future_iso).is_ok());
+    }
+
+    #[test]
+    fn validate_trigger_future_ignores_daily() {
+        // daily 永远 OK（不论 HH:MM 是否已过；compute_next_fire_at 会自动跳到明天）
+        assert!(validate_trigger_future("daily", "09:00").is_ok());
+        assert!(validate_trigger_future("daily", "*/30 * *").is_ok());
     }
 }

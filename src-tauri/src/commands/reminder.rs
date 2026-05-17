@@ -50,7 +50,8 @@ pub async fn reminder_update(
 #[tauri::command]
 pub async fn reminder_delete(app: AppHandle, id: String) -> Result<(), String> {
     reminder::delete(&app, id).await.map_err(|e| e.to_string())?;
-    // delete 后不需要 eager check（heap 里的 timer 自然被 polling 下次扫描清掉）。
+    // delete 后不需要 eager check：polling 下次 tick 直接走 WHERE enabled=1 过滤，
+    // 已删的记录自然不在结果集里。
     Ok(())
 }
 

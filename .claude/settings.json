@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm remove *)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(echo \"EXIT_CODE=$?\")"
+    ]
+  }
+}
