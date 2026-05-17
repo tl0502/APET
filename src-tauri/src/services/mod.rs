@@ -41,6 +41,10 @@ pub mod onboarding_announcement;
 pub mod living_pet;
 pub mod persona;
 pub mod preferences;
+// #22 ReminderService：提醒 CRUD + 触发 + 启动 catch-up（schema 见 migrations/001_init.sql:99-120）。
+pub mod reminder;
+// #22 Scheduler 公共抽象：BinaryHeap 单 tokio task；#28 番茄 / #29 待办 / M3 IdleDetector 复用。
+pub mod scheduler;
 pub mod shortcuts;
 pub mod window_state;
 

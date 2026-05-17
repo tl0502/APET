@@ -16,6 +16,8 @@ pub mod memory;
 pub mod nickname;
 pub mod onboarding;
 pub mod persona;
+// #22 reminder IPC（6 命令：create/list/update/delete/snooze/complete）。
+pub mod reminder;
 pub mod shortcuts;
 pub mod system;
 pub mod window;

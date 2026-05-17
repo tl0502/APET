@@ -13,6 +13,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import AppShell from '@/components/layouts/AppShell.vue'
 import PetCanvas from '@/components/PetCanvas.vue'
+import PetReminderBubble from '@/components/PetReminderBubble.vue'
 import { useToast } from '@/composables/useToast'
 import { getChatRegisterStatus } from '@/services/shortcut'
 import {
@@ -95,6 +96,7 @@ onBeforeUnmount(() => {
 <template>
   <AppShell variant="transparent">
     <PetCanvas :view="view" :size="size" />
+    <PetReminderBubble />
   </AppShell>
 </template>
 

@@ -35,6 +35,19 @@ export function toggleChat(): Promise<void> {
   return invoke<void>('chat_toggle')
 }
 
+/** #22 任务窗口（提醒/番茄/待办）show/hide/toggle。与 settings 同款"关 = hide"。 */
+export function showTasks(): Promise<void> {
+  return invoke<void>('tasks_show')
+}
+
+export function hideTasks(): Promise<void> {
+  return invoke<void>('tasks_hide')
+}
+
+export function toggleTasks(): Promise<void> {
+  return invoke<void>('tasks_toggle')
+}
+
 /**
  * #24 视角档位（pet 角色窗）。
  * - 'half'：320×320 等比，相机看胸口（默认；对话/表情场景）

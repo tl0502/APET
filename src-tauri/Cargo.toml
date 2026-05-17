@@ -68,6 +68,10 @@ parking_lot = "0.12"
 tauri-plugin-dialog = "2"
 base64 = "0.22"
 
+# #22 ReminderService：Tauri 2 OS 通知（前端 sendNotification + Rust 端 NotificationExt 双通道）。
+# capability 须显式 allow `notification:default`（lesson #1 显式 allow 原则）。
+tauri-plugin-notification = "2"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 

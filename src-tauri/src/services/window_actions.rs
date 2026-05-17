@@ -19,6 +19,9 @@ pub const CHAT_WINDOW_LABEL: &str = "chat";
 /// 灵魂宣誓窗口 label（与 tauri.conf.json 静态注册一致；issue #16）。
 /// 启动期 visible:false；setup hook 调 consent::check_version 后决定是否 show。
 pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
+/// 任务三件套窗口 label（与 tauri.conf.json 静态注册一致；issue #22）。
+/// 启动期 visible:false；由托盘菜单"任务"/IPC tasks_show 唤起；与 settings 同款"关 = hide"。
+pub const TASKS_WINDOW_LABEL: &str = "tasks";
 
 /// 进程级闸门读取。state 未 manage（setup 早期 / 极端 dev 路径）时保守返 false。
 fn is_gate_open(app: &AppHandle) -> bool {
@@ -136,5 +139,43 @@ pub(crate) fn show_onboarding(app: &AppHandle) {
 pub(crate) fn hide_onboarding(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
         let _ = window.hide();
+    }
+}
+
+/// 显示任务窗口（#22 TaskService）。`visible:false` 静态注册，由托盘"任务"/IPC tasks_show 唤起。
+pub(crate) fn show_tasks(app: &AppHandle) {
+    if !is_gate_open(app) {
+        show_onboarding(app);
+        return;
+    }
+    if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// 隐藏任务窗口（不销毁，保留 tab/列表状态供下次唤起，同 settings 模式）。
+pub(crate) fn hide_tasks(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
+        let _ = window.hide();
+    }
+}
+
+/// 切换任务窗口可见性（托盘菜单一键开/关；与 chat_toggle 同款）。
+pub(crate) fn toggle_tasks(app: &AppHandle) {
+    if !is_gate_open(app) {
+        show_onboarding(app);
+        return;
+    }
+    if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
+        match window.is_visible() {
+            Ok(true) => {
+                let _ = window.hide();
+            }
+            _ => {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
     }
 }

@@ -20,6 +20,7 @@ use crate::services::window_actions::{self, PET_WINDOW_LABEL};
 
 const MENU_ID_SHOW_HIDE: &str = "tray:show-hide";
 const MENU_ID_SETTINGS: &str = "tray:settings";
+const MENU_ID_TASKS: &str = "tray:tasks";
 const MENU_ID_QUIT: &str = "tray:quit";
 
 const TOOLTIP: &str = "AI 桌宠";
@@ -49,11 +50,14 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         MenuItemBuilder::with_id(MENU_ID_SHOW_HIDE, current_label(app)).build(app)?;
     // #9 设置面板上线 → 激活菜单项；点击走 window_actions::show_settings（show + set_focus）。
     let settings_item = MenuItemBuilder::with_id(MENU_ID_SETTINGS, "设置...").build(app)?;
+    // #22 任务三件套：托盘"任务..."入口，点击唤起独立 tasks 窗。
+    let tasks_item = MenuItemBuilder::with_id(MENU_ID_TASKS, "任务...").build(app)?;
     let quit_item = MenuItemBuilder::with_id(MENU_ID_QUIT, "退出").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&show_hide_item)
         .separator()
+        .item(&tasks_item)
         .item(&settings_item)
         .separator()
         .item(&quit_item)
@@ -78,6 +82,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                 window_actions::toggle_pet(app);
                 refresh_label(app, &show_hide_for_menu);
             }
+            MENU_ID_TASKS => window_actions::show_tasks(app),
             MENU_ID_SETTINGS => window_actions::show_settings(app),
             MENU_ID_QUIT => app.exit(0),
             _ => {}

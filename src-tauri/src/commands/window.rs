@@ -9,7 +9,8 @@
 use crate::services::consent_gate::ConsentGate;
 use crate::services::onboarding;
 use crate::services::window_actions::{
-    hide_chat, hide_onboarding, hide_settings, show_chat, show_pet, show_settings, toggle_chat,
+    hide_chat, hide_onboarding, hide_settings, hide_tasks, show_chat, show_pet, show_settings,
+    show_tasks, toggle_chat, toggle_tasks,
 };
 use crate::services::window_state::{self, LastPosition};
 use tauri::{AppHandle, Emitter, Manager};
@@ -72,6 +73,25 @@ pub async fn chat_hide(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn chat_toggle(app: AppHandle) -> Result<(), String> {
     toggle_chat(&app);
+    Ok(())
+}
+
+/// #22 任务窗口（提醒/番茄/待办三件套）show/hide/toggle。与 settings 同款"关 = hide"。
+#[tauri::command]
+pub async fn tasks_show(app: AppHandle) -> Result<(), String> {
+    show_tasks(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tasks_hide(app: AppHandle) -> Result<(), String> {
+    hide_tasks(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tasks_toggle(app: AppHandle) -> Result<(), String> {
+    toggle_tasks(&app);
     Ok(())
 }
 

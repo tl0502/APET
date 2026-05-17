@@ -1,0 +1,63 @@
+/* tasks 窗专用全局样式（issue #22）— 仿 settings.css.
+   - dot-grid 背景 + AppShell standalone overrides + prefers-reduced-motion 兜底
+   - 不强制 user-select:none（用户可拷贝提醒文本）
+*/
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--aipet-color-bg);
+  color: var(--aipet-color-text-1);
+  overflow: hidden;
+  font-family: var(--aipet-font-family-base);
+}
+
+html.dark,
+html.dark body,
+html.dark #app {
+  background: var(--aipet-color-bg);
+}
+
+/* dot-grid 背景（与 settings/chat/onboarding 一致） */
+#app {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 25%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  background-position: 0 0;
+}
+
+html.dark #app {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 30%, transparent) 1px,
+    transparent 1px
+  );
+}
+
+/* AppShell standalone overrides（同 settings.css） */
+.aipet-shell--standalone .aipet-shell__header {
+  padding: var(--aipet-space-2) var(--aipet-space-3);
+  background: var(--aipet-color-bg);
+  border-bottom: 1px solid var(--aipet-color-border);
+}
+
+.aipet-shell--standalone .aipet-shell__body {
+  padding: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

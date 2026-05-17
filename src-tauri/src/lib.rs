@@ -8,6 +8,7 @@ mod services;
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
     CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL,
+    TASKS_WINDOW_LABEL,
 };
 use services::window_state::SaveDebouncer;
 use tauri::Manager;
@@ -51,6 +52,9 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // #25 文件选择对话框（用户头像上传：前端 open() 拿本地 PNG/JPG 路径）。
         .plugin(tauri_plugin_dialog::init())
+        // #22 OS 通知（Rust 端 NotificationExt 主要消费方；capability default.json 显式
+        // allow `notification:default` 同步配置——lesson #1）。
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             eprintln!("[setup] reached");
             // #11 ShortcutRegistry：先 manage 让 register_chat_on_startup 能拿到 state
@@ -223,6 +227,26 @@ pub fn run() {
             // dev 期实测设 env LIVING_PET_DEV_INTERVAL=5（秒）可强制 5s 间隔。
             app.manage(crate::services::living_pet::LivingPet::default());
             crate::services::living_pet::start_scheduler(app.handle().clone());
+            // #22 ReminderService 启动期：① catch-up overdue（30min 内合并 / 超过标 overdue）→
+            // ② scheduler 5s polling task 启动。两者都在 ConsentGate manage 后，gate=false 时
+            // catch-up 仍跑（让 reminder_history 一致），但前端 emit 给 onboarding 窗也无 listener
+            // ——合理。scheduler tick 内部会按 gate_open 短路。失败仅 eprintln 不阻断启动。
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::block_on(async move {
+                    match crate::services::reminder::catch_up_overdue(&app_handle).await {
+                        Ok(report) if report.merged_count + report.overdue_count > 0 => {
+                            eprintln!(
+                                "[reminder] catch-up: {} merged, {} overdue",
+                                report.merged_count, report.overdue_count
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[reminder] catch_up_overdue failed: {e}"),
+                    }
+                });
+            }
+            crate::services::scheduler::start(app.handle().clone());
             Ok(())
         })
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
@@ -250,6 +274,7 @@ pub fn run() {
                     } else if label == PET_WINDOW_LABEL
                         || label == SETTINGS_WINDOW_LABEL
                         || label == CHAT_WINDOW_LABEL
+                        || label == TASKS_WINDOW_LABEL
                     {
                         api.prevent_close();
                         let _ = window.hide();
@@ -343,6 +368,17 @@ pub fn run() {
             commands::avatars::user_avatar_save_data_url,
             commands::avatars::persona_avatar_save,
             commands::avatars::persona_avatar_clear,
+            // #22 ReminderService（6 IPC）— architecture §604 命名 lock；防重入 + scheduler 联动
+            commands::reminder::reminder_create,
+            commands::reminder::reminder_list,
+            commands::reminder::reminder_update,
+            commands::reminder::reminder_delete,
+            commands::reminder::reminder_snooze,
+            commands::reminder::reminder_complete,
+            // #22 Tasks 独立窗口 show/hide/toggle（与 settings 同款"关 = hide"）
+            commands::window::tasks_show,
+            commands::window::tasks_hide,
+            commands::window::tasks_toggle,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
