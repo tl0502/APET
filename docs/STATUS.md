@@ -19,11 +19,11 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（提醒核心已落地，番茄/待办/物理交互/人格工坊待办）
-- **当前 session 在做**：—（[#22](https://github.com/tl0502/APET/issues/22) 已 commit `6419352` + close + closing comment）
-- **下一步**：[#28](https://github.com/tl0502/APET/issues/28) 番茄 + wall-clock drift（继承 #22 Scheduler 抽象）；或并行 [#23](https://github.com/tl0502/APET/issues/23) 物理交互
+- **当前 milestone**：M2 W3 进行中（提醒 + 番茄已落地，待办/物理交互/人格工坊待办）
+- **当前 session 在做**：—（[#28](https://github.com/tl0502/APET/issues/28) 3 commits 已落 `f8ddea9`+`b17e8ce`+`c1939c4`，准备 close + closing comment）
+- **下一步**：[#29](https://github.com/tl0502/APET/issues/29) 待办 + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位；或并行 [#23](https://github.com/tl0502/APET/issues/23) 物理交互
 - **阻塞**：无
-- **展示窗口**：~10 天后产品展示。M2 核心三件套预计 #28 + #29 收尾后能演示「设置提醒 → OS 通知 + 桌宠头顶气泡 双通道」完整 demo
+- **展示窗口**：~10 天后产品展示。M2 三件套 #22 + #28 已就位，10 天 demo 链路完整：「设置提醒 → 启动番茄 → FOCUS 期硬提醒打断 / 软提醒缓冲 → REST 时合并展示」端到端可演
 
 ---
 
@@ -36,12 +36,12 @@ related:
 - W2 收尾 ✅ [#21](https://github.com/tl0502/APET/issues/21) Onboarding Step 2-6 + LivingPet 自由活动 + VRM 微动作
 - 美化补丁 ✅ [#27](https://github.com/tl0502/APET/issues/27) 三窗 design system 收尾（Apple/Bear neutral + Vercel）
 
-### M2 W3-W4（任务三件套 + 物理交互 + 人格工坊）— 进行中（3/6 完成）
+### M2 W3-W4（任务三件套 + 物理交互 + 人格工坊）— 进行中（4/6 完成）
 
 - ✅ [#25](https://github.com/tl0502/APET/issues/25) G: 用户头像上传 v2（cropperjs 圆形裁剪）
 - ✅ [#26](https://github.com/tl0502/APET/issues/26) A: VRM 头像导出（实时预览 + 表情/镜头 + DPR 安全）
 - ✅ [#22](https://github.com/tl0502/APET/issues/22) C: ReminderService MVP（6 IPC + Scheduler 5s polling + OS 通知 + 桌宠气泡 + Tasks 独立窗）
-- ⏳ [#28](https://github.com/tl0502/APET/issues/28) D: PomodoroService MVP（番茄钟 + wall-clock drift 校准；从原 #22 拆出）
+- ✅ [#28](https://github.com/tl0502/APET/issues/28) D: PomodoroService MVP（5 IPC + drift 校准 + Scheduler 1s + FOCUS 期协作: hard 打断/soft 缓冲 + LivingPet wander 跳过）
 - ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
