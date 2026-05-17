@@ -3,7 +3,7 @@
 //
 // - AppShell variant='standalone' 提供 [data-tauri-drag-region] header
 // - ElTabs tab-position='left' 横排左侧栏（与 SettingsApp 同款）
-// - 3 个 tab：提醒（M2 完整）/ 番茄（占位 #28 → disabled）/ 待办（占位 #29 → disabled）
+// - 3 个 tab：提醒（#22 完整）/ 番茄（#28 完整）/ 待办（#29 占位 → disabled）
 // - 关闭路径走 lib.rs on_window_event 拦截改 hide；activeTab 是组件 ref，hide 后 webview
 //   不销毁，下次唤起自动保留位置
 import { ref } from 'vue'
@@ -11,6 +11,7 @@ import { ElIcon, ElTabPane, ElTabs } from 'element-plus'
 import { AlarmClock, Calendar, Timer } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
 import ReminderPanel from './panels/ReminderPanel.vue'
+import PomodoroPanel from './panels/PomodoroPanel.vue'
 import PlaceholderPanel from './panels/PlaceholderPanel.vue'
 
 type TaskTab = 'reminder' | 'pomodoro' | 'todo'
@@ -29,15 +30,14 @@ const activeTab = ref<TaskTab>('reminder')
         </template>
         <ReminderPanel />
       </ElTabPane>
-      <ElTabPane name="pomodoro" disabled>
+      <ElTabPane name="pomodoro">
         <template #label>
-          <span class="tasks-tab__label tasks-tab__label--placeholder">
+          <span class="tasks-tab__label">
             <ElIcon class="tasks-tab__icon"><Timer /></ElIcon>
             番茄
-            <span class="tasks-tab__chip">#28</span>
           </span>
         </template>
-        <PlaceholderPanel title="番茄钟" issue="#28" />
+        <PomodoroPanel />
       </ElTabPane>
       <ElTabPane name="todo" disabled>
         <template #label>
