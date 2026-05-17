@@ -25,6 +25,7 @@ import {
 import {
   REMINDER_CATCH_UP_EVENT,
   REMINDER_FIRED_EVENT,
+  REMINDER_BUFFER_FLUSH_EVENT,
   REMINDER_TEMPLATES,
   type Reminder,
   type ReminderCatchUpItem,
@@ -155,6 +156,7 @@ async function onToggleEnabled(r: Reminder) {
 
 let unlistenFired: UnlistenFn | null = null
 let unlistenCatchUp: UnlistenFn | null = null
+let unlistenBufferFlush: UnlistenFn | null = null
 
 onMounted(async () => {
   await refresh()
@@ -173,11 +175,27 @@ onMounted(async () => {
       message: `刚才你不在，错过 ${items.length} 条提醒：${titles}`,
     })
   })
+  // #28 FOCUS 期软提醒 buffer → REST 启动时 pomodoro 端 emit 合并展示
+  unlistenBufferFlush = await listen<ReminderCatchUpItem[]>(
+    REMINDER_BUFFER_FLUSH_EVENT,
+    (e) => {
+      const items = e.payload ?? []
+      if (items.length === 0) return
+      const titles = items.map((it) => it.title).join('、')
+      ElMessage({
+        type: 'info',
+        duration: 6000,
+        message: `专注完成，刚才积压 ${items.length} 条提醒：${titles}`,
+      })
+      refresh().catch(() => {})
+    },
+  )
 })
 
 onBeforeUnmount(() => {
   unlistenFired?.()
   unlistenCatchUp?.()
+  unlistenBufferFlush?.()
 })
 </script>
 

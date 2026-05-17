@@ -263,6 +263,12 @@ pub fn start_scheduler<R: Runtime>(app: AppHandle<R>) {
                 continue;
             }
 
+            // #28 协作：FOCUS 期跳过 wander —— 番茄专注时桌宠停止自由活动。
+            // mood='focused' 推到 M3 R.2 呼吸动画一起做（M1 mood 不持久化，详 plan 决策 #13）。
+            if crate::services::pomodoro::is_focus_active(&app).await {
+                continue;
+            }
+
             // 前置检查：pet 窗存在且可见。覆盖"用户托盘隐藏 / 主态 hide"路径——ConsentGate
             // 仅 gate onboarding 边界，gate.open() 之后用户仍可主动隐藏 pet 窗；hidden 时
             // wander 会偷偷移动 + 触发 SaveDebouncer 持久化，下次显示位置漂移。

@@ -56,6 +56,8 @@ export const MAX_SNOOZE_COUNT = 3
 /** Tauri event 名（架构 §683 契约 + 本 issue 拍板）。 */
 export const REMINDER_FIRED_EVENT = 'reminder:fired'
 export const REMINDER_CATCH_UP_EVENT = 'reminder:catch_up'
+/** #28 FOCUS 期软提醒缓冲；REST 启动时 pomodoro 端 emit 合并展示。复用 ReminderCatchUpItem[]。 */
+export const REMINDER_BUFFER_FLUSH_EVENT = 'reminder:buffer_flush'
 
 /**
  * 模板预设库（hardcode；前 3 个 id 与 onboarding Step 4 ReminderIntentsView INTENTS 对齐）。

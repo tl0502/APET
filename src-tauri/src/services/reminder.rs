@@ -473,6 +473,40 @@ pub(crate) async fn fire<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(),
     tx.commit().await?;
     conn.close().await?;
 
+    // #28 协作：FOCUS 期 reminder 处理分支。
+    // - hard：调 pomodoro::cancel_by_hard_interrupt 写 cancelled 行 + 清 active KV，
+    //   然后继续走下方 emit reminder:fired + OS notification —— 用户应看到打断的提醒
+    // - soft：入 KV `pomodoro:focus_soft_buffer`，return Ok(()) 不 emit fired / 不发 OS 通知。
+    //   REST 启动时 pomodoro::transition_auto 会 emit reminder:buffer_flush 合并展示
+    // - 当前 history.action='ignored' 已在事务内写过，这里不重复（buffer 仅是 UI 层延后展示）
+    let in_focus = crate::services::pomodoro::is_focus_active(app).await;
+    if in_focus {
+        match r.priority.as_str() {
+            "hard" => {
+                if let Err(e) =
+                    crate::services::pomodoro::cancel_by_hard_interrupt(app, id).await
+                {
+                    eprintln!("[reminder] cancel pomodoro by hard interrupt failed: {e}");
+                }
+                // 继续走下方 emit + OS 通知
+            }
+            "soft" => {
+                let buffer_payload = serde_json::json!({
+                    "reminderId": id,
+                    "title": r.title,
+                    "priority": r.priority,
+                });
+                if let Err(e) =
+                    crate::services::pomodoro::push_soft_buffer(app, buffer_payload).await
+                {
+                    eprintln!("[reminder] push_soft_buffer failed: {e}");
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
     // 3. emit + OS notification（best-effort）。
     let payload = FiredPayload {
         reminder_id: id.to_string(),
