@@ -43,8 +43,12 @@ pub mod persona;
 pub mod preferences;
 // #22 ReminderService：提醒 CRUD + 触发 + 启动 catch-up（schema 见 migrations/001_init.sql:99-120）。
 pub mod reminder;
-// #22 Scheduler 公共抽象：BinaryHeap 单 tokio task；#28 番茄 / #29 待办 / M3 IdleDetector 复用。
+// #22 Scheduler 公共抽象：1s polling 单 tokio task；驱动 reminder.find_due + pomodoro.tick。
+// #29 待办 / M3 IdleDetector 后续接入。
 pub mod scheduler;
+// #28 PomodoroService：番茄钟状态机 + drift 校准 + FOCUS/REST 自动转换 + reminder/livingPet 协作 hook。
+// 运行时态走 KV `pomodoro:active_session`（不污染 pomodoro_sessions 表；lesson #2）。
+pub mod pomodoro;
 pub mod shortcuts;
 pub mod window_state;
 

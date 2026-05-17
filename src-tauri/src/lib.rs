@@ -246,6 +246,19 @@ pub fn run() {
                     }
                 });
             }
+            // #28 PomodoroService 启动期：丢弃残留 active_session（崩溃/强关后的孤儿 KV）。
+            // 决策：app 重启 = 用户面前重开,不是会话恢复（plan 决策 #8）。pomodoro_sessions
+            // 表不写 'cancelled' 以免污染统计——只清 KV。soft buffer 也一并清。失败仅 eprintln。
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::block_on(async move {
+                    if let Err(e) =
+                        crate::services::pomodoro::discard_orphan_active(&app_handle).await
+                    {
+                        eprintln!("[pomodoro] discard_orphan_active failed: {e}");
+                    }
+                });
+            }
             crate::services::scheduler::start(app.handle().clone());
             Ok(())
         })
@@ -379,6 +392,13 @@ pub fn run() {
             commands::window::tasks_show,
             commands::window::tasks_hide,
             commands::window::tasks_toggle,
+            // #28 PomodoroService（6 IPC）— 番茄状态机 + drift 校准 + KV active_session
+            commands::pomodoro::pomodoro_start,
+            commands::pomodoro::pomodoro_pause,
+            commands::pomodoro::pomodoro_resume,
+            commands::pomodoro::pomodoro_stop,
+            commands::pomodoro::pomodoro_active,
+            commands::pomodoro::pomodoro_today_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
