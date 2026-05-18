@@ -25,7 +25,7 @@
 // active 期 slider disabled（不能改运行中的时长）。
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElButton, ElCollapseTransition, ElMessage, ElProgress, ElSlider } from 'element-plus'
-import { ArrowDown, Close, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowDown, Close, TopRight, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   getActivePomodoro,
@@ -35,6 +35,7 @@ import {
   startPomodoro,
   stopPomodoro,
 } from '@/services/pomodoro'
+import { showPomodoro } from '@/services/window'
 import {
   DEFAULT_FOCUS_MIN,
   DEFAULT_REST_MIN,
@@ -190,6 +191,16 @@ function formatErr(e: unknown): string {
   return String(e)
 }
 
+/** #28 follow-up：唤起独立番茄窗（紧凑 Pomotroid 型 widget）。
+ * tasks tab 大面板 + 独立窗双入口并存，相互独立，复用同一 service 层数据 / 事件流。 */
+async function onOpenStandalone() {
+  try {
+    await showPomodoro()
+  } catch (e) {
+    ElMessage.error(`打开独立窗失败：${formatErr(e)}`)
+  }
+}
+
 // === listeners ===
 let unlistenTick: UnlistenFn | null = null
 let unlistenStateChanged: UnlistenFn | null = null
@@ -197,8 +208,8 @@ let unlistenFocusEnded: UnlistenFn | null = null
 let unlistenRestEnded: UnlistenFn | null = null
 
 onMounted(async () => {
-  await Promise.all([refreshActive(), refreshStats()])
-
+  // 先注册 listener 再 refresh：避免 mount 间隔后端 emit 的 tick / state_changed 漏掉
+  // （review BUG-5）。listen 是 async 订阅，await 完成保证 subscribe 已生效。
   unlistenTick = await listen<PomodoroTickPayload>(POMODORO_TICK_EVENT, (e) => {
     if (!e.payload) return
     // tick 来时 active 可能尚未刷新（state_changed 顺序）；先用 tick payload 短路
@@ -246,6 +257,9 @@ onMounted(async () => {
     // 自动 REST→IDLE：刷统计（completed 计数 +1）
     void refreshStats()
   })
+
+  // listener 全部就位后再拉取初始状态
+  await Promise.all([refreshActive(), refreshStats()])
 })
 
 onBeforeUnmount(() => {
@@ -264,6 +278,16 @@ onBeforeUnmount(() => {
         <span class="pomodoro-header__label">{{ displayMode }}</span>
       </div>
       <div class="pomodoro-header__stats">
+        <ElButton
+          class="pomodoro-header__open"
+          text
+          size="small"
+          :icon="TopRight"
+          title="番茄是高频快速操作，独立窗常显更好用"
+          @click="onOpenStandalone"
+        >
+          独立窗口
+        </ElButton>
         <span class="pomodoro-header__count">
           今日 <strong>{{ todaySummary.completed }}</strong>
           <template v-if="todaySummary.completed > 0">
@@ -277,25 +301,24 @@ onBeforeUnmount(() => {
     </header>
 
     <main class="pomodoro-main">
-      <ElProgress
-        type="circle"
-        :percentage="progressPct"
-        :width="220"
-        :stroke-width="8"
-        :color="phaseMeta.color"
-        :show-text="false"
-      >
-        <template #default>
-          <div class="pomodoro-countdown">
-            <span class="pomodoro-countdown__time">{{
-              formatRemainingMs(displayRemainingMs)
-            }}</span>
-            <span class="pomodoro-countdown__caption">
-              {{ active ? phaseMeta.label : '准备开始' }}
-            </span>
-          </div>
-        </template>
-      </ElProgress>
+      <div class="pomodoro-ring">
+        <ElProgress
+          type="circle"
+          :percentage="progressPct"
+          :width="220"
+          :stroke-width="8"
+          :color="phaseMeta.color"
+          :show-text="false"
+        />
+        <div class="pomodoro-countdown">
+          <span class="pomodoro-countdown__time">{{
+            formatRemainingMs(displayRemainingMs)
+          }}</span>
+          <span class="pomodoro-countdown__caption">
+            {{ active ? phaseMeta.label : '准备开始' }}
+          </span>
+        </div>
+      </div>
     </main>
 
     <footer class="pomodoro-footer" data-no-drag>
@@ -445,6 +468,18 @@ onBeforeUnmount(() => {
   color: var(--aipet-color-text-3);
 }
 
+/* 「独立窗口 ↗」按钮（#28 follow-up 双入口；click → showPomodoro IPC） */
+.pomodoro-header__open {
+  color: var(--aipet-color-text-3);
+  font-size: 12px;
+  padding: 2px 6px;
+  height: auto;
+}
+
+.pomodoro-header__open:hover:not(.is-disabled) {
+  color: var(--aipet-color-primary);
+}
+
 .pomodoro-header__count strong {
   color: var(--aipet-color-text-1);
   font-weight: 600;
@@ -463,11 +498,25 @@ onBeforeUnmount(() => {
   padding: var(--aipet-space-4) 0;
 }
 
+/* ElProgress + 绝对定位 overlay 组合（fix #28 倒计时不显示 bug）：
+ * EP 在 `:show-text="false"` 且 default slot 存在时仍渲染 `.el-progress__text`，
+ * 旧版 CSS `:deep(.el-progress__text) { display:none }` 把整个 __text 隐藏 →
+ * 连带 slot 内的倒计时数字一起消失。改用独立 overlay 完全脱离 EP slot 路径。 */
+.pomodoro-ring {
+  position: relative;
+  width: 220px;
+  height: 220px;
+}
+
 .pomodoro-countdown {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  pointer-events: none;
 }
 
 .pomodoro-countdown__time {
@@ -564,9 +613,5 @@ onBeforeUnmount(() => {
 /* === ElProgress 主体覆写：让进度环更柔和 === */
 .pomodoro-main :deep(.el-progress-circle__track) {
   stroke: color-mix(in srgb, var(--aipet-color-border) 70%, transparent);
-}
-
-.pomodoro-main :deep(.el-progress--circle .el-progress__text) {
-  display: none;
 }
 </style>

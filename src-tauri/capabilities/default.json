@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力集 — pet / settings / chat 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动 + 头像文件选择（#25 用户头像上传）。",
-  "windows": ["pet", "settings", "chat", "tasks"],
+  "description": "默认能力集 — pet / settings / chat 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动 + 头像文件选择（#25 用户头像上传）+ 番茄独立窗 fullscreen/AOT 切换（#28 follow-up）。",
+  "windows": ["pet", "settings", "chat", "tasks", "pomodoro"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-set-position",
     "core:window:allow-set-size",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-close",
     "core:window:allow-outer-position",
     "core:window:allow-current-monitor",
     "core:window:allow-available-monitors",

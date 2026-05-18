@@ -7,11 +7,12 @@ mod services;
 
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
-    CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL, SETTINGS_WINDOW_LABEL,
-    TASKS_WINDOW_LABEL,
+    CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL,
+    SETTINGS_WINDOW_LABEL, TASKS_WINDOW_LABEL,
 };
-use services::window_state::SaveDebouncer;
+use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer};
 use tauri::Manager;
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DB_URL: &str = "sqlite:aipet.db";
@@ -219,6 +220,18 @@ pub fn run() {
             }
             // #10 Moved 防抖保存：高频 Moved 通过 200ms debounce 节流写 DB。
             app.manage(SaveDebouncer::default());
+            // #28 follow-up 番茄独立窗：setup 阶段在 visible:false 状态下还原位置（修订 #1
+            // 防闪动）+ 独立防抖 slot 避免与 pet SaveDebouncer 串扰。首启 KV 为空时
+            // apply_initial_pomodoro_position 静默返回 Ok，让 tauri.conf center:true 兜底。
+            // 失败仅 eprintln 不阻断启动（位置兜到 center 不影响主路径）。
+            if let Err(e) = crate::services::window_state::apply_initial_pomodoro_position(
+                app.handle(),
+                360.0,
+                480.0,
+            ) {
+                eprintln!("[setup] apply_initial_pomodoro_position failed: {e}");
+            }
+            app.manage(PomodoroSaveDebouncer::default());
             // #11 启动期注册 chat 快捷键（DB 无记录 → 默认 Ctrl+Alt+Space）。
             // 失败仅 emit shortcut:register-failed 不阻断启动。
             crate::services::shortcuts::register_chat_on_startup(app.handle());
@@ -291,13 +304,76 @@ pub fn run() {
                     {
                         api.prevent_close();
                         let _ = window.hide();
+                    } else if label == POMODORO_WINDOW_LABEL {
+                        // #28 follow-up 修订 #2：与 pet/settings 同款"关 = hide"+ 首次关闭
+                        // OS 系统通知「番茄窗口已隐藏，计时继续在后台运行」。
+                        //
+                        // 为什么用 OS 通知而非 in-app toast：hide 后 webview ElMessage 在
+                        // 不可见窗内 toast 用户根本看不到（review 发现的 BUG-18）。OS 通知
+                        // 由系统层渲染，hide 后仍可见，是 hide-confirmation UX 的正确载体。
+                        //
+                        // KV `pomodoro:hide_hint_shown` 持久化防重复：**通知成功后才写 KV**
+                        // （通知失败 → 不写 → 下次仍重试），避免"通知 silently 失败 + KV
+                        // 已标记"导致用户永远看不到提示。失败均 best-effort eprintln 不阻塞 hide。
+                        api.prevent_close();
+                        let _ = window.hide();
+                        let app_handle = window.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            const HINT_KV: &str = "pomodoro:hide_hint_shown";
+                            match crate::services::config::get(&app_handle, HINT_KV).await {
+                                Ok(Some(_)) => {
+                                    // 已显示过，静默 hide
+                                }
+                                Ok(None) => {
+                                    // 先发通知，成功后才写 KV
+                                    let notify_ok = match app_handle
+                                        .notification()
+                                        .builder()
+                                        .title("番茄")
+                                        .body("番茄窗口已隐藏，计时继续在后台运行")
+                                        .show()
+                                    {
+                                        Ok(_) => true,
+                                        Err(e) => {
+                                            eprintln!(
+                                                "[pomodoro] OS notification failed (KV not persisted, will retry): {e}"
+                                            );
+                                            false
+                                        }
+                                    };
+                                    if notify_ok {
+                                        if let Err(e) = crate::services::config::set(
+                                            &app_handle,
+                                            HINT_KV,
+                                            "1",
+                                        )
+                                        .await
+                                        {
+                                            eprintln!(
+                                                "[pomodoro] persist hide_hint_shown failed: {e}"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("[pomodoro] read hide_hint_shown failed: {e}")
+                                }
+                            }
+                        });
                     }
                 }
-                tauri::WindowEvent::Moved(_) if label == PET_WINDOW_LABEL => {
+                tauri::WindowEvent::Moved(_) => {
                     let app = window.app_handle();
-                    if let Some(pet) = app.get_webview_window(PET_WINDOW_LABEL) {
-                        let debouncer = app.state::<SaveDebouncer>();
-                        debouncer.schedule(pet);
+                    if label == PET_WINDOW_LABEL {
+                        if let Some(pet) = app.get_webview_window(PET_WINDOW_LABEL) {
+                            let debouncer = app.state::<SaveDebouncer>();
+                            debouncer.schedule(pet);
+                        }
+                    } else if label == POMODORO_WINDOW_LABEL {
+                        if let Some(pom) = app.get_webview_window(POMODORO_WINDOW_LABEL) {
+                            let debouncer = app.state::<PomodoroSaveDebouncer>();
+                            debouncer.schedule(pom);
+                        }
                     }
                 }
                 _ => {}
@@ -392,6 +468,11 @@ pub fn run() {
             commands::window::tasks_show,
             commands::window::tasks_hide,
             commands::window::tasks_toggle,
+            // #28 follow-up 番茄独立窗 show/hide/toggle（紧凑 Pomotroid 型；phase-driven AOT
+            // 由前端 PomodoroApp.vue listen pomodoro:state_changed 调 setAlwaysOnTop）
+            commands::window::pomodoro_show,
+            commands::window::pomodoro_hide,
+            commands::window::pomodoro_toggle,
             // #28 PomodoroService（6 IPC）— 番茄状态机 + drift 校准 + KV active_session
             commands::pomodoro::pomodoro_start,
             commands::pomodoro::pomodoro_pause,

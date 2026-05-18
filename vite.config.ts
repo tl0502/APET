@@ -48,7 +48,7 @@ export default defineConfig(({ command }) => ({
     target: ['es2021', 'chrome105'],
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
-    // Multi-page（issue #9 / #14 / #16 / #22）：每个独立 Tauri 窗口对应一个 html 入口。
+    // Multi-page（issue #9 / #14 / #16 / #22 / #28 follow-up）：每个独立 Tauri 窗口对应一个 html 入口。
     // input 走绝对路径（同 root 的中文路径绕过原因），rollup 据此打多份 chunk。
     rollupOptions: {
       input: {
@@ -57,6 +57,7 @@ export default defineConfig(({ command }) => ({
         chat: path.resolve(projectRoot, 'chat.html'),
         onboarding: path.resolve(projectRoot, 'onboarding.html'),
         tasks: path.resolve(projectRoot, 'tasks.html'),
+        pomodoro: path.resolve(projectRoot, 'pomodoro.html'),
       },
     },
   },

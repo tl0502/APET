@@ -22,6 +22,10 @@ pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
 /// 任务三件套窗口 label（与 tauri.conf.json 静态注册一致；issue #22）。
 /// 启动期 visible:false；由托盘菜单"任务"/IPC tasks_show 唤起；与 settings 同款"关 = hide"。
 pub const TASKS_WINDOW_LABEL: &str = "tasks";
+/// 番茄独立窗口 label（与 tauri.conf.json 静态注册一致；#28 follow-up）。
+/// 启动期 visible:false；由托盘菜单"番茄..."/tasks tab 按钮 / pomodoro_start 自动唤起。
+/// alwaysOnTop 由前端 PomodoroApp.vue 按 phase 动态切换（FOCUS/PAUSED_F 置顶；其余不置顶）。
+pub const POMODORO_WINDOW_LABEL: &str = "pomodoro";
 
 /// 进程级闸门读取。state 未 manage（setup 早期 / 极端 dev 路径）时保守返 false。
 fn is_gate_open(app: &AppHandle) -> bool {
@@ -168,6 +172,47 @@ pub(crate) fn toggle_tasks(app: &AppHandle) {
         return;
     }
     if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
+        match window.is_visible() {
+            Ok(true) => {
+                let _ = window.hide();
+            }
+            _ => {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+    }
+}
+
+/// 显示番茄独立窗口（#28 follow-up）。`visible:false` 静态注册；位置由 setup 阶段
+/// apply_initial_pomodoro_position 预设到 KV 记忆的上次位置（不在此处 apply 防闪动）。
+/// alwaysOnTop 由前端 PomodoroApp.vue 按 phase 动态切换，本函数不参与。
+pub(crate) fn show_pomodoro(app: &AppHandle) {
+    if !is_gate_open(app) {
+        show_onboarding(app);
+        return;
+    }
+    if let Some(window) = app.get_webview_window(POMODORO_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// 隐藏番茄窗口（不销毁，保留 webview 状态供下次唤起；同 tasks 模式）。
+/// CloseRequested 首次拦截会 emit `pomodoro:hide_hint` 提示用户后台仍在计时（lib.rs 实现）。
+pub(crate) fn hide_pomodoro(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(POMODORO_WINDOW_LABEL) {
+        let _ = window.hide();
+    }
+}
+
+/// 切换番茄窗口可见性。
+pub(crate) fn toggle_pomodoro(app: &AppHandle) {
+    if !is_gate_open(app) {
+        show_onboarding(app);
+        return;
+    }
+    if let Some(window) = app.get_webview_window(POMODORO_WINDOW_LABEL) {
         match window.is_visible() {
             Ok(true) => {
                 let _ = window.hide();

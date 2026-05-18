@@ -30,12 +30,14 @@ use tauri::{
 };
 
 use crate::services::config;
-use crate::services::window_actions::PET_WINDOW_LABEL;
+use crate::services::window_actions::{PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL};
 
 /// `config` 表 key：桌宠窗口最后位置（JSON 序列化的 LastPosition）
 pub const CONFIG_KEY_PET_POSITION: &str = "window:pet:last_position";
 /// `config` 表 key：桌宠视角档位（裸字符串 "half" / "full"）
 pub const CONFIG_KEY_PET_VIEW_PRESET: &str = "window:pet:view_preset";
+/// `config` 表 key：番茄独立窗最后位置（#28 follow-up；与 pet 同款 LastPosition JSON）
+pub const CONFIG_KEY_POMODORO_POSITION: &str = "window:pomodoro:last_position";
 
 /// 视角档位切换跨窗口广播事件名（pet/settings 都 listen，chat 收到 no-op）
 const PET_VIEW_CHANGED_EVENT: &str = "pet:view-changed";
@@ -294,6 +296,108 @@ impl SaveDebouncer {
             tokio::time::sleep(Duration::from_millis(SAVE_DEBOUNCE_MS)).await;
             if let Err(e) = save_pet_position(&window).await {
                 eprintln!("[window_state] save_pet_position failed: {e}");
+            }
+        });
+        *slot = Some(handle);
+    }
+}
+
+// =============================================================================
+// #28 follow-up：番茄独立窗位置记忆
+//
+// 与 pet 同款套路（KV LastPosition JSON + setup 阶段 hidden 状态 set_position 还原 +
+// Moved 防抖落 DB）。独立 PomodoroSaveDebouncer newtype，避免与 pet 的 SaveDebouncer
+// 共享 slot 串扰（用户拖 pet 时 abort 掉 pomodoro 防抖会丢位置）。
+// =============================================================================
+
+/// 直接以给定 LastPosition 写 config（pomodoro 版）。
+pub async fn set_pomodoro_position<R: Runtime>(
+    app: &AppHandle<R>,
+    pos: &LastPosition,
+) -> Result<(), WindowStateError> {
+    let serialized = serde_json::to_string(pos)?;
+    config::set(app, CONFIG_KEY_POMODORO_POSITION, &serialized).await?;
+    Ok(())
+}
+
+/// 把窗口当前 outer_position（physical）转 logical + 取所在 monitor id 写 KV。
+/// 后端 Moved handler 通过 PomodoroSaveDebouncer 触发本路径。
+pub async fn save_pomodoro_position<R: Runtime>(
+    window: &WebviewWindow<R>,
+) -> Result<(), WindowStateError> {
+    let pos = compute_position_from_window(window)
+        .map_err(|e| WindowStateError::Config(config::ConfigError::Database(e)))?;
+    set_pomodoro_position(window.app_handle(), &pos).await
+}
+
+pub async fn load_pomodoro_position<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<LastPosition>, WindowStateError> {
+    let raw = config::get(app, CONFIG_KEY_POMODORO_POSITION).await?;
+    match raw {
+        None => Ok(None),
+        Some(s) => Ok(Some(serde_json::from_str(&s)?)),
+    }
+}
+
+/// 启动期：读 pomodoro last_position → set_position 还原 / monitor 不在场 fallback 主屏右下偏左 80px。
+///
+/// 修订 #1 防闪动：setup 阶段窗口 `visible:false` 但已注册，hidden 下 set_position 生效
+/// （pet 窗 apply_initial_position 已验证同款范式）。下次 show 直接拉起到正确位置，无 center→reposition 跳动。
+///
+/// 首次启动 KV 为空 → 直接返回 Ok(())，让 tauri.conf.json `center:true` 默认行为兜底（友好首启）。
+pub fn apply_initial_pomodoro_position<R: Runtime>(
+    app: &AppHandle<R>,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(POMODORO_WINDOW_LABEL)
+        .ok_or_else(|| format!("pomodoro window '{POMODORO_WINDOW_LABEL}' not found"))?;
+
+    let last = tauri::async_runtime::block_on(load_pomodoro_position(app))
+        .map_err(|e| format!("load last position: {e}"))?;
+
+    // 首次启动：KV 无记录 → 沿用 tauri.conf center:true 默认值，不调 set_position
+    let pos = match last {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    let monitors = window
+        .available_monitors()
+        .map_err(|e| format!("available_monitors: {e}"))?;
+
+    let (logical_x, logical_y) = match monitors.iter().find(|m| monitor_id(m) == pos.monitor_id) {
+        Some(monitor) => clamp_into_monitor(monitor, w, h, pos.logical_x, pos.logical_y),
+        // 副屏被拔 / monitor 不在场 → 同 pet fallback 主屏右下偏左 80px
+        None => fallback_default(app, w, h).ok_or("no primary monitor")?,
+    };
+
+    window
+        .set_position(LogicalPosition::new(logical_x, logical_y))
+        .map_err(|e| format!("set_position: {e}"))
+}
+
+/// 番茄独立窗位置防抖锁（独立 slot，避免与 pet SaveDebouncer 串扰）。
+#[derive(Default)]
+pub struct PomodoroSaveDebouncer {
+    pending: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl PomodoroSaveDebouncer {
+    pub fn schedule<R: Runtime>(&self, window: WebviewWindow<R>) {
+        let mut slot = match self.pending.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(prev) = slot.take() {
+            prev.abort();
+        }
+        let handle = tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(SAVE_DEBOUNCE_MS)).await;
+            if let Err(e) = save_pomodoro_position(&window).await {
+                eprintln!("[window_state] save_pomodoro_position failed: {e}");
             }
         });
         *slot = Some(handle);

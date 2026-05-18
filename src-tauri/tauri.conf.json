@@ -89,6 +89,20 @@
         "resizable": true,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "pomodoro",
+        "title": "番茄 — AI 桌宠",
+        "url": "pomodoro.html",
+        "width": 360,
+        "height": 480,
+        "transparent": false,
+        "decorations": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "resizable": false,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {

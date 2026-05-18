@@ -21,6 +21,7 @@ use crate::services::window_actions::{self, PET_WINDOW_LABEL};
 const MENU_ID_SHOW_HIDE: &str = "tray:show-hide";
 const MENU_ID_SETTINGS: &str = "tray:settings";
 const MENU_ID_TASKS: &str = "tray:tasks";
+const MENU_ID_POMODORO: &str = "tray:pomodoro";
 const MENU_ID_QUIT: &str = "tray:quit";
 
 const TOOLTIP: &str = "AI 桌宠";
@@ -52,11 +53,14 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let settings_item = MenuItemBuilder::with_id(MENU_ID_SETTINGS, "设置...").build(app)?;
     // #22 任务三件套：托盘"任务..."入口，点击唤起独立 tasks 窗。
     let tasks_item = MenuItemBuilder::with_id(MENU_ID_TASKS, "任务...").build(app)?;
+    // #28 follow-up 番茄独立窗：托盘"番茄..."入口，与 tasks tab 按钮 / pomodoro_start 自动 show 三入口并列。
+    let pomodoro_item = MenuItemBuilder::with_id(MENU_ID_POMODORO, "番茄...").build(app)?;
     let quit_item = MenuItemBuilder::with_id(MENU_ID_QUIT, "退出").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&show_hide_item)
         .separator()
+        .item(&pomodoro_item)
         .item(&tasks_item)
         .item(&settings_item)
         .separator()
@@ -83,6 +87,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                 refresh_label(app, &show_hide_for_menu);
             }
             MENU_ID_TASKS => window_actions::show_tasks(app),
+            MENU_ID_POMODORO => window_actions::show_pomodoro(app),
             MENU_ID_SETTINGS => window_actions::show_settings(app),
             MENU_ID_QUIT => app.exit(0),
             _ => {}

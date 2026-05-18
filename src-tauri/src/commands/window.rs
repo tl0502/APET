@@ -9,8 +9,8 @@
 use crate::services::consent_gate::ConsentGate;
 use crate::services::onboarding;
 use crate::services::window_actions::{
-    hide_chat, hide_onboarding, hide_settings, hide_tasks, show_chat, show_pet, show_settings,
-    show_tasks, toggle_chat, toggle_tasks,
+    hide_chat, hide_onboarding, hide_pomodoro, hide_settings, hide_tasks, show_chat, show_pet,
+    show_pomodoro, show_settings, show_tasks, toggle_chat, toggle_pomodoro, toggle_tasks,
 };
 use crate::services::window_state::{self, LastPosition};
 use tauri::{AppHandle, Emitter, Manager};
@@ -92,6 +92,26 @@ pub async fn tasks_hide(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn tasks_toggle(app: AppHandle) -> Result<(), String> {
     toggle_tasks(&app);
+    Ok(())
+}
+
+/// #28 follow-up 番茄独立窗口 show/hide/toggle（紧凑 Pomotroid 型，phase-driven AOT）。
+/// AOT 切换不在此处——前端 PomodoroApp.vue listen pomodoro:state_changed 调 setAlwaysOnTop。
+#[tauri::command]
+pub async fn pomodoro_show(app: AppHandle) -> Result<(), String> {
+    show_pomodoro(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pomodoro_hide(app: AppHandle) -> Result<(), String> {
+    hide_pomodoro(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pomodoro_toggle(app: AppHandle) -> Result<(), String> {
+    toggle_pomodoro(&app);
     Ok(())
 }
 

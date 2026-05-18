@@ -49,6 +49,26 @@ export function toggleTasks(): Promise<void> {
 }
 
 /**
+ * #28 follow-up 番茄独立窗口（Pomotroid 型，紧凑 360×480）。
+ * 与 tasks 同款"关 = hide"（首次关闭时后端 emit `pomodoro:hide_hint` 提示用户后台仍在计时）。
+ *
+ * 入口：托盘菜单「番茄...」/ tasks tab「在独立窗口打开 ↗」按钮 / pomodoro_start 后端自动 show。
+ * 位置记忆：setup 阶段还原到 KV `window:pomodoro:last_position`（visible:false 下 set_position 防闪动）。
+ * alwaysOnTop：tauri.conf.json 默认 false；PomodoroApp.vue listen pomodoro:state_changed 按 phase 切换。
+ */
+export function showPomodoro(): Promise<void> {
+  return invoke<void>('pomodoro_show')
+}
+
+export function hidePomodoro(): Promise<void> {
+  return invoke<void>('pomodoro_hide')
+}
+
+export function togglePomodoro(): Promise<void> {
+  return invoke<void>('pomodoro_toggle')
+}
+
+/**
  * #24 视角档位（pet 角色窗）。
  * - 'half'：320×320 等比，相机看胸口（默认；对话/表情场景）
  * - 'full'：320×512（1:1.6），相机看全身（装扮/动作场景）
