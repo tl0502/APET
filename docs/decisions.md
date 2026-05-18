@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 决策记录
-updated: 2026-05-12
+updated: 2026-05-18
 related:
   - README.md
   - WORKFLOW.md
@@ -138,10 +138,17 @@ related:
 - **代价**：每个 step 切换多一次轻量 KV 写 IPC（毫秒级，可忽略）；前端启动期多一次 IPC 等待 + 可能的模态。「重来」不能表达"我撤回数据同意" — 这类需求由 M3 G 设置面板的"重置数据"入口承担（清 consent + 删库 + 重启）。**Supersedes**：requirements/flows.md §1.5 「中途退出重头」（已在 flows.md §1.5 加 Superseded 跳转）。
 - **Updated 2026-05-12（修「重来」启动期跳过 SoulPledge bug）**：原文写"「重来」= 清 KV"。实测发现：用户「重来」后停在 SoulPledge 关窗 → 启动期 `consent.granted=true` + KV 不存在 → 错认为"已完成 onboarding" → 跳过 SoulPledge 直接进 pet 主态。修正：「重来」改为 **写 KV='soul-pledge'**（不 clear）。`'soul-pledge'` 不在前端 RESUMABLE_STEPS 中,onMounted 看到该值不弹模态,正常显示 Step 1;但 KV 存在足以让启动期路由保持"未完成 onboarding"判定,开 onboarding 窗。原 `onboarding_reset` IPC + 前端 `resetOnboarding` 函数随后删除（dead code,M3 G "重置应用数据" 入口若需要可重建）。`services::onboarding::clear_current_step` Rust 函数保留,`onboarding_complete` / `setup` 路径仍消费。
 
+### ADR-020 磁吸窗口系统拓扑 + 全局参数
+
+- **为什么**：B.3.c 原计划只做 chat 磁吸（PRD §7.2.3），实施期决定扩展到 tasks 等"陪伴类"独立窗，需选拓扑——mesh 在 5 窗项目下连接数 O(n²) + 状态机爆炸，单人项目 ROI 不匹配；物理阈值（PRD §7.2.3 Q4 TBD）必须本 ADR 拍板，否则 B.3.c 不能动工。
+- **选了什么**：**Hub-spoke 拓扑**——pet 为 hub，chat / tasks 为初始 spoke，spoke 之间不互吸；封装为通用 composable `useSnapWindow({ target, config })`，未来 M4 hub 总面板 / 装扮工坊可直接复用。**全局参数**（所有 spoke 共用）：① 核心语义"强吸附"（spoke 窗 `decorations: false / transparent: true / alwaysOnTop: true / skipTaskbar: true` + 12px 圆角 + drop-shadow），② 物理阈值断开 20px / 吸引区 30px / 拖动起始 5px / 跟随 throttle 16ms (60fps)，③ 默认吸附边右优先动态 fallback（右 → 下 → 左 → 上），④ 吸附时尺寸仅锁位置（用户记忆值，默认 chat 380×480 / tasks 420×600），⑤ 失焦收缩条件"所有 spoke + pet 都不在焦"才触发，收缩到 pet 边的控制按钮区（合并 B.3.b 骨架），⑥ 位置持久化走 config KV（`{label}:detached_x/y/w/h` + `{label}:state`），跨屏允许吸附，越界 fallback 默认位，⑦ 动画吸附 150ms `cubic-bezier(0.4,0,0.2,1)` ease-out + 断开 4px 弹跳。
+- **代价**：放弃 chat ↔ tasks 互吸（用户期望管理，M3 视实际使用频率再考虑升级 partial mesh）；tasks 默认窗体 800×600 → 420×600 + 透明无装饰，需回归测试 M2 #22 任务面板的现有交互；通用 composable + SnapManager 单例比硬编码多 ~0.5d；物理阈值是经验取值，M2 W4 自测可能微调（直接改本 ADR 不走 Supersedes 流程，标 *Updated YYYY-MM-DD*）。
+- **Updated 2026-05-18（架构改写为 constraint-based partial mesh）**：用户提出"别的窗之间也能磁吸"+"pet 与 spoke 拓扑平等" → 原 hub-spoke 推翻。新架构 = **Constraint-based Partial Mesh + Forest-Walk Solver**。核心数据 `SnapConstraint = { sourceId, targetId, sourceEdge, targetEdge, offset, enabled, createdAt }`；5 条不变量：**I1** 每窗至多 1 constraint、**I2** commit 前实时环检测（沿 attachedTo 链向上追到 self 即 reject）、**I3** drag 期间 constraint 临时挂起仅显示 ghost、**I4** 任一窗 onMoved → 走 `solve(roots)` 而非递归 setPosition、**I5** pet 与其他窗在拓扑上平等（pet 仅靠位置稳定 + memoryBias 实际成为常被吸的 anchor）。**Solver = BFS over forest**（I1+I2 保证图必为森林，无需 Kahn topo sort）。Drag session 状态机：`Idle → Dragging → PreviewSnap → Commit / Cancel(ESC)`；ESC 回滚需快照整个森林 Rect 而非仅 source 窗 constraint。**几何参数全面更新**：trigger zone 24px、corner dead zone 24×24（防角落抖动）、projection overlap 阈值 `max(72, edge × 0.25)`、candidate score = `distance × 0.6 + overlapPenalty × 0.2 + (1 − memoryBias) × 0.2`（memoryBias ∈ [-0.5, 0.5]，30s 内 detach 反向惩罚 -0.5，已存在 attachment +0.5）。**Tauri 集成**：`isInternalMove` 按窗口分桶 + rAF 释放 guard（防 setPosition → onMoved → setPosition 死循环）；wander 走专属 `pet:wander:tween_frame` 事件不走 onMoved（living_pet.rs +4 行 emit）。**持久化**：单 KV key `snap:constraints` 存 JSON 数组；启动 load + solve；anchor 缺失自动 downgrade free。**BossKey**：仅改 `visible=false` 不清 constraint，恢复时 solve(roots) 重定位。**文件结构** `src/lib/snap/`：types / registry / constraintStore / solver / candidates / dragSession / internalMove / persistence + `src/composables/useSnapWindow.ts`。**估时** S1-S9 共 ~3.6d（原 hub-spoke 2.5d +1.1d，多在 solver + 几何工具单测 + ESC 森林快照 + isInternalMove guard）。**Supersedes（本 ADR 内部）**：原"选了什么"中"Hub-spoke 拓扑 / `useSnapWindow(target='pet')` / 右优先动态 fallback / 断开 20px+吸引 30px / 跟随 16ms throttle / 链式跟随用 emit-listen"被替代；**保留**："强吸附"视觉语义、圆角阴影、chat 380×480 / tasks 420×600 默认尺寸、tauri.conf decorations/transparent/alwaysOnTop/skipTaskbar 改造、失焦收缩合并 B.3.b、跨屏允许、150ms ease-out 吸附动画、BossKey 全 hide。
+
 ---
 
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-020**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-021**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。

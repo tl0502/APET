@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-17
+updated: 2026-05-18
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -19,11 +19,11 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（提醒 + 番茄已落地，待办/物理交互/人格工坊待办）
-- **当前 session 在做**：—（[#28](https://github.com/tl0502/APET/issues/28) 3 commits 已落 `f8ddea9`+`b17e8ce`+`c1939c4`，准备 close + closing comment）
-- **下一步**：[#29](https://github.com/tl0502/APET/issues/29) 待办 + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位；或并行 [#23](https://github.com/tl0502/APET/issues/23) 物理交互
+- **当前 milestone**：M2 W3 进行中（提醒 + 番茄已落地，待办/物理交互/磁吸/人格工坊待办）
+- **当前 session 在做**：[#28](https://github.com/tl0502/APET/issues/28) follow-up [#31](https://github.com/tl0502/APET/issues/31) 番茄独立窗（`fb78924` Pomotroid 型 360×480 frameless + 全屏 focus + 三入口）+ 顺手修 4 个 UI bug（倒计时不显示 / listener race / 全屏 hide 后保留 / hide_hint toast 看不到）；并行 B.3.c 磁吸架构敲定 + ADR-020 *Updated 2026-05-18* 改写为 constraint-based partial mesh + [#30](https://github.com/tl0502/APET/issues/30) 重写
+- **下一步**：[#29](https://github.com/tl0502/APET/issues/29) 待办 + #21 KV 实例化；[#30](https://github.com/tl0502/APET/issues/30) 磁吸（C1 是 0.5d 切入点）；或并行 [#23](https://github.com/tl0502/APET/issues/23) 物理交互
 - **阻塞**：无
-- **展示窗口**：~10 天后产品展示。M2 三件套 #22 + #28 已就位，10 天 demo 链路完整：「设置提醒 → 启动番茄 → FOCUS 期硬提醒打断 / 软提醒缓冲 → REST 时合并展示」端到端可演
+- **展示窗口**：~10 天后产品展示。M2 三件套 #22 + #28 已就位（+ 番茄独立窗 follow-up 加分），10 天 demo 链路完整：「设置提醒 → 启动番茄 → FOCUS 期硬提醒打断 / 软提醒缓冲 → REST 时合并展示」端到端可演。磁吸 #30 若赶得上为 demo 加分但非必需
 
 ---
 
@@ -36,18 +36,20 @@ related:
 - W2 收尾 ✅ [#21](https://github.com/tl0502/APET/issues/21) Onboarding Step 2-6 + LivingPet 自由活动 + VRM 微动作
 - 美化补丁 ✅ [#27](https://github.com/tl0502/APET/issues/27) 三窗 design system 收尾（Apple/Bear neutral + Vercel）
 
-### M2 W3-W4（任务三件套 + 物理交互 + 人格工坊）— 进行中（4/6 完成）
+### M2 W3-W4（任务三件套 + 物理交互 + 磁吸 + 人格工坊）— 进行中（4/7 完成）
 
 - ✅ [#25](https://github.com/tl0502/APET/issues/25) G: 用户头像上传 v2（cropperjs 圆形裁剪）
 - ✅ [#26](https://github.com/tl0502/APET/issues/26) A: VRM 头像导出（实时预览 + 表情/镜头 + DPR 安全）
 - ✅ [#22](https://github.com/tl0502/APET/issues/22) C: ReminderService MVP（6 IPC + Scheduler 5s polling + OS 通知 + 桌宠气泡 + Tasks 独立窗）
 - ✅ [#28](https://github.com/tl0502/APET/issues/28) D: PomodoroService MVP（5 IPC + drift 校准 + Scheduler 1s + FOCUS 期协作: hard 打断/soft 缓冲 + LivingPet wander 跳过）
+  - ↳ ✅ [#31](https://github.com/tl0502/APET/issues/31) follow-up `fb78924`：番茄独立窗（Pomotroid 型 360×480 frameless / 全屏 focus / 三入口 / 位置记忆 / phase-driven AOT / OS 首次关闭通知）+ 顺手修 4 bug（PomodoroPanel 倒计时 / listener race / 全屏 hide 保留 / hide_hint toast 不可见）
 - ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
+- ⏳ [#30](https://github.com/tl0502/APET/issues/30) B.3.c + B.3.b: 磁吸窗口系统 constraint-based partial mesh + 控制按钮区骨架（ADR-020 *Updated 2026-05-18* 架构改写；S1-S9 拆分 ~3.6d）
 
 ### 立项准备期（2026-04-30 → 2026-05-05）✅
 
-15 项 ADR 敲定 + 6 份基线文档归档 + 文档工程化 + GitHub 仓库接入 + 项目记忆系统。实施期新增 ADR-016/017/018/019（脚手架 / EP 选型 / LLM 三层抽象 / Onboarding 续接）。
+15 项 ADR 敲定 + 6 份基线文档归档 + 文档工程化 + GitHub 仓库接入 + 项目记忆系统。实施期新增 ADR-016/017/018/019/020（脚手架 / EP 选型 / LLM 三层抽象 / Onboarding 续接 / 磁吸窗口 hub-spoke）。
 
 ---
 
