@@ -10,16 +10,37 @@ import { ref } from 'vue'
 import { ElIcon, ElTabPane, ElTabs } from 'element-plus'
 import { AlarmClock, Calendar, Timer } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
+import { hideTasks } from '@/services/window'
 import ReminderPanel from './panels/ReminderPanel.vue'
 import PomodoroPanel from './panels/PomodoroPanel.vue'
 import PlaceholderPanel from './panels/PlaceholderPanel.vue'
 
 type TaskTab = 'reminder' | 'pomodoro' | 'todo'
 const activeTab = ref<TaskTab>('reminder')
+
+/** 删除 OS 原生标题栏后，自绘 header 的 ✕ 调 hideTasks IPC（与后端 on_window_event "关 = hide" 同源）。 */
+async function onClose() {
+  try {
+    await hideTasks()
+  } catch (e) {
+    console.warn('[TasksApp] hideTasks failed:', e)
+  }
+}
 </script>
 
 <template>
-  <AppShell variant="standalone" title="任务">
+  <AppShell variant="standalone">
+    <template #header>
+      <span class="aipet-shell__title" data-tauri-drag-region>任务</span>
+      <span class="aipet-shell__header-spacer" data-tauri-drag-region />
+      <button
+        class="aipet-shell__close"
+        title="关闭"
+        aria-label="关闭"
+        data-tauri-drag-region="false"
+        @click="onClose"
+      >✕</button>
+    </template>
     <ElTabs v-model="activeTab" tab-position="left" class="tasks-tabs">
       <ElTabPane name="reminder">
         <template #label>

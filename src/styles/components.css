@@ -16,7 +16,9 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  min-height: 100vh;
+  /* 注意：不要设 min-height: 100vh —— flex item 默认 min-height: auto，再叠 100vh
+     会让内部 footer / overflow 子元素被挤出窗口外（chat 早先踩过的 bug）。
+     已经 height: 100% 占满父容器，min-height 多余。 */
   background: var(--aipet-color-bg);
 }
 
@@ -52,6 +54,45 @@
   padding: var(--aipet-space-3) var(--aipet-space-4);
   border-top: 1px solid var(--aipet-color-border);
   background: var(--aipet-color-surface);
+}
+
+/* === AppShell.standalone 自绘 header 拖动+关闭组件 ===
+   配合 settings / tasks 删除 OS 原生标题栏（decorations:false + transparent:false，Win11 DWM 仍给圆角）
+   后，在 #header slot 内用这两个组件提供拖动区 + ✕ 关闭。
+   - data-tauri-drag-region 不被子元素继承，所以 .aipet-shell__title 和 __header-spacer 各自挂；
+     按钮挂 ="false" 反向取消。
+   - __close 风格与 chat content-header__close 同源（Win11 标准 close-button red）。 */
+.aipet-shell__header-spacer {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
+.aipet-shell__close {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--aipet-color-text-2);
+  font-size: 13px;
+  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', system-ui, sans-serif;
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--aipet-radius-sm);
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.aipet-shell__close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.aipet-shell__close:active {
+  background: #a01e15;
+  color: #ffffff;
 }
 
 .aipet-shell--transparent {

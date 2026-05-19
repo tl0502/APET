@@ -1,6 +1,8 @@
-/* settings 窗口专用全局样式（issue #9）。
+/* settings 窗口专用全局样式（issue #9 + Desktop UI 内部美化 Phase 1）。
    - 与 pet 窗 main.css 互斥：pet 窗要透明 + overflow:hidden；settings 窗要不透明 + 可滚动
    - 不强制 user-select:none —— 设置面板要允许用户选中文本（拷贝版本号 / preset 名等）
+   - Phase 1：注入 sidebar surface 阶梯（左 nav L1 + 右 content L2）+ panel 卡片化（surface-raised + 14px 圆角）
+     删除 dot-grid（工具窗不需要"桌面壁纸"感，反而干扰表单）
 */
 html,
 body,
@@ -21,29 +23,8 @@ html.dark #app {
   background: var(--aipet-color-bg);
 }
 
-/* 极淡 dot-grid 背景(同 chat / onboarding 窗,纸质质感)。 */
-#app {
-  background-image: radial-gradient(
-    circle at 1px 1px,
-    color-mix(in srgb, var(--aipet-color-text-3) 25%, transparent) 1px,
-    transparent 1px
-  );
-  background-size: 24px 24px;
-  background-position: 0 0;
-}
-
-html.dark #app {
-  background-image: radial-gradient(
-    circle at 1px 1px,
-    color-mix(in srgb, var(--aipet-color-text-3) 30%, transparent) 1px,
-    transparent 1px
-  );
-}
-
-/* === Vercel 风 AppShell overrides(P1)===
- * 跟 chat 窗规则对齐:header 用 bg 纯色 + 1px border-bottom;body 0 padding(内部 ElTabs 控制)。
- * 仅 settings.css 加载,只作用于 settings 窗。
- */
+/* === AppShell standalone overrides ===
+   header 紧凑（与 chat content-header 高度感近）；body 内 padding 由 ElTabs 自己控（左 nav 0 + 右 content 自定） */
 .aipet-shell--standalone .aipet-shell__header {
   padding: var(--aipet-space-2) var(--aipet-space-3);
   background: var(--aipet-color-bg);
@@ -54,9 +35,37 @@ html.dark #app {
   padding: 0;
 }
 
-/* === prefers-reduced-motion 兜底(P1)===
- * 用户系统层开 Reduce Motion 时,关闭装饰性动画/过渡;仅作用于 settings 窗。
- */
+/* === Phase 1：ElTabs(left) 双列 surface 阶梯 ===
+   左 nav L1（surface-soft，与 chat sidebar 同源）+ 右 content L2（surface，与 chat content-surface 同源）。
+   nav-wrap 是 EP 渲染的左列容器；border-right 1px 给两列清晰分隔。 */
+.settings-tabs .el-tabs__header.is-left {
+  background: var(--aipet-color-surface-soft);
+  border-right: 1px solid var(--aipet-color-border);
+  margin-right: 0;
+}
+
+.settings-tabs .el-tabs__nav-wrap.is-left::after {
+  /* EP 默认在 nav 右侧画一条 active-bar 容器底线，与我们的 sidebar 风格不符 —— 隐藏 */
+  display: none;
+}
+
+.settings-tabs .el-tabs__content {
+  background: var(--aipet-color-surface);
+}
+
+/* === Phase 1：panel 卡片化 ===
+   settings 的 5 个 panel 都用 <section class="panel"> 作为 root（scoped 不影响 class 名命中）。
+   surface-raised L3 浮起卡片 + 14px 圆角 + 1px border + 内 padding，给表单"在卡片里"的感觉。
+   ElTabPane 自身的 padding 由 SettingsApp.vue scoped 控（0 var(--aipet-space-2)），这里给 panel 加外边距让卡片不贴边。 */
+.settings-tabs .el-tab-pane > .panel {
+  background: var(--aipet-color-surface-raised);
+  border: 1px solid var(--aipet-color-border);
+  border-radius: 14px;
+  padding: var(--aipet-space-5);
+  margin: var(--aipet-space-4) var(--aipet-space-2);
+  box-shadow: var(--aipet-shadow-sm);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

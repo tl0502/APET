@@ -9,6 +9,7 @@ import { provide, ref } from 'vue'
 import { ElIcon, ElTabPane, ElTabs } from 'element-plus'
 import { Brush, Connection, EditPen, InfoFilled, User } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
+import { hideSettings } from '@/services/window'
 import ThemePanel from './panels/ThemePanel.vue'
 import ProviderPanel from './panels/ProviderPanel.vue'
 import PersonaPanel from './panels/PersonaPanel.vue'
@@ -20,10 +21,30 @@ const activeTab = ref<'theme' | 'provider' | 'persona' | 'nickname' | 'about'>('
 // #26 修复 B1：子面板（VrmAvatarExporter）需感知 tab 切换才能 pause/resume RAF + WebGL。
 // 用 provide 暴露当前 active tab 名；ElTabPane v-show 模式下子面板 mount 后不会自动 unmount。
 provide('settings-active-tab', activeTab)
+
+/** 删除 OS 原生标题栏后，自绘 header 的 ✕ 调 hideSettings IPC（与后端 on_window_event "关 = hide" 同源）。 */
+async function onClose() {
+  try {
+    await hideSettings()
+  } catch (e) {
+    console.warn('[SettingsApp] hideSettings failed:', e)
+  }
+}
 </script>
 
 <template>
-  <AppShell variant="standalone" title="设置">
+  <AppShell variant="standalone">
+    <template #header>
+      <span class="aipet-shell__title" data-tauri-drag-region>设置</span>
+      <span class="aipet-shell__header-spacer" data-tauri-drag-region />
+      <button
+        class="aipet-shell__close"
+        title="关闭"
+        aria-label="关闭"
+        data-tauri-drag-region="false"
+        @click="onClose"
+      >✕</button>
+    </template>
     <ElTabs v-model="activeTab" tab-position="left" class="settings-tabs">
       <ElTabPane name="theme">
         <template #label>
