@@ -20,14 +20,18 @@
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElButton, ElIcon, ElMessageBox } from 'element-plus'
-import { Close, Expand, Fold } from '@element-plus/icons-vue'
+import { Expand, Fold } from '@element-plus/icons-vue'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { listen } from '@tauri-apps/api/event'
+import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window'
 import AppShell from '@/components/layouts/AppShell.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ConversationSidebar from '@/components/chat/ConversationSidebar.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import { useToast } from '@/composables/useToast'
+import { useSnapWindow } from '@/composables/useSnapWindow'
+import { getConfig } from '@/services/config'
+import SnapGhost from '@/components/SnapGhost.vue'
 import { useAvatarsStore } from '@/stores/avatars'
 import { useNicknameStore } from '@/stores/nickname'
 import {
@@ -51,6 +55,44 @@ import type { ConversationSummary, Message, StreamEvent } from '@/types/chat'
 const toast = useToast()
 const nicknameStore = useNicknameStore()
 const avatarsStore = useAvatarsStore()
+
+// #30 磁吸窗口系统：chat 作为参与磁吸的窗口，挂 listener + dragSession + persistence。
+// composable 内部 onMounted/onBeforeUnmount 注册时机与本组件一致。
+// T2a (#31)：拿 isPreviewAnchor 给 .chat-panel 套 .snap-preview class（拖 pet 接近 chat 时高亮）。
+// T7 (#31 follow-up B)：previewEdgeFor + previewIntensityFor 渲染沿对接边的矩形 glow（替代圆形）。
+// Phase A (#31 follow-up C)：isFieldAnchor + fieldIntensityFor 渲染 field halo
+// Phase F (#31 follow-up C)：selfLean — 本窗拖动 + 在 field 内时朝 pet 方向 ≤3px 透传 CSS transform
+const {
+  isPreviewAnchor: chatIsPreviewAnchor,
+  previewEdgeFor: chatPreviewEdge,
+  previewIntensityFor: chatPreviewIntensity,
+  isFieldAnchor: chatIsFieldAnchor,
+  fieldIntensityFor: chatFieldIntensity,
+  selfLean: chatSelfLean,
+} = useSnapWindow('chat')
+
+const chatSnapPreviewClass = computed(() => {
+  const cls: Record<string, boolean> = {
+    'snap-preview': chatIsPreviewAnchor.value,
+    'snap-field-anchor': chatIsFieldAnchor.value,
+  }
+  if (chatIsPreviewAnchor.value && chatPreviewEdge.value) {
+    cls[`snap-preview--edge-${chatPreviewEdge.value}`] = true
+  }
+  return cls
+})
+const chatSnapPreviewStyle = computed(() => ({
+  '--snap-preview-intensity': String(chatPreviewIntensity.value),
+  '--snap-field-intensity': String(chatFieldIntensity.value),
+}))
+
+// Phase F (#31 follow-up C)：self-lean transform 应用到外层 .chat-window
+// 不影响内层 .chat-panel 的 border-radius / box-shadow（plan §8 风险 #6）。
+const chatLeanStyle = computed(() => {
+  const lean = chatSelfLean.value
+  if (!lean) return {}
+  return { transform: `translate(${lean.dx.toFixed(2)}px, ${lean.dy.toFixed(2)}px)` }
+})
 
 // === 状态模型 ===
 
@@ -226,6 +268,42 @@ function flushDraftIfPending(convId: string) {
 const unlistenFns: UnlistenFn[] = []
 
 onMounted(async () => {
+  // #30 Windows 11 transparency bug workaround：transparent:true + decorations:false 时
+  // 首次绘制 webview 背景为白色，直到首次 resize 才变透明（Tauri #4881 / #10318 / #8308）。
+  // 启动期主动 set_size(currentSize) 触发一次 redraw 规避。
+  try {
+    const w = getCurrentWindow()
+    const sz = await w.outerSize()
+    const scale = await w.scaleFactor()
+    const logical = sz.toLogical(scale)
+    await w.setSize(new LogicalSize(logical.width, logical.height))
+  } catch (e) {
+    console.warn('[ChatApp] transparency redraw workaround failed:', e)
+  }
+
+  // T10 (#31 follow-up B)：AOT 前端兜底 — chat 是 lazy webview 显示后才 mount，
+  // 此时启动期 backend apply_initial_always_on_top 可能已跑过但 chat webview
+  // 当时未 ready。主动读 KV 应用一次 + listen 后续切换。
+  try {
+    const raw = await getConfig('window:always_on_top')
+    const v = raw === null ? true : raw === 'true'
+    await getCurrentWindow().setAlwaysOnTop(v)
+  } catch (e) {
+    console.warn('[ChatApp] initial setAlwaysOnTop failed:', e)
+  }
+  try {
+    const unlistenAot = await listen<boolean>('window:always-on-top:changed', async (ev) => {
+      try {
+        await getCurrentWindow().setAlwaysOnTop(ev.payload)
+      } catch (e) {
+        console.warn('[ChatApp] AOT changed listen apply failed:', e)
+      }
+    })
+    unlistenFns.push(unlistenAot)
+  } catch (e) {
+    console.warn('[ChatApp] listen AOT changed failed:', e)
+  }
+
   // 随机挑一条 mood(每窗口生命周期固定一次)
   currentMood.value = MOODS[Math.floor(Math.random() * MOODS.length)]
 
@@ -736,6 +814,16 @@ async function handleHide() {
   await hideChat()
 }
 
+/** 标题栏 ─ 按钮：最小化到任务栏（与 hideChat 的"进托盘"区分）。
+ *  依赖 tauri.conf.json chat 窗口 skipTaskbar:false；否则 minimize 后窗口会找不回。 */
+async function onMinimize() {
+  try {
+    await getCurrentWindow().minimize()
+  } catch (e) {
+    console.warn('[ChatApp] minimize failed:', e)
+  }
+}
+
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
@@ -746,18 +834,51 @@ function msgOf(e: unknown): string {
 </script>
 
 <template>
-  <div class="chat-root">
-    <ConversationSidebar
-      :conversations="conversations"
-      :active-id="conversationId"
-      :locked-ids="streamingConvIds"
-      :collapsed="sidebarCollapsed"
-      @select="switchConversation"
-      @create="onCreateConversation"
-      @rename="onRenameConversation"
-      @archive="onArchiveConversation"
-      @delete="onDeleteConversation"
-    />
+  <!-- #30 磁吸：chat 现走 transparent:false + decorations:false 路径（与 pomodoro 一致）：
+       Win11 OS 自动提供 ~8px 系统圆角，CSS .chat-panel border-radius:8px 与之对齐做内部裁剪。
+       T2a + T7 (#31 follow-up B)：preview anchor 命中时 .chat-panel 加 .snap-preview class
+       + 沿对接边 modifier 显示矩形 glow（覆盖式 box-shadow，外向部分会被 OS 窗口边界剪掉）。
+       Phase F (#31 follow-up C)：.chat-window 接 chatLeanStyle transform 实现 self-lean
+       （朝 pet 方向 ≤3px 微偏），不影响 .chat-panel layout。 -->
+  <div class="chat-window" :style="chatLeanStyle">
+    <!-- Phase B (#31 follow-up C)：Ghost slot 提示。preview 状态时显示"松手会落这"
+         outline，相对 chat 当前位置偏移 ≤ 60px（webview 外被裁，可见偏移传达落点方向）。 -->
+    <SnapGhost source-label="chat" />
+    <div class="chat-panel" :class="chatSnapPreviewClass" :style="chatSnapPreviewStyle">
+      <!-- Windows 风格窗口标题栏（28px 极简）：只保留 ─ 最小化 + ✕ 关闭。
+           整片 data-tauri-drag-region（左侧大片空白即拖动区）；两个按钮 false 排除。
+           ─ 调 minimize（skipTaskbar:false 后走标准 Win 任务栏路径）；
+           ✕ 走 handleHide → 现有 hideChat IPC（进托盘，与之前一致）。 -->
+      <div class="chat-titlebar" data-tauri-drag-region>
+        <div class="chat-titlebar__sysbtns">
+          <button
+            class="chat-titlebar__btn chat-titlebar__btn--min"
+            title="最小化"
+            aria-label="最小化"
+            data-tauri-drag-region="false"
+            @click="onMinimize"
+          >─</button>
+          <button
+            class="chat-titlebar__btn chat-titlebar__btn--close"
+            title="关闭（进托盘）"
+            aria-label="关闭"
+            data-tauri-drag-region="false"
+            @click="handleHide"
+          >✕</button>
+        </div>
+      </div>
+      <div class="chat-root">
+        <ConversationSidebar
+          :conversations="conversations"
+          :active-id="conversationId"
+          :locked-ids="streamingConvIds"
+          :collapsed="sidebarCollapsed"
+          @select="switchConversation"
+          @create="onCreateConversation"
+          @rename="onRenameConversation"
+          @archive="onArchiveConversation"
+          @delete="onDeleteConversation"
+        />
 
     <div class="chat-main">
       <AppShell variant="standalone">
@@ -805,17 +926,6 @@ function msgOf(e: unknown): string {
               </span>
             </div>
           </div>
-
-          <ElButton
-            link
-            class="chat-header__close"
-            title="关闭"
-            aria-label="关闭"
-            data-tauri-drag-region="false"
-            @click="handleHide"
-          >
-            <ElIcon><Close /></ElIcon>
-          </ElButton>
         </template>
 
         <MessageList :messages="currentMessages" :streaming-message-id="currentStreamingMessageId" />
@@ -833,13 +943,246 @@ function msgOf(e: unknown): string {
         </template>
       </AppShell>
     </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* #30 chat-window：padding=0 让 chat-panel 占满 webview。
+   transparent:false 切换后由 OS 提供 ~8px 圆角，外层不需再为 box-shadow 留 padding。
+   Phase F (#31 follow-up C)：transform 由 :style 注入（chatLeanStyle 朝 pet 方向 ≤3px 微偏）。
+   160ms ease 过渡让 lean 出入平滑，符合 plan §2 L2 节奏。 */
+.chat-window {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  box-sizing: border-box;
+  background: transparent;
+  transition: transform 160ms var(--aipet-ease-standard, ease-out);
+}
+
+/* #30 内层 opaque 面板：圆角由 Win11 OS 提供（transparent:false + decorations:false 时
+   DWMWA_WINDOW_CORNER_PREFERENCE 默认走 ROUND ≈ 8px，与 pomodoro 独立窗一致）。
+   - CSS border-radius 设 8px 与 OS 对齐：仅用于裁剪内部子元素（chat-titlebar 顶角、
+     ConversationSidebar 左下、ChatInput 右下），与 OS 圆角不冲突。
+   - 不画 hairline / drop shadow：OS 圆角已自带系统级边界。
+   - snap-preview modifier 仍保留 outset box-shadow（transparent:false 后会被 OS 窗口
+     边界剪掉外向部分，inset 部分正常工作；后续可改 inset-only 优化，本次不动）。 */
+.chat-panel {
+  width: 100%;
+  height: 100%;
+  background: var(--aipet-color-bg, #ffffff);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow 180ms var(--aipet-ease-standard, ease-out);
+}
+
+/* T2a + T7 (#31 follow-up B)：chat 是 preview anchor 时矩形 outline + 沿对接边内向 glow。
+   .chat-panel 有 overflow:hidden + 8px 圆角；多层 box-shadow（spread 0 0 0 2px + 弥散 24px）
+   模拟 outline，但 transparent:false 切换后外向部分会被 OS 窗口边界剪掉（inset glow 不受影响）；
+   --snap-preview-intensity ∈ [0.25,1] 控制。 */
+.chat-panel.snap-preview {
+  box-shadow:
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 75%),
+        transparent
+      ),
+    0 0 24px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
+        transparent
+      ),
+    0 8px 32px -8px rgba(0, 0, 0, 0.3),
+    0 2px 8px -2px rgba(0, 0, 0, 0.15);
+}
+
+/* Phase A (#31 follow-up C)：chat 作为 field anchor 时显示渐进 halo。
+   仅在 distance ∈ (60, 120] 段出现；进入 < 60px (preview) 时 .snap-preview 会覆盖此样式。
+   1px subtle outline + 弥散 32px 主色外光晕营造"磁场氛围"。 */
+.chat-panel.snap-field-anchor:not(.snap-preview) {
+  box-shadow:
+    0 0 0 1px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-field-intensity, 0) * 25%),
+        transparent
+      ),
+    0 0 32px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-field-intensity, 0) * 22%),
+        transparent
+      ),
+    0 8px 32px -8px rgba(0, 0, 0, 0.25),
+    0 2px 8px -2px rgba(0, 0, 0, 0.1);
+}
+.chat-panel.snap-preview--edge-right {
+  box-shadow:
+    inset -3px 0 22px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 60%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 75%),
+        transparent
+      ),
+    0 0 24px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
+        transparent
+      ),
+    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+}
+.chat-panel.snap-preview--edge-left {
+  box-shadow:
+    inset 3px 0 22px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 60%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 75%),
+        transparent
+      ),
+    0 0 24px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
+        transparent
+      ),
+    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+}
+.chat-panel.snap-preview--edge-top {
+  box-shadow:
+    inset 0 3px 22px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 60%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 75%),
+        transparent
+      ),
+    0 0 24px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
+        transparent
+      ),
+    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+}
+.chat-panel.snap-preview--edge-bottom {
+  box-shadow:
+    inset 0 -3px 22px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 60%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 75%),
+        transparent
+      ),
+    0 0 24px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
+        transparent
+      ),
+    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+}
+
+/* === 窗口标题栏（28px 极简，Win11 / VSCode 风格）===
+   只保留 ─ 最小化 + ✕ 关闭；左侧大片空白即拖动区。
+   - 整片 data-tauri-drag-region；两个 button 标记 false 排除拖动。
+   - 不画自己的背景色 / border：避免在 chat-panel 8px 圆角顶部叠出"独立矩形色块"
+     破坏圆角观感。caption button 直接浮在 chat-panel bg 上（Win11/VSCode 主流做法）。
+   - 系统按钮 46×28：宽度沿用 Win 标准；hover 浅灰 / close hover 红 #c42b1c。
+   - chat-panel 本身 overflow:hidden + 8px border-radius 自动裁好标题栏顶角。 */
+.chat-titlebar {
+  flex: 0 0 28px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  user-select: none;
+}
+
+.chat-titlebar__sysbtns {
+  display: flex;
+  height: 100%;
+}
+
+.chat-titlebar__btn {
+  width: 46px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--aipet-color-text-2);
+  font-size: 13px;
+  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', system-ui, sans-serif;
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.chat-titlebar__btn:hover {
+  background: color-mix(in srgb, var(--aipet-color-text-1) 10%, transparent);
+}
+
+.chat-titlebar__btn:active {
+  background: color-mix(in srgb, var(--aipet-color-text-1) 18%, transparent);
+}
+
+/* Win11 标准 close-button red：hover 红底白图标，深色模式同色（Win 本身不分主题）。 */
+.chat-titlebar__btn--close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.chat-titlebar__btn--close:active {
+  background: #a01e15;
+  color: #ffffff;
+}
+
 .chat-root {
   display: flex;
   width: 100%;
+  /* 上层多了 28px .chat-titlebar，本元素改 flex 拉伸（min-height:0 让子元素 overflow 工作）。
+     原 height:100% 在 chat-panel(flex column) 下会撑出 overflow 把 titlebar 顶飞。 */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* AppShell 在独立窗口（settings/tasks）下用 min-height:100vh 兜底，但 chat 是嵌在
+   chat-panel 内的（chat-window padding:0 → chat-panel 占满 webview → 内部高度 =
+   viewport - 28px titlebar），100vh 会撑爆把 footer 顶出 overflow:hidden 之外。
+   chat 局部撤销该约束并改 flex 拉伸。 */
+.chat-panel :deep(.aipet-shell--standalone) {
+  min-height: 0;
+  flex: 1 1 auto;
   height: 100%;
 }
 
@@ -850,25 +1193,36 @@ function msgOf(e: unknown): string {
   min-width: 0;
 }
 
-/* === Header === */
-/* AppShell 的 header 是水平 flex,直接给子元素布局即可 */
-.chat-header__sidebar-toggle,
-.chat-header__close {
+/* === Header（人格信息栏，44px）=== */
+/* AppShell 的 header 现在是"人格信息栏"职责：≡ + 头像 + 人格名 + mood。
+   窗口控制（拖动 / 最小化 / 关闭）已迁到上层 .chat-titlebar，本层不再承担。 */
+.chat-header__sidebar-toggle {
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   color: var(--aipet-color-text-2);
+  border: 1px solid transparent;
   border-radius: var(--aipet-radius-base);
-  /* P1:hover 过渡曲线,跟整窗 120ms ease-standard 节奏一致(原来瞬切) */
   transition: color var(--aipet-duration-fast) var(--aipet-ease-standard),
-    background-color var(--aipet-duration-fast) var(--aipet-ease-standard);
+    background-color var(--aipet-duration-fast) var(--aipet-ease-standard),
+    border-color var(--aipet-duration-fast) var(--aipet-ease-standard),
+    transform var(--aipet-duration-fast) var(--aipet-ease-standard);
 }
 
-.chat-header__sidebar-toggle:hover,
-.chat-header__close:hover {
+.chat-header__sidebar-toggle :deep(.el-icon) {
+  font-size: 18px;
+}
+
+.chat-header__sidebar-toggle:hover {
   color: var(--aipet-color-primary);
-  background: color-mix(in srgb, var(--aipet-color-primary) 10%, transparent);
+  background: color-mix(in srgb, var(--aipet-color-primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--aipet-color-primary) 35%, transparent);
+  transform: scale(1.08);
+}
+
+.chat-header__sidebar-toggle:active {
+  transform: scale(0.96);
 }
 
 .chat-header__identity {

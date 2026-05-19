@@ -5,6 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:," />
     <title>对话 — AI 桌宠</title>
+    <!-- #30 磁吸：transparent:true 需要 body/html 不画背景，由 ChatApp 内层 .chat-panel 自绘
+         圆角阴影面板。规避 Tauri Windows 11 transparency bug (#4881/#10318/#8308) 见 ChatApp.vue onMounted。 -->
+    <style>
+      html,
+      body {
+        background: transparent;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+      #app {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>

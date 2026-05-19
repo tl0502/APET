@@ -74,6 +74,7 @@ docs/lessons.md                                         ← 踩坑笔记（永�
 - 每个 session 结束前，**更新 `docs/STATUS.md`**（用 `/sync-status` 命令；详见 `docs/WORKFLOW.md` §8）。
 - **任务级清单在 GitHub Issues**，不在 STATUS.md（详见 `docs/github-workflow.md`）。
 - 远端仓库**未接入**时，gh 命令调用应回退为只更新本地文件；不要强行报错。
+- 前端是 **Tauri 桌面应用不是网页**，UI/UX 决策按桌面软件思路走，详见 [docs/design/desktop-ui-principles.md](docs/design/desktop-ui-principles.md)（多窗结构 / 表面分层 / 自绘圆角 / 桌面交互 / 反例自检）。
 
 ## 常用命令
 

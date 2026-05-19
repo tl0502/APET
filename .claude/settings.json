@@ -3,7 +3,9 @@
     "allow": [
       "Bash(pnpm remove *)",
       "WebFetch(domain:docs.rs)",
-      "Bash(echo \"EXIT_CODE=$?\")"
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "Bash(pnpm test *)",
+      "Bash(grep -rn \"TRIGGER_ZONE\\\\b\\\\|distance: 24\\\\|distance.*60\\\\|score.*0\\\\\\\\..*0\\\\\\\\.\" src/lib/snap/__tests__/)"
     ]
   }
 }

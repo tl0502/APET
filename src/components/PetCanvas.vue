@@ -113,10 +113,15 @@ function onPointerLeave() {
 </script>
 
 <template>
+  <!-- T4 (#31)：data-snap-drag-trigger 让 useSnapWindow.onPointerDown 把 pet 整窗 VRM 区
+       识别为 drag 起点，arm dragSession + forest snapshot；
+       这样拖 pet 也走 preview / ESC cancel / commit tween 流程，与拖 chat 一致。
+       原来 PetCanvas 用 startDragging 直接交给 OS，不挂 useSnapWindow listener。 -->
   <div
     class="pet-stage"
     :class="{ 'pet-stage--draggable': draggable }"
     :style="stageStyle"
+    data-snap-drag-trigger
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerleave="onPointerLeave"

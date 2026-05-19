@@ -30,7 +30,7 @@ use tauri::{
 };
 
 use crate::services::config;
-use crate::services::window_actions::{PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL};
+use crate::services::window_actions::{CHAT_WINDOW_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL};
 
 /// `config` 表 key：桌宠窗口最后位置（JSON 序列化的 LastPosition）
 pub const CONFIG_KEY_PET_POSITION: &str = "window:pet:last_position";
@@ -38,12 +38,20 @@ pub const CONFIG_KEY_PET_POSITION: &str = "window:pet:last_position";
 pub const CONFIG_KEY_PET_VIEW_PRESET: &str = "window:pet:view_preset";
 /// `config` 表 key：番茄独立窗最后位置（#28 follow-up；与 pet 同款 LastPosition JSON）
 pub const CONFIG_KEY_POMODORO_POSITION: &str = "window:pomodoro:last_position";
+/// `config` 表 key：alwaysOnTop 全局开关（#31 follow-up；pet + chat 两窗同步切换）
+pub const CONFIG_KEY_ALWAYS_ON_TOP: &str = "window:always_on_top";
 
 /// 视角档位切换跨窗口广播事件名（pet/settings 都 listen，chat 收到 no-op）
 const PET_VIEW_CHANGED_EVENT: &str = "pet:view-changed";
 
+/// alwaysOnTop 切换跨窗口广播事件名（#31 follow-up；前端不强制 listen，留作 UI 状态同步用）
+const ALWAYS_ON_TOP_CHANGED_EVENT: &str = "window:always-on-top:changed";
+
 /// 默认视角档位（KV 不存在 / 解析失败时回落）
 const DEFAULT_VIEW_PRESET: &str = "half";
+
+/// 默认 alwaysOnTop（首启无 KV 时；pet 默认在主视角应用之上不被遮挡）
+const DEFAULT_ALWAYS_ON_TOP: bool = true;
 
 /// 主屏右下角偏左/偏上 80px（PRD §7.1 首次启动默认）
 const DEFAULT_OFFSET_FROM_BOTTOM_RIGHT: f64 = 80.0;
@@ -401,5 +409,83 @@ impl PomodoroSaveDebouncer {
             }
         });
         *slot = Some(handle);
+    }
+}
+
+// =============================================================================
+// #31 follow-up：alwaysOnTop 全局开关（pet + chat 同步切换 + tray 菜单 + 持久化）
+//
+// 设计要点：
+// - KV 单 key 控制 pet 与 chat 两个窗（pomodoro / tasks / settings 不参与）。
+//   pet 是主体；chat 与 pet 应保持视觉层级一致，否则用户切到浏览器工作时
+//   chat 会被前景应用盖住，造成"AI 桌宠的对话被埋了"的错觉
+// - tauri.conf.json 不再作 alwaysOnTop 的唯一来源（chat 默认 false，pet 默认 true）；
+//   启动期 apply_initial_always_on_top 用 KV 值（默认 true）覆盖回灌两窗
+// - capability 层：后端 Rust 直接 WebviewWindow::set_always_on_top 不走 IPC 路径，
+//   无需任何 default.json capability（capability 只管前端 invoke 权限）
+// =============================================================================
+
+pub async fn load_always_on_top<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<bool, WindowStateError> {
+    let raw = config::get(app, CONFIG_KEY_ALWAYS_ON_TOP).await?;
+    Ok(raw.as_deref().map(|s| s == "true").unwrap_or(DEFAULT_ALWAYS_ON_TOP))
+}
+
+pub async fn save_always_on_top<R: Runtime>(
+    app: &AppHandle<R>,
+    v: bool,
+) -> Result<(), WindowStateError> {
+    config::set(
+        app,
+        CONFIG_KEY_ALWAYS_ON_TOP,
+        if v { "true" } else { "false" },
+    )
+    .await?;
+    Ok(())
+}
+
+/// 把目标布尔值同时下发给 pet + chat 两窗（任一窗未注册不视为错误，仅跳过）。
+pub fn apply_always_on_top<R: Runtime>(
+    app: &AppHandle<R>,
+    v: bool,
+) -> Result<(), WindowStateError> {
+    if let Some(w) = app.get_webview_window(PET_WINDOW_LABEL) {
+        w.set_always_on_top(v)?;
+    }
+    if let Some(w) = app.get_webview_window(CHAT_WINDOW_LABEL) {
+        w.set_always_on_top(v)?;
+    }
+    Ok(())
+}
+
+/// 托盘菜单切换入口：load → flip → apply 两窗 → save → emit 广播。
+/// 返回 flip 后的新状态供 caller 刷 menu label。
+pub async fn toggle_always_on_top<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
+    let cur = load_always_on_top(app).await.map_err(|e| e.to_string())?;
+    let next = !cur;
+    apply_always_on_top(app, next).map_err(|e| e.to_string())?;
+    save_always_on_top(app, next)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit(ALWAYS_ON_TOP_CHANGED_EVENT, next);
+    Ok(next)
+}
+
+/// 启动期：读 KV → 应用到两窗。
+/// 在 tauri.conf 默认值（pet:true / chat:false）之上回灌一次，保证两窗 alwaysOnTop 一致。
+/// 失败仅 eprintln 不阻断启动（极端情况下窗口缺失或 OS 拒绝置顶都不影响功能主路径）。
+pub fn apply_initial_always_on_top<R: Runtime>(app: &AppHandle<R>) {
+    let v = match tauri::async_runtime::block_on(load_always_on_top(app)) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "[window_state] load_always_on_top failed: {e} → fallback to {DEFAULT_ALWAYS_ON_TOP}"
+            );
+            DEFAULT_ALWAYS_ON_TOP
+        }
+    };
+    if let Err(e) = apply_always_on_top(app, v) {
+        eprintln!("[window_state] apply_initial_always_on_top failed: {e}");
     }
 }

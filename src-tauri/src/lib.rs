@@ -232,6 +232,10 @@ pub fn run() {
                 eprintln!("[setup] apply_initial_pomodoro_position failed: {e}");
             }
             app.manage(PomodoroSaveDebouncer::default());
+            // #31 follow-up：alwaysOnTop 全局同步（pet + chat 两窗）
+            // 启动期读 KV → 应用到两窗（覆盖 tauri.conf 默认值 pet:true / chat:false）。
+            // 默认 KV 不存在时取 DEFAULT_ALWAYS_ON_TOP = true（pet 主体在主视角应用之上不被遮挡）。
+            crate::services::window_state::apply_initial_always_on_top(app.handle());
             // #11 启动期注册 chat 快捷键（DB 无记录 → 默认 Ctrl+Alt+Space）。
             // 失败仅 emit shortcut:register-failed 不阻断启动。
             crate::services::shortcuts::register_chat_on_startup(app.handle());
@@ -397,6 +401,10 @@ pub fn run() {
             commands::memory::memory_set,
             commands::memory::memory_list,
             commands::memory::memory_delete,
+            // #30 磁吸：config 表 KV IPC（snap:constraints 持久化；与 memory 表区分）
+            commands::config::config_get,
+            commands::config::config_set,
+            commands::config::config_delete,
             // #9 window 控制（settings show/hide）+ #10 pet 位置 get/save + #14 chat show/hide/toggle
             commands::window::settings_show,
             commands::window::settings_hide,

@@ -123,6 +123,8 @@ docs/
 │   └── competitor-research.md
 ├── roadmap/
 │   └── development-roadmap.md
+├── design/
+│   └── desktop-ui-principles.md  ← 前端是桌面应用不是网页（UI 范式约束）
 │
 ├── _archive/              ← 历史版本归档（仅供回溯）
 │   └── README.md

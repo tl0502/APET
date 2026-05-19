@@ -11,10 +11,13 @@
 // 接 settings 改 preset 的反向通知。onboarding 窗用同款 PetCanvas 但不参与此体系（默认 half）。
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import AppShell from '@/components/layouts/AppShell.vue'
 import PetCanvas from '@/components/PetCanvas.vue'
 import PetReminderBubble from '@/components/PetReminderBubble.vue'
 import { useToast } from '@/composables/useToast'
+import { useSnapWindow } from '@/composables/useSnapWindow'
+import { getConfig } from '@/services/config'
 import { getChatRegisterStatus } from '@/services/shortcut'
 import {
   PET_VIEW_CHANGED_EVENT,
@@ -30,6 +33,41 @@ import type { AvatarView } from '@/services/vrm'
 const toast = useToast()
 let unlistenChat: UnlistenFn | null = null
 let unlistenViewChanged: UnlistenFn | null = null
+let unlistenAot: UnlistenFn | null = null
+
+/** T10 (#31 follow-up B)：AOT KV key + 默认值，与 [src-tauri/src/services/window_state.rs] 同源 */
+const AOT_KV_KEY = 'window:always_on_top'
+const AOT_CHANGED_EVT = 'window:always-on-top:changed'
+const AOT_DEFAULT = true
+
+// #30 磁吸窗口系统：pet 是 anchor 之一（也是负责启动期 load persistence 的窗）。
+// composable 在 onMounted 注册 listener，在 onBeforeUnmount 清理。
+// T2a (#31)：拿 isPreviewAnchor 给 .pet-stage 套 .snap-preview class 显示吸附预览。
+// T7 (#31 follow-up B)：拿 previewEdgeFor + previewIntensityFor 渲染沿对接边的矩形 glow。
+// Phase A (#31 follow-up C)：isFieldAnchor + fieldIntensityFor 渲染 field halo
+//   （chat 进入 pet 影响域 120px → pet 周围渐显主色光晕，反馈"磁场存在"）
+const {
+  isPreviewAnchor,
+  previewEdgeFor: petPreviewEdge,
+  previewIntensityFor: petPreviewIntensity,
+  isFieldAnchor: petIsFieldAnchor,
+  fieldIntensityFor: petFieldIntensity,
+} = useSnapWindow('pet')
+
+const snapPreviewClass = computed(() => {
+  const cls: Record<string, boolean> = {
+    'snap-preview': isPreviewAnchor.value,
+    'snap-field-anchor': petIsFieldAnchor.value,
+  }
+  if (isPreviewAnchor.value && petPreviewEdge.value) {
+    cls[`snap-preview--edge-${petPreviewEdge.value}`] = true
+  }
+  return cls
+})
+const snapPreviewStyle = computed(() => ({
+  '--snap-preview-intensity': String(petPreviewIntensity.value),
+  '--snap-field-intensity': String(petFieldIntensity.value),
+}))
 
 const view = ref<AvatarView>('half')
 const size = computed(() => PET_VIEW_SIZES[view.value])
@@ -43,6 +81,28 @@ onMounted(async () => {
     view.value = await getPetViewPreset()
   } catch (e) {
     console.warn('[App] getPetViewPreset failed, fallback half:', e)
+  }
+
+  // T10 (#31 follow-up B)：AOT 前端兜底 — 启动期主动读 KV 应用一次 + listen 后端 emit
+  // 同步切换。后端 [window_state.rs apply_initial_always_on_top] setup 阶段已做一次，
+  // 此处是双保险（chat 是 lazy webview，setup 期注册时序不绝对可靠）。
+  try {
+    const raw = await getConfig(AOT_KV_KEY)
+    const v = raw === null ? AOT_DEFAULT : raw === 'true'
+    await getCurrentWindow().setAlwaysOnTop(v)
+  } catch (e) {
+    console.warn('[App] initial setAlwaysOnTop failed:', e)
+  }
+  try {
+    unlistenAot = await listen<boolean>(AOT_CHANGED_EVT, async (ev) => {
+      try {
+        await getCurrentWindow().setAlwaysOnTop(ev.payload)
+      } catch (e) {
+        console.warn('[App] AOT changed listen apply failed:', e)
+      }
+    })
+  } catch (e) {
+    console.warn('[App] listen AOT changed failed:', e)
   }
 
   try {
@@ -90,14 +150,166 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlistenChat?.()
   unlistenViewChanged?.()
+  unlistenAot?.()
 })
 </script>
 
 <template>
-  <AppShell variant="transparent">
+  <AppShell variant="transparent" :class="snapPreviewClass" :style="snapPreviewStyle">
     <PetCanvas :view="view" :size="size" />
     <PetReminderBubble />
   </AppShell>
 </template>
 
-<style scoped></style>
+<style scoped>
+/* Phase A (#31 follow-up C)：Field halo —— chat 进入 pet 120px 影响域时，
+   pet 周围出现渐进 radial-gradient 光晕。距离越近 intensity 越高（fieldIntensityFromDistance 60-120 线性）。
+   .snap-field-anchor 类总开关；--snap-field-intensity ∈ [0,1] 控制 opacity；非拖动期为 0 → 完全不可见。
+   单独一层 ::before（与 .snap-preview ::after 互不干扰）。 */
+.snap-field-anchor :deep(.pet-stage) {
+  position: relative;
+}
+.snap-field-anchor :deep(.pet-stage)::before {
+  content: '';
+  position: absolute;
+  inset: -40px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at center,
+    color-mix(
+      in srgb,
+      var(--aipet-color-primary) calc(var(--snap-field-intensity, 0) * 18%),
+      transparent
+    )
+      0%,
+    color-mix(
+      in srgb,
+      var(--aipet-color-primary) calc(var(--snap-field-intensity, 0) * 6%),
+      transparent
+    )
+      55%,
+    transparent 75%
+  );
+  opacity: var(--snap-field-intensity, 0);
+  transition: opacity 80ms linear;
+  z-index: -1;
+}
+
+/* T2a + T7 (#31 follow-up B)：磁吸预览（已进入 ATTACH_ZONE 60px 触发 candidate）。
+   pet 是矩形窗（PRD 透明背景但 .pet-stage 是矩形宽高），矩形 outline + 沿对接边 box-shadow inset glow。
+   - 整圈 outline 提示"我可以被吸"
+   - 单边 box-shadow inset 强化"你正吸向我这一边"
+   - --snap-preview-intensity ∈ [0.25, 1]：距离越近越亮
+   .pet-stage 无圆角 → outline border-radius 也 0；动画移除（intensity 已传达靠近度）。 */
+.snap-preview :deep(.pet-stage) {
+  position: relative;
+}
+.snap-preview :deep(.pet-stage)::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 0;
+  pointer-events: none;
+  /* outline 用 box-shadow 模拟（透明窗 outline 易被裁切） */
+  box-shadow:
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 70%),
+        transparent
+      ),
+    0 0 16px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 30%),
+        transparent
+      );
+  transition: box-shadow 80ms ease-out;
+}
+/* 沿对接边的内向 glow（距离越近 inset spread 越强） */
+.snap-preview--edge-right :deep(.pet-stage)::after {
+  box-shadow:
+    inset -3px 0 18px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 65%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 70%),
+        transparent
+      ),
+    0 0 16px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 30%),
+        transparent
+      );
+}
+.snap-preview--edge-left :deep(.pet-stage)::after {
+  box-shadow:
+    inset 3px 0 18px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 65%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 70%),
+        transparent
+      ),
+    0 0 16px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 30%),
+        transparent
+      );
+}
+.snap-preview--edge-top :deep(.pet-stage)::after {
+  box-shadow:
+    inset 0 3px 18px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 65%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 70%),
+        transparent
+      ),
+    0 0 16px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 30%),
+        transparent
+      );
+}
+.snap-preview--edge-bottom :deep(.pet-stage)::after {
+  box-shadow:
+    inset 0 -3px 18px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 65%),
+        transparent
+      ),
+    0 0 0 2px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 70%),
+        transparent
+      ),
+    0 0 16px
+      color-mix(
+        in srgb,
+        var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 30%),
+        transparent
+      );
+}
+</style>

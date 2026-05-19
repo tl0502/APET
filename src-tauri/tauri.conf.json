@@ -53,10 +53,11 @@
         "maxWidth": 1000,
         "maxHeight": 800,
         "transparent": false,
-        "decorations": true,
+        "decorations": false,
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "resizable": true,
+        "shadow": false,
         "visible": false,
         "center": true
       },

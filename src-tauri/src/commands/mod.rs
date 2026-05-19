@@ -9,6 +9,8 @@
 // - #16 consent（灵魂宣誓 grant / check_version；前端视图 #16b）
 // 后续：interaction / wardrobe / 等。
 pub mod chat;
+// #30 磁吸：config 表 KV IPC（snap:constraints 持久化）
+pub mod config;
 pub mod consent;
 pub mod living_pet;
 pub mod llm_providers;
