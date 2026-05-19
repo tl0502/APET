@@ -13,26 +13,31 @@ import type { Edge, Rect } from './types'
 // ───── 几何常量 ─────
 
 /** 拖动期 source 边与 anchor 边距离小于此值 → 进入吸附 trigger zone。
- *  #30 follow-up D：60 → 10，与业界共识（Microsoft PowerToys FancyZones / Photoshop default
- *  grid / DisplayFusion 实践 3-15px）一致。10px 是用户直觉的"贴边"距离。
+ *  #30 follow-up D：60 → 10（业界 PowerToys/Photoshop 经验值）。
+ *  #30 follow-up D revision：10 太严苛、用户体验差，调到 25（用户实测决策 2026-05-19）。
  *  #31 follow-up C：等价 ATTACH_ZONE（首次吸附阈值）。保留 TRIGGER_ZONE 名作向后兼容别名。 */
-export const TRIGGER_ZONE = 10
+export const TRIGGER_ZONE = 25
 /** #31 follow-up C：首次吸附（未 docked → docked）距离阈值。等于 TRIGGER_ZONE。 */
 export const ATTACH_ZONE = TRIGGER_ZONE
 /** #31 follow-up C：脱钩距离阈值（docked → 仍 docked 直到距离超过 DETACH_ZONE）。
  *  1.8× ATTACH（业界 1.5-2× hysteresis 甜点；schmitt trigger 同款思路）。
  *  #30 follow-up D：新流程 secondary 首帧 detach 后此字段事实上很少触达，但保留向后兼容
- *  现单测 + 给 M3 keepAttached modifier 留接口。 */
-export const DETACH_ZONE = 18
+ *  现单测 + 给 M3 keepAttached modifier 留接口。
+ *
+ *  @deprecated 生产路径已绕过（secondary 拖动首帧 detachAll）。仅在 candidates.ts 的
+ *    dockedTargetId 入参生效，M3 之前不要依赖此 hysteresis 行为。 */
+export const DETACH_ZONE = 45
 /** #31 follow-up C：commit 后 N ms 内即使 distance > DETACH_ZONE 也保持 docked（防 race + 给用户
- *  视觉确认时间）。借鉴 Apple Eyes HIG 230ms hover-feedback 阈值。 */
+ *  视觉确认时间）。借鉴 Apple Eyes HIG 230ms hover-feedback 阈值。
+ *
+ *  @deprecated 同 DETACH_ZONE，#30 follow-up D 后不在生产路径触达；保留供 candidates.ts 单测。 */
 export const TIME_LOCKOUT_MS = 200
 /** #31 follow-up C：Field halo 影响域半径。chat 距 pet < FIELD_RADIUS 就开始反馈。
- *  #30 follow-up D：120 → 20（2× ATTACH，halo 仅在最后冲刺阶段出现）。 */
-export const FIELD_RADIUS = 20
+ *  #30 follow-up D：2× ATTACH，halo 在最后冲刺阶段出现（25→50）。 */
+export const FIELD_RADIUS = 50
 /** 角落死区：两条相邻边都进入 trigger zone 时不触发，避免角落抖动。
- *  #30 follow-up D：24 → 4（ATTACH 缩到 10 后按比例缩；角落死区不能超过 ATTACH）。 */
-export const CORNER_DEAD = 4
+ *  #30 follow-up D：CORNER_DEAD ≈ 0.32× ATTACH（25 时 8px）。 */
+export const CORNER_DEAD = 8
 /** projection overlap 必须 ≥ max(MIN_OVERLAP, sourceEdge_length × OVERLAP_RATIO) 才允许吸附 */
 export const MIN_OVERLAP = 72
 export const OVERLAP_RATIO = 0.25

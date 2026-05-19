@@ -45,17 +45,12 @@ import {
 import { VelocityTracker } from '@/lib/snap/intent'
 import { isInternalMove, markInternal } from '@/lib/snap/internalMove'
 import { loadPersistedConstraints, persistConstraints } from '@/lib/snap/persistence'
+import { isPrimary, PRIMARY_LABEL } from '@/lib/snap/roles'
 import { solve } from '@/lib/snap/solver'
 import type { Edge, Rect, SnapCandidate } from '@/lib/snap/types'
 import { windowRegistry } from '@/lib/snap/windowRegistry'
 
 const DRAG_END_TIMEOUT_MS = 200
-const PET_LABEL = 'pet'
-/** #30 follow-up D：硬编码 primary 身份。pet 唯一是主体（用户唯一可塑造的人格）；
- *  其他所有窗（chat / future settings / tasks）都是 secondary。
- *  primary drag (无 dependents) → primary-attract 反向吸引附近 secondary；
- *  secondary drag → 首帧 detachAll 立即脱钩（用户认为"我要把这个挪走"）。 */
-const PRIMARY_LABEL = PET_LABEL
 const REGISTRY_BROADCAST_EVT = 'snap:registry-update'
 const CONSTRAINT_CHANGED_EVT = 'snap:constraint-changed'
 /** T2a (#31)：preview anchor 切换的跨 webview 广播事件名。
@@ -347,16 +342,22 @@ export function useSnapWindow(label: string): SnapWindowApi {
 
     const st = dragSession.state
     const groupDragging =
-      st.kind === 'group-drag' && st.sourceId === label
+      st.kind === 'group-drag' && st.draggedId === label
     const userDragging =
       (st.kind === 'armed' || st.kind === 'dragging' || st.kind === 'preview') &&
-      st.sourceId === label
+      st.draggedId === label
 
     if (groupDragging) {
       // T6 (#31 follow-up B)：anchor 拖动 — 走 solver 把 dependents 平移跟随，
       // 不算 candidate / 不写 constraint。dragEnd 200ms watchdog 仍 schedule，
       // 让 dragSession 在松手后回 idle（commit no-op，但状态机要走完）。
       const result = solve([label])
+      if (import.meta.env.DEV && result.size === 0) {
+        console.warn(
+          `[snap] group-drag ${label} solve returned 0 dependents — ` +
+            `constraintStore.dependentsOf returns [${constraintStore.dependentsOf(label).map((c) => c.sourceId).join(',')}]`,
+        )
+      }
       for (const [id, r] of result) {
         await safeSetPosition(id, r.x, r.y)
         windowRegistry.updateRect(id, r)
@@ -385,6 +386,12 @@ export function useSnapWindow(label: string): SnapWindowApi {
       ) {
         const removed = constraintStore.removeAllInvolving(label)
         if (removed.length > 0) {
+          if (import.meta.env.DEV) {
+            console.log(
+              `[snap] source-drag ${label} firstFrame detachAll removed=` +
+                removed.map((c) => `${c.sourceId}->${c.targetId}`).join(','),
+            )
+          }
           const now = Date.now()
           for (const c of removed) {
             // 30s 反向惩罚：防止用户拖一下就被原 anchor 吸回
@@ -419,18 +426,25 @@ export function useSnapWindow(label: string): SnapWindowApi {
       // Phase A (#31 follow-up C)：拖动时算 field intensity → emit 给所有 webview。
       // field 用整个 registry（包括非 candidate 阈值的窗），让 chat 在 100px 距离也能"感觉到 pet"。
       // bypass 时也跳过 field halo（视觉上吸附被禁用，halo 也别再渲染）
+      //
+      // D3 throttle：只在 anchorId 变化或 intensity 差值 ≥ 0.02 时 emit。
+      // onMoved 大约 60Hz，原方案每帧 emit → IPC 流量浪费；现在仅 anchor 切换 / 显著变化时广播。
       if (!bypassSnapForCurrentDrag) {
         const fi = computeFieldIntensity(label, rect, windowRegistry.list())
-        fieldAnchorGlobal.value = fi.anchorId
-        fieldIntensityGlobal.value = fi.intensity
-        try {
-          await emit(FIELD_INTENSITY_EVT, {
-            sourceId: label,
-            anchorId: fi.anchorId,
-            intensity: fi.intensity,
-          } satisfies FieldIntensityPayload)
-        } catch (e) {
-          console.warn('[useSnapWindow] emit field-intensity failed:', e)
+        const anchorChanged = fi.anchorId !== fieldAnchorGlobal.value
+        const intensityChanged = Math.abs(fi.intensity - fieldIntensityGlobal.value) >= 0.02
+        if (anchorChanged || intensityChanged) {
+          fieldAnchorGlobal.value = fi.anchorId
+          fieldIntensityGlobal.value = fi.intensity
+          try {
+            await emit(FIELD_INTENSITY_EVT, {
+              sourceId: label,
+              anchorId: fi.anchorId,
+              intensity: fi.intensity,
+            } satisfies FieldIntensityPayload)
+          } catch (e) {
+            console.warn('[useSnapWindow] emit field-intensity failed:', e)
+          }
         }
       } else if (fieldAnchorGlobal.value !== null || fieldIntensityGlobal.value !== 0) {
         // bypass 期持续清 field halo（之前帧可能已 emit）
@@ -475,8 +489,32 @@ export function useSnapWindow(label: string): SnapWindowApi {
 
   async function onConstraintChanged(): Promise<void> {
     constraintStore.clear()
-    detachHistory.clear()
+    // B1 fix (#30 follow-up D review)：不清 detachHistory。
+    // 之前 clear() 在这里 → 自己 emit CONSTRAINT_CHANGED 自己也收到 → 清掉刚记的 30s 反向惩罚 →
+    // 每次 detach 都自动失效。30s 惩罚是 webview-local 内存，与 store 持久化语义无关，不应联动。
     await loadPersistedConstraints()
+    await cleanupDirtyPrimaryOutbound()
+  }
+
+  /** #30 follow-up D：primary 角色不应该有 outbound constraint（所有 commit 路径都写 secondary→primary）。
+   *  发现 pet→? 脏数据时自动清除 + persist + broadcast。原因：
+   *  - KV 历史脏数据（plan 设计前的测试遗留）
+   *  - 某 webview 的 store reload race
+   *  幂等：清理后 persist 把全局 KV 修正，所有 webview 下次 reload 都干净。 */
+  async function cleanupDirtyPrimaryOutbound(): Promise<void> {
+    const dirty = constraintStore.get(PRIMARY_LABEL)
+    if (!dirty) return
+    console.warn(
+      `[snap] cleanup: primary '${PRIMARY_LABEL}' has illegal outbound ` +
+        `${dirty.sourceId}->${dirty.targetId} — removing`,
+    )
+    constraintStore.delete(PRIMARY_LABEL)
+    try {
+      await persistConstraints()
+      await emit(CONSTRAINT_CHANGED_EVT, null)
+    } catch (e) {
+      console.warn('[snap] cleanup persist/emit failed:', e)
+    }
   }
 
   function onEscKey(e: KeyboardEvent): void {
@@ -534,21 +572,55 @@ export function useSnapWindow(label: string): SnapWindowApi {
     if (tgt.closest('[data-tauri-drag-region="false"]')) return
 
     // #30 follow-up D：三模式判定（primary/secondary 角色模型）
-    //   - primary + 已有 dependents：group-drag（拖 anchor 平移整族）
-    //   - primary + 无 dependents：primary-attract（拖 primary 反向吸引附近 secondary）
-    //   - 其他（secondary 拖动）：source（首帧 detachAll，立即脱钩）
-    const isPrimary = label === PRIMARY_LABEL
-    const hasDeps = constraintStore.dependentsOf(label).length > 0
-    const hasOut = constraintStore.get(label) !== null
+    //   - primary + 已有 dependents + 无出向：group-drag（拖 anchor 平移整族）
+    //   - primary + 无 dependents + 无出向：primary-attract（拖 primary 反向吸引附近 secondary）
+    //   - 其他：source（首帧 detachAll，立即脱钩）
+    //
+    // primary 脏状态自愈：primary 理论不该有 outbound（I3：constraint.sourceId 永远不是 primary）。
+    // pre-#30 follow-up D 版本可能写过 pet→? 进 KV → 启动 load 后污染 store → mode 判定走错。
+    // 这里同步 delete + fire-and-forget persist + emit，下面 mode 计算用清理后的状态。
+    const labelIsPrimary = isPrimary(label)
+    let hasOut = constraintStore.get(label) !== null
+    if (labelIsPrimary && hasOut) {
+      const dirty = constraintStore.get(label)
+      console.warn(
+        `[snap] primary ${label} has illegal outbound ` +
+          `${dirty?.sourceId}->${dirty?.targetId} — fire-and-forget cleanup`,
+      )
+      constraintStore.delete(label)
+      hasOut = false
+      void (async (): Promise<void> => {
+        try {
+          await persistConstraints()
+          await emit(CONSTRAINT_CHANGED_EVT, null)
+        } catch (err) {
+          console.warn('[snap] onPointerDown cleanup async failed:', err)
+        }
+      })()
+    }
+    const deps = constraintStore.dependentsOf(label)
+    const hasDeps = deps.length > 0
     let mode: 'source' | 'group' | 'primary-attract'
-    if (isPrimary && hasDeps && !hasOut) {
+    if (labelIsPrimary && hasDeps && !hasOut) {
       mode = 'group'
-    } else if (isPrimary && !hasDeps) {
+    } else if (labelIsPrimary && !hasDeps && !hasOut) {
       mode = 'primary-attract'
     } else {
       mode = 'source'
     }
     currentDragMode = mode
+    if (import.meta.env.DEV) {
+      const storeDump = constraintStore
+        .list()
+        .map((c) => `${c.sourceId}->${c.targetId}`)
+        .join(',')
+      console.log(
+        `[snap] pointerdown label=${label} mode=${mode} ` +
+          `deps=[${deps.map((c) => c.sourceId).join(',')}] ` +
+          `hasOut=${hasOut} bypass=${e.shiftKey || e.ctrlKey} ` +
+          `store=[${storeDump}]`,
+      )
+    }
 
     // Escape hatch：Shift 或 Ctrl 按下时本次 drag 完全跳过吸附（Photoshop / Figma 直觉）
     bypassSnapForCurrentDrag = e.shiftKey || e.ctrlKey
@@ -706,14 +778,19 @@ export function useSnapWindow(label: string): SnapWindowApi {
     pointerDownHandler = onPointerDown
     window.addEventListener('pointerdown', pointerDownHandler, true)
 
-    // pet 窗负责启动期 load persistence + initial solve
-    // 延迟 300ms 等其他 webview 也注册到自己的 registry（cross-webview event 有 race）
-    if (label === PET_LABEL) {
-      setTimeout(async () => {
-        try {
-          const r = await loadPersistedConstraints()
-          console.log(`[snap] loaded ${r.loaded} constraint(s), dropped ${r.dropped}`)
-          // 触发一次 solver 把 attached 窗摆到位
+    // #30 follow-up D review (B2+B3)：所有 webview 启动期都 load KV → 写本地 store。
+    //   - 之前只有 pet 启动 load，chat webview 的 store 永远是 empty 直到第一次 emit
+    //   - 改后：每个 webview 自己 load → 即使 emit 路径出 race / 顺序问题也有 self-sufficient 数据
+    // 延迟 300ms 等其他 webview 注册自己（cross-webview broadcast 有传播时延）。
+    // primary 还额外负责 initial solve + emit CONSTRAINT_CHANGED 让其他 webview 同步。
+    setTimeout(async () => {
+      try {
+        const r = await loadPersistedConstraints()
+        console.log(`[snap] ${label} loaded ${r.loaded} constraint(s), dropped ${r.dropped}`)
+        // #30 follow-up D：自检清除历史脏数据 primary→?（plan 设计前的遗留）
+        await cleanupDirtyPrimaryOutbound()
+        if (isPrimary(label)) {
+          // primary：跑 initial solve 把 attached 窗摆到正确位置
           const rootIds = windowRegistry.list().map((w) => w.id)
           const solveResult = solve(rootIds)
           for (const [id, rect] of solveResult) {
@@ -725,11 +802,18 @@ export function useSnapWindow(label: string): SnapWindowApi {
               visible: true,
             } satisfies RegistryUpdatePayload)
           }
-        } catch (e) {
-          console.error('[snap] startup load + solve failed:', e)
+          // B3 fix：primary 启动 load+solve 完后 emit CONSTRAINT_CHANGED 让其他 webview reload。
+          // 解决 chat 早于 pet startup 时本地 load 还没拿到完整 registry 导致 anchor-missing drop 的 race。
+          try {
+            await emit(CONSTRAINT_CHANGED_EVT, null)
+          } catch (e) {
+            console.warn(`[snap] ${label} startup constraint-changed emit failed:`, e)
+          }
         }
-      }, 300)
-    }
+      } catch (e) {
+        console.error(`[snap] ${label} startup load + solve failed:`, e)
+      }
+    }, 300)
   })
 
   onBeforeUnmount(() => {

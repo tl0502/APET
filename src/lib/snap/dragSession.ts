@@ -50,7 +50,7 @@ export interface DragSessionDeps {
  *  - 'group'：被拖窗是 anchor（其他窗的 target），平移 dependents，commit no-op
  *  - 'primary-attract' (#30 follow-up D)：primary 拖动 + 无 dependents → 反向吸引附近 secondary。
  *      candidate 由 caller 经 findReverseAttract 算得（candidate.movingId = secondary id），
- *      commit 时写 secondary→primary。dragSession.sourceId 仍是 primary（被拖窗），
+ *      commit 时写 secondary→primary。dragSession.state.draggedId 仍是 primary（被拖窗），
  *      但 commit 写入 constraint 用 candidate.movingId 作 source。 */
 export type ArmMode = 'source' | 'group' | 'primary-attract'
 
@@ -109,7 +109,10 @@ class DragSession {
    *  forestSnapshot 是 caller 在 arm 前从 windowRegistry 全量 snapshot 出来的所有窗 Rect。
    *
    *  T6 (#31 follow-up B)：mode='group' 时进 group-drag（被拖窗是 anchor，平移 dependents）；
-   *  mode='source'（默认）走原 armed 流程（被拖窗找 candidate）。 */
+   *  mode='source'（默认）走原 armed 流程（被拖窗找 candidate）。
+   *  #30 follow-up D：mode='primary-attract' 内部按 source 同样处理（commit 用 movingId 推断）。
+   *
+   *  sourceId 参数名保留作 API 兼容；语义是被用户用鼠标拖的窗 label（→ state.draggedId）。 */
   arm(
     sourceId: string,
     forestSnapshot: Map<string, Rect>,
@@ -130,13 +133,13 @@ class DragSession {
     if (mode === 'group') {
       this._state = {
         kind: 'group-drag',
-        sourceId,
+        draggedId: sourceId,
         forestSnapshot: new Map(forestSnapshot),
       }
     } else {
       this._state = {
         kind: 'armed',
-        sourceId,
+        draggedId: sourceId,
         forestSnapshot: new Map(forestSnapshot),
         armedAt: now,
       }
@@ -167,12 +170,12 @@ class DragSession {
     if (this._state.kind === 'idle') return
     if (this._state.kind === 'group-drag') return // anchor 拖动不参与 candidate 评分
     if (this._state.kind === 'committing') return // settle tween 中，忽略残余 onMove
-    if (this._state.sourceId !== sourceId) return
+    if (this._state.draggedId !== sourceId) return
 
     if (this._state.kind === 'armed') {
       this._state = {
         kind: 'dragging',
-        sourceId,
+        draggedId: sourceId,
         forestSnapshot: this._state.forestSnapshot,
       }
     }
@@ -180,7 +183,7 @@ class DragSession {
     if (candidate) {
       this._state = {
         kind: 'preview',
-        sourceId,
+        draggedId: sourceId,
         forestSnapshot: this._state.forestSnapshot,
         candidate,
       }
@@ -188,7 +191,7 @@ class DragSession {
       // 失去 candidate → 回 Dragging
       this._state = {
         kind: 'dragging',
-        sourceId,
+        draggedId: sourceId,
         forestSnapshot: this._state.forestSnapshot,
       }
     }
@@ -207,8 +210,8 @@ class DragSession {
    *  无 sourceRect 参数 → 退化为原行为直接回 idle（向后兼容测试 / 调用方）。
    *  caller 跑完 tween 后须调 endCommitting() 回 idle。
    *
-   *  #30 follow-up D：constraint 的 sourceId = candidate.movingId（不是 dragSession.sourceId）。
-   *  - secondary drag (movingId === dragSession.sourceId)：行为不变
+   *  #30 follow-up D：constraint 的 sourceId = candidate.movingId（不是 dragSession.state.draggedId）。
+   *  - secondary drag (movingId === dragSession.state.draggedId)：行为不变
    *  - primary-attract (movingId === 某 secondary id)：写入 secondary→primary constraint。
    *  sourceRectAtMouseup 也应是 movingId 的 rect（caller 责任传对）。 */
   commit(now: number = Date.now(), sourceRectAtMouseup?: Rect): CommitResult {
@@ -240,11 +243,11 @@ class DragSession {
       }
       // Phase F (#31 follow-up C)：写入成功 + 有 sourceRect → 进 committing
       // 让 caller 的 settle tween 期间 ESC 仍可 cancel；tween 完成 caller 调 endCommitting()。
-      // #30 follow-up D：committing.sourceId = movingId（即 settle tween 要移动的窗）
+      // #30 follow-up D：committing.movingId = candidate.movingId（即 settle tween 要移动的窗）
       if (result.committedConstraint && sourceRectAtMouseup) {
         this._state = {
           kind: 'committing',
-          sourceId: c.movingId,
+          movingId: c.movingId,
           forestSnapshot: this._state.forestSnapshot,
           fromRect: sourceRectAtMouseup,
           toRect: c.finalRect,

@@ -96,12 +96,17 @@ export interface FindCandidatesOptions {
   /** 测试时注入自定义 history */
   detachHistoryInstance?: DetachHistory
   /** #31 follow-up C：当前 source 已 docked 到的 targetId（来自 constraintStore.get(sourceId)?.targetId）。
-   *  传入后：对该 target 用 DETACH_ZONE（100）放宽距离阈值实现 hysteresis；其他 target 仍用 ATTACH_ZONE。
-   *  undefined 表示未 docked（所有 target 走 ATTACH_ZONE）。 */
+   *  传入后：对该 target 用 DETACH_ZONE 放宽距离阈值实现 hysteresis；其他 target 仍用 ATTACH_ZONE。
+   *  undefined 表示未 docked（所有 target 走 ATTACH_ZONE）。
+   *
+   *  @deprecated #30 follow-up D 后 secondary drag 首帧已立刻 detachAll，hysteresis 字段
+   *    在生产路径基本不触达。保留供 M3 "keepAttached modifier" 复用，以及现有测试覆盖。 */
   dockedTargetId?: string
   /** #31 follow-up C：上次 commit 时间戳（来自 constraintStore.get(sourceId)?.createdAt）。
    *  now - createdAt < TIME_LOCKOUT_MS 时，dockedTargetId 永不脱钩（zone = Infinity），
-   *  防止 commit 后 race 立即脱开 + 给用户视觉确认时间。 */
+   *  防止 commit 后 race 立即脱开 + 给用户视觉确认时间。
+   *
+   *  @deprecated 同 dockedTargetId，#30 follow-up D 后不在生产路径触达。 */
   dockedAt?: number
   /** #31 follow-up C Phase C：source 当前 EWMA 平滑后的 velocity (px/frame)。
    *  传入后：每个 edge pair 的 score 加 velocityTerm(v, sEdge) × W_VELOCITY（同向 -0.2，垂直/反向 +0）。

@@ -61,7 +61,7 @@ describe('DragSession — Idle → arm → Armed', () => {
     s.arm('pet', snap, 1000)
     expect(s.state.kind).toBe('armed')
     if (s.state.kind !== 'armed') throw new Error('type narrow')
-    expect(s.state.sourceId).toBe('pet')
+    expect(s.state.draggedId).toBe('pet')
     expect(s.state.forestSnapshot.get('pet')).toEqual(r(0, 0, 320, 320))
   })
 
@@ -402,7 +402,7 @@ describe('DragSession — group-drag 模式 (T6 #31 follow-up B)', () => {
     s.arm('pet', snap, { mode: 'group' })
     expect(s.state.kind).toBe('group-drag')
     if (s.state.kind !== 'group-drag') throw new Error('narrow')
-    expect(s.state.sourceId).toBe('pet')
+    expect(s.state.draggedId).toBe('pet')
     expect(s.state.forestSnapshot.get('chat')).toEqual(r(340, 0, 640, 480))
   })
 
@@ -460,7 +460,7 @@ describe('DragSession — committing state (Phase F #31 follow-up C)', () => {
     expect(result.committedConstraint?.targetId).toBe('pet')
     expect(s.state.kind).toBe('committing')
     if (s.state.kind !== 'committing') throw new Error('narrow')
-    expect(s.state.sourceId).toBe('chat')
+    expect(s.state.movingId).toBe('chat')
     expect(s.state.fromRect).toEqual(fromRect)
     expect(s.state.toRect).toEqual(finalRect)
     expect(s.state.t0).toBe(2000)
@@ -582,7 +582,7 @@ describe('DragSession — primary-attract (#30 follow-up D)', () => {
     s.arm('pet', new Map(), { mode: 'primary-attract' })
     expect(s.state.kind).toBe('armed')
     if (s.state.kind !== 'armed') throw new Error('narrow')
-    expect(s.state.sourceId).toBe('pet')
+    expect(s.state.draggedId).toBe('pet')
   })
 
   it('primary 拖动 candidate.movingId=secondary → preview', () => {
@@ -638,7 +638,7 @@ describe('DragSession — primary-attract (#30 follow-up D)', () => {
     expect(result.committedConstraint).not.toBeNull()
     expect(s.state.kind).toBe('committing')
     if (s.state.kind !== 'committing') throw new Error('narrow')
-    expect(s.state.sourceId).toBe('chat') // movingId
+    expect(s.state.movingId).toBe('chat')
     expect(s.state.fromRect).toEqual(secondaryRect)
     expect(s.state.toRect).toEqual(finalRect)
   })

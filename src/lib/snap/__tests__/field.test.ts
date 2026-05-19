@@ -35,10 +35,10 @@ describe('fieldIntensityFromDistance', () => {
   })
 
   it('线性单调递减 in (ATTACH, FIELD_RADIUS)', () => {
-    // #30 follow-up D：ATTACH=10 / FIELD_RADIUS=20 → 区间 (10, 20)
-    const a = fieldIntensityFromDistance(12)
-    const b = fieldIntensityFromDistance(15)
-    const c = fieldIntensityFromDistance(18)
+    // #30 follow-up D revision：ATTACH=25 / FIELD_RADIUS=50 → 区间 (25, 50)
+    const a = fieldIntensityFromDistance(30)
+    const b = fieldIntensityFromDistance(37)
+    const c = fieldIntensityFromDistance(44)
     expect(a).toBeGreaterThan(b)
     expect(b).toBeGreaterThan(c)
   })
@@ -81,9 +81,11 @@ describe('computeFieldIntensity', () => {
     expect(result.anchorId).toBe('t')
   })
 
-  it('单 anchor 在 field 中段（dist=15 = mid）→ intensity ~0.5', () => {
+  it('单 anchor 在 field 中段（dist=mid）→ intensity ~0.5', () => {
+    // mid = (25+50)/2 = 37.5；用浮点 rect 让 dist 严格 == mid
+    const mid = (ATTACH_ZONE + FIELD_RADIUS) / 2
     const result = computeFieldIntensity('s', r(0, 0, 320, 320), [
-      reg('t', r(335, 0, 320, 320)), // dist = 15
+      reg('t', r(320 + mid, 0, 320, 320)),
     ])
     expect(result.intensity).toBeCloseTo(0.5, 5)
     expect(result.anchorId).toBe('t')

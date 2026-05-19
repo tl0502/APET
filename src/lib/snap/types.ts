@@ -44,9 +44,9 @@ export interface WindowRegistration {
 /** 候选 snap：drag 期间 candidates.ts 计算的一个潜在吸附点。 */
 export interface SnapCandidate {
   /** #30 follow-up D：谁被移动到 finalRect。
-   *  - source / group / secondary 拖动模式：= dragSession.sourceId（即被拖窗本身）
+   *  - source / group / secondary 拖动模式：= dragSession.state.draggedId（即被拖窗本身）
    *  - primary-attract 模式：= 某个 secondary 的 id（被反向吸到 primary 那个）
-   *  caller commit / settle tween 都基于 movingId（而非 dragSession.sourceId）。 */
+   *  caller commit / settle tween 都基于 movingId（而非 dragSession.state.draggedId）。 */
   movingId: string
   targetId: string
   sourceEdge: Edge
@@ -71,40 +71,48 @@ export interface SnapCandidate {
  *
  *  Phase F (#31 follow-up C)：新增 committing 状态。commit() 写入 constraint 后进入此态，
  *  caller 跑 settle tween 期间状态机仍在；tween 完成 caller 显式调 endCommitting() 回 idle。
- *  ESC 在 committing 时也能 cancel（回滚到 fromRect / forestSnapshot）。 */
+ *  ESC 在 committing 时也能 cancel（回滚到 fromRect / forestSnapshot）。
+ *
+ *  #30 follow-up D 命名澄清：
+ *  - armed/dragging/preview/group-drag.draggedId：用户用鼠标拖的窗（手随时跟）
+ *  - committing.movingId：settle tween 正在移动的窗（= candidate.movingId，
+ *    primary-attract 时是 secondary，普通 source/group 时与 draggedId 同）
+ *  两者语义不同 — 显式命名避免读代码时的混淆。 */
 export type DragSessionState =
   | { kind: 'idle' }
   | {
       kind: 'armed'
-      sourceId: string
+      draggedId: string
       /** drag 开始前的全 forest Rect 快照，ESC 回滚用 */
       forestSnapshot: Map<string, Rect>
       armedAt: number
     }
   | {
       kind: 'dragging'
-      sourceId: string
+      draggedId: string
       forestSnapshot: Map<string, Rect>
     }
   | {
       kind: 'preview'
-      sourceId: string
+      draggedId: string
       forestSnapshot: Map<string, Rect>
       candidate: SnapCandidate
     }
   | {
       /** T6：anchor 角色拖动 — 平移所有 dependents，跳过 candidate / detach。 */
       kind: 'group-drag'
-      sourceId: string
+      draggedId: string
       forestSnapshot: Map<string, Rect>
     }
   | {
       /** Phase F (#31 follow-up C)：commit 已写 store，settle tween 进行中。
-       *  fromRect: 松手时 source 的位置；toRect: applyConstraint 后 finalRect。
+       *  movingId: settle tween 移动的窗（= candidate.movingId）。
+       *  primary-attract 时 = secondary id（不等于 draggedId='pet'）。
+       *  fromRect: 松手时 movingId 的位置；toRect: applyConstraint 后 finalRect。
        *  t0: ms epoch，commit 时刻；caller 用此估算 tween 已跑多久（兜底诊断）。
        *  ESC 在此态 cancel → 回滚 forestSnapshot（tween 半路停在 fromRect 附近也接受）。 */
       kind: 'committing'
-      sourceId: string
+      movingId: string
       forestSnapshot: Map<string, Rect>
       fromRect: Rect
       toRect: Rect

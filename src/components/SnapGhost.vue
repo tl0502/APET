@@ -3,7 +3,7 @@
 //
 // 渲染"松手后我会落在这里"的 ghost outline 提示。
 // 实现约束：Tauri webview 不能画到 outer rect 外，所以 ghost 画在 source 自己窗内
-// （相对 source 当前位置偏移到 finalRect）。可见的偏移段（最多 ATTACH_ZONE 60px）
+// （相对 source 当前位置偏移到 finalRect）。可见的偏移段（最多 ATTACH_ZONE px）
 // 传达"未来落点"语义；ghost 大部分与 source 当前位置重叠（视觉上是"重影"）。
 //
 // 用法：在 .chat-window 内挂 `<SnapGhost source-label="chat" />`。

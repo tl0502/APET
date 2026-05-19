@@ -31,9 +31,9 @@ describe('findCandidates — 基础 trigger 进入 / 排除', () => {
   })
 
   it('distance > TRIGGER_ZONE → 0 candidate', () => {
-    // #30 follow-up D：TRIGGER_ZONE 60→10 后，dist=15 即超阈值
+    // #30 follow-up D revision：TRIGGER_ZONE 10→25 后，dist=30 超阈值
     const source = r(0, 0, 320, 320)
-    const target = reg('t', r(335, 0, 320, 320)) // dist = 15 > 10
+    const target = reg('t', r(350, 0, 320, 320)) // dist = 30 > 25
     expect(findCandidates('s', source, [target])).toHaveLength(0)
   })
 
@@ -187,28 +187,28 @@ describe('findCandidates — score 量级合理', () => {
   })
 })
 
-// #31 follow-up C：hysteresis — docked source 用 DETACH_ZONE (18) 放宽；
+// #31 follow-up C：hysteresis — docked source 用 DETACH_ZONE (45) 放宽；
 // 200ms time lockout 内即使超过 DETACH_ZONE 也不脱钩。
-// #30 follow-up D：ATTACH_ZONE 60→10, DETACH_ZONE 100→18。
+// #30 follow-up D revision：ATTACH_ZONE=25, DETACH_ZONE=45。
 describe('findCandidates — hysteresis (Phase D #31 follow-up C)', () => {
-  it('未 docked → ATTACH_ZONE 10 阈值（15px 距离应拒）', () => {
+  it('未 docked → ATTACH_ZONE 25 阈值（30px 距离应拒）', () => {
     const source = r(0, 0, 320, 320)
-    const target = reg('t', r(335, 0, 320, 320)) // dist = 15 > 10
+    const target = reg('t', r(350, 0, 320, 320)) // dist = 30 > 25
     const cands = findCandidates('s', source, [target])
     expect(cands).toHaveLength(0)
   })
 
-  it('显式 dockedTargetId → DETACH_ZONE 18 放宽（15px 仍 accept）', () => {
+  it('显式 dockedTargetId → DETACH_ZONE 45 放宽（30px 仍 accept）', () => {
     const source = r(0, 0, 320, 320)
-    const target = reg('t', r(335, 0, 320, 320)) // dist = 15 (> ATTACH 10, ≤ DETACH 18)
+    const target = reg('t', r(350, 0, 320, 320)) // dist = 30 (> ATTACH 25, ≤ DETACH 45)
     const cands = findCandidates('s', source, [target], { dockedTargetId: 't' })
     expect(cands).toHaveLength(1)
-    expect(cands[0]?.distance).toBe(15)
+    expect(cands[0]?.distance).toBe(30)
   })
 
-  it('docked source 拖远 > DETACH_ZONE → 仍脱钩（25px 拒）', () => {
+  it('docked source 拖远 > DETACH_ZONE → 仍脱钩（50px 拒）', () => {
     const source = r(0, 0, 320, 320)
-    const target = reg('t', r(345, 0, 320, 320)) // dist = 25 > 18
+    const target = reg('t', r(370, 0, 320, 320)) // dist = 50 > 45
     const cands = findCandidates('s', source, [target], { dockedTargetId: 't' })
     expect(cands).toHaveLength(0)
   })
@@ -221,16 +221,13 @@ describe('findCandidates — hysteresis (Phase D #31 follow-up C)', () => {
       dockedAt: 5000,
       now: 5100, // 100ms ago，在 200ms lockout 内
     })
-    // Infinity zone：source.right↔target.left 与 source.left↔target.right 都通过 distance check
-    // （overlap 仍 320 == y 完全对齐）。lockout 行为正确：至少有 candidate，commit 时取 best 重新粘住。
     expect(cands.length).toBeGreaterThanOrEqual(1)
-    // 至少有一个 candidate 是 docked target 自己
     expect(cands.some((c) => c.targetId === 't')).toBe(true)
   })
 
   it('time lockout 过期（now - dockedAt > 200ms）→ 回到 DETACH_ZONE 行为', () => {
     const source = r(0, 0, 320, 320)
-    const target = reg('t', r(345, 0, 320, 320)) // dist = 25 > 18
+    const target = reg('t', r(370, 0, 320, 320)) // dist = 50 > 45
     const cands = findCandidates('s', source, [target], {
       dockedTargetId: 't',
       dockedAt: 5000,
@@ -241,12 +238,12 @@ describe('findCandidates — hysteresis (Phase D #31 follow-up C)', () => {
 
   it('docked 到 a → 仅对 a 放宽，对其他 target 仍 ATTACH', () => {
     const source = r(0, 0, 320, 320)
-    const a = reg('a', r(335, 0, 320, 320)) // dist = 15（docked target，DETACH 18 内）
-    const b = reg('b', r(0, 335, 320, 320)) // dist = 15（其他 target，ATTACH 10 外）
+    const a = reg('a', r(350, 0, 320, 320)) // dist = 30（docked target，DETACH 45 内）
+    const b = reg('b', r(0, 350, 320, 320)) // dist = 30（其他 target，ATTACH 25 外）
     const cands = findCandidates('s', source, [a, b], { dockedTargetId: 'a' })
     const ids = cands.map((c) => c.targetId)
-    expect(ids).toContain('a') // a 走 DETACH 18，15 < 18 → accept
-    expect(ids).not.toContain('b') // b 走 ATTACH 10，15 > 10 → reject
+    expect(ids).toContain('a') // a 走 DETACH 45，30 < 45 → accept
+    expect(ids).not.toContain('b') // b 走 ATTACH 25，30 > 25 → reject
   })
 
   it('dockedTargetId 缺省时从 constraintStore.get 反推（向后兼容）', () => {
@@ -260,9 +257,9 @@ describe('findCandidates — hysteresis (Phase D #31 follow-up C)', () => {
       createdAt: 0, // 远古，不触发 time lockout
     })
     const source = r(0, 0, 320, 320)
-    const target = reg('t', r(335, 0, 320, 320)) // dist = 15
+    const target = reg('t', r(350, 0, 320, 320)) // dist = 30
     const cands = findCandidates('s', source, [target])
-    expect(cands).toHaveLength(1) // 自动走 DETACH_ZONE 18
+    expect(cands).toHaveLength(1) // 自动走 DETACH_ZONE 45
   })
 })
 
