@@ -1,37 +1,35 @@
 <script setup lang="ts">
-// ChatApp：chat 窗口的 root（V3 多对话并发版）。
+// ChatApp：chat 窗口的 root（Desktop Chat Window Architecture 重构 Phase A）。
 //
-// V3 重构（2026-05-10，B13）—— 核心变化：
-// - 状态模型：messages/draft/streaming 从单 ref 升级为 convStates: reactive Map<convId, ConvState>
-//   每对话独立分桶；computed 投射当前 view（currentMessages / inputDraft / canCancelHere 等）
-// - 多对话并发流式（ChatGPT 风格）：任意对话可同时在跑 stream；切换 view 不影响后台流
-// - Channel 路由：每次 handleSend 创建的 channel.onmessage 闭包捕获 routedConvId/AssistantId，
-//   事件直接写到对应桶；切走视图也不丢 token
+// 重构核心（与上版差异）：
+// - DOM 平级 surface 结构：window-root → app-surface → titlebar-surface + app-body(sidebar + content-surface(message-scroll + floating-composer)) + SnapGhost
+// - drop AppShell（chat 不再走 standalone 三段式 shell；AppShell.vue 本身不动，其他 4 窗口继续用）
+// - 真透明窗 + CSS 14px 圆角（tauri transparent:true + chat.html 全链路透明 + .app-surface 唯一实体层）
+// - Surface 阶梯：surface-0 (window bg) → 中间层 → surface-2 (content) → surface-3 (composer Phase C)
+// - titlebar 48px window chrome（仅 ─ + ✕，左/中是 drag region 大片空白）
+// - Phase A 暂不渲染人格 identity（Phase B 迁到 sidebar 顶）
+//
+// V3 状态模型（保留不变）：
+// - 状态：messages/draft/streaming 从单 ref 升级为 convStates: reactive Map<convId, ConvState>
+//   每对话独立分桶；computed 投射当前 view
+// - 多对话并发流式：任意对话可同时在跑 stream；切换 view 不影响后台流
+// - Channel 路由：每次 handleSend 创建的 channel.onmessage 闭包捕获 routedConvId/AssistantId
 // - draft 持久化：debounce 200ms 写到 config 表 KV chat:draft:<convId>，关窗保留
 // - sidebar lockedIds: 任意有 in-flight 流的 convId 显示 spinner + 禁 rename/archive/delete
-// - 输入框永远可编辑（即使 current view 流式中也可打草稿）；发送按钮在 current 流式中时灰
-// - 取消按钮在 current = streaming 时可见；切走自动隐藏
-//
-// 内存：convStates 长期看会膨胀（访问过的对话都驻留消息）。M1 用户量小不是问题；
-// M3 加 LRU 即可（保留最近 N 个对话的 in-memory state，其他切回时 reload）。
-//
-// 后端 0 改动：active_streams 是 HashMap、run_stream 是 detached spawn、每个 chat_send
-// 自带 channel/conn —— 后端早已支持并发，只是前端单状态模型把它锁死了。
+// - 输入框永远可编辑；发送按钮在 current 流式中时灰；取消按钮在 current=streaming 时可见
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElButton, ElIcon, ElMessageBox } from 'element-plus'
-import { Expand, Fold } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { listen } from '@tauri-apps/api/event'
 import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window'
-import AppShell from '@/components/layouts/AppShell.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ConversationSidebar from '@/components/chat/ConversationSidebar.vue'
 import MessageList from '@/components/chat/MessageList.vue'
+import SnapGhost from '@/components/SnapGhost.vue'
 import { useToast } from '@/composables/useToast'
 import { useSnapWindow } from '@/composables/useSnapWindow'
 import { getConfig } from '@/services/config'
-import SnapGhost from '@/components/SnapGhost.vue'
 import { useAvatarsStore } from '@/stores/avatars'
 import { useNicknameStore } from '@/stores/nickname'
 import {
@@ -58,7 +56,7 @@ const avatarsStore = useAvatarsStore()
 
 // #30 磁吸窗口系统：chat 作为参与磁吸的窗口，挂 listener + dragSession + persistence。
 // composable 内部 onMounted/onBeforeUnmount 注册时机与本组件一致。
-// T2a (#31)：拿 isPreviewAnchor 给 .chat-panel 套 .snap-preview class（拖 pet 接近 chat 时高亮）。
+// T2a (#31)：拿 isPreviewAnchor 给 .app-surface 套 .snap-preview class（拖 pet 接近 chat 时高亮）。
 // T7 (#31 follow-up B)：previewEdgeFor + previewIntensityFor 渲染沿对接边的矩形 glow（替代圆形）。
 // Phase A (#31 follow-up C)：isFieldAnchor + fieldIntensityFor 渲染 field halo
 // Phase F (#31 follow-up C)：selfLean — 本窗拖动 + 在 field 内时朝 pet 方向 ≤3px 透传 CSS transform
@@ -86,8 +84,8 @@ const chatSnapPreviewStyle = computed(() => ({
   '--snap-field-intensity': String(chatFieldIntensity.value),
 }))
 
-// Phase F (#31 follow-up C)：self-lean transform 应用到外层 .chat-window
-// 不影响内层 .chat-panel 的 border-radius / box-shadow（plan §8 风险 #6）。
+// Phase F (#31 follow-up C)：self-lean transform 应用到最外层 .window-root
+// 不影响内层 .app-surface 的 border-radius / box-shadow。
 const chatLeanStyle = computed(() => {
   const lean = chatSelfLean.value
   if (!lean) return {}
@@ -122,29 +120,38 @@ interface ConvState {
   stream: StreamSlot | null
 }
 
-const personaName = ref<string>('')
 const conversations = ref<ConversationSummary[]>([])
 const conversationId = ref<string | null>(null)
-/** P0 美化:会话栏折叠状态。默认展开,☰ 按钮切换。 */
+/** Phase B 会用：sidebar 折叠状态（顶部 toggle 按钮控制）。 */
 const sidebarCollapsed = ref(false)
-/** Header momo SVG 加载失败:img onError 翻 true,降级到首字母占位圆。
- *  注:persona 自定义头像（avatarsStore.personaAvatarUrl）失败由独立 personaImgFailed 标记，
- *  让"自定义 PNG 失败 → 退回 momo SVG → 再失败 → 退回 'M'"三层降级各自独立。
- *  L5 修复：URL 变化时复位 failed flag（用户重新导出后新 URL 应重试，不被旧 fail 卡住）。 */
-const avatarFailed = ref(false)
-const personaImgFailed = ref(false)
 
+/** Phase B：人格 identity 现在挂在 sidebar 顶部 chrome。
+ *  personaName 由 getActivePersona() 异步加载；persona:activated 事件触发刷新。 */
+const personaName = ref<string>('')
+
+/** Sidebar identity micro-copy：替换通用"在线"文字。
+ *  保持中性灰风格,无 emoji,语气拟人但克制。挂载时随机选一条(每窗口生命周期固定),
+ *  桌宠"真正状态机"接入前的占位实现。 */
+const MOODS = ['等你来', '刚刚醒了', '在听呢', '想你了', '安静等着', '随你说', '今天还好吗'] as const
+const currentMood = ref<string>(MOODS[0])
+
+/** 自定义 persona PNG（avatarsStore.personaAvatarUrl）加载失败时降级到 momo SVG。
+ *  L5 修复：URL 变化时复位 failed flag（用户重新导出后新 URL 应重试，不被旧 fail 卡住）。
+ *  布局 v2：identity 从 sidebar chrome 迁到 content-header，三层降级仍由 ChatApp 持有。 */
+const personaImgFailed = ref(false)
+const avatarFailed = ref(false)
 watch(
   () => avatarsStore.personaAvatarUrl,
   () => {
     personaImgFailed.value = false
   },
 )
-/** Header 副标题 micro-copy:替换通用"在线"文字。
- *  保持中性灰风格,无 emoji,语气拟人但克制。挂载时随机选一条(每窗口生命周期固定),
- *  桌宠"真正状态机"接入前的占位实现。 */
-const MOODS = ['等你来', '刚刚醒了', '在听呢', '想你了', '安静等着', '随你说', '今天还好吗'] as const
-const currentMood = ref<string>(MOODS[0])
+
+/** 人格名首字符（fallback 'M'），content-header avatar 三层降级最后一档。 */
+const personaInitial = computed(() => {
+  const n = personaName.value?.trim()
+  return n ? n.charAt(0).toUpperCase() : 'M'
+})
 /** V3 核心 state：所有按对话独立的状态。
  *  reactive(Map) 让 .set/.delete + 内部字段变化都触发依赖重渲。 */
 const convStates = reactive(new Map<string, ConvState>())
@@ -304,7 +311,23 @@ onMounted(async () => {
     console.warn('[ChatApp] listen AOT changed failed:', e)
   }
 
-  // 随机挑一条 mood(每窗口生命周期固定一次)
+  // store init：nickname / avatar store 是 MessageBubble 跨窗口共享依赖；chat 窗 mount 时
+  // 主动 load + ensureListener，避免 MessageBubble 渲染时拿不到数据。
+  try {
+    if (!nicknameStore.loaded) await nicknameStore.load()
+    await nicknameStore.ensureListener()
+  } catch (e) {
+    console.warn('[ChatApp] nickname store load failed:', e)
+  }
+  try {
+    if (!avatarsStore.loaded) await avatarsStore.load()
+    await avatarsStore.ensureListener()
+  } catch (e) {
+    console.warn('[ChatApp] avatars store load failed:', e)
+  }
+
+  // Phase B 人格 identity：随机挑一条 mood（每窗口生命周期固定一次）+ 加载当前人格名 +
+  // listen persona:activated 跨窗口刷新（设置面板切换人格后立即同步 sidebar identity）。
   currentMood.value = MOODS[Math.floor(Math.random() * MOODS.length)]
 
   try {
@@ -316,31 +339,18 @@ onMounted(async () => {
     toast.error('未能加载当前人格，请到设置面板检查或激活一个人格', { duration: 5000 })
   }
 
-  // P0 美化:载入用户昵称,user 气泡头像首字符依赖。失败 toast.error 已由 store 透出,本处兜底 warn。
   try {
-    if (!nicknameStore.loaded) await nicknameStore.load()
-    await nicknameStore.ensureListener()
+    const unPersona = await listen('persona:activated', async () => {
+      try {
+        personaName.value = (await getActivePersona()).name
+      } catch (e) {
+        console.warn('[ChatApp] refresh persona name failed:', e)
+      }
+    })
+    unlistenFns.push(unPersona)
   } catch (e) {
-    console.warn('[ChatApp] nickname store load failed:', e)
+    console.warn('[ChatApp] listen persona:activated failed:', e)
   }
-
-  // #25/#26 头像 store：拉 KV + 挂 avatar:changed / persona:activated 跨窗口 listener。
-  // 失败仅 warn 不阻断；MessageBubble / header 会自动 fallback 到 momo SVG / 昵称首字符。
-  try {
-    if (!avatarsStore.loaded) await avatarsStore.load()
-    await avatarsStore.ensureListener()
-  } catch (e) {
-    console.warn('[ChatApp] avatars store load failed:', e)
-  }
-
-  const unPersona = await listen('persona:activated', async () => {
-    try {
-      personaName.value = (await getActivePersona()).name
-    } catch (e) {
-      console.warn('[ChatApp] refresh persona name failed:', e)
-    }
-  })
-  unlistenFns.push(unPersona)
 
   window.addEventListener('keydown', onGlobalKeydown)
 
@@ -814,16 +824,7 @@ async function handleHide() {
   await hideChat()
 }
 
-/** 标题栏 ─ 按钮：最小化到任务栏（与 hideChat 的"进托盘"区分）。
- *  依赖 tauri.conf.json chat 窗口 skipTaskbar:false；否则 minimize 后窗口会找不回。 */
-async function onMinimize() {
-  try {
-    await getCurrentWindow().minimize()
-  } catch (e) {
-    console.warn('[ChatApp] minimize failed:', e)
-  }
-}
-
+/** Phase B：sidebar 顶部 chrome 的 ≡ 折叠按钮触发；折叠时 sidebar 缩到 48px 窄列保留入口。 */
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
@@ -834,40 +835,16 @@ function msgOf(e: unknown): string {
 </script>
 
 <template>
-  <!-- #30 磁吸：chat 现走 transparent:false + decorations:false 路径（与 pomodoro 一致）：
-       Win11 OS 自动提供 ~8px 系统圆角，CSS .chat-panel border-radius:8px 与之对齐做内部裁剪。
-       T2a + T7 (#31 follow-up B)：preview anchor 命中时 .chat-panel 加 .snap-preview class
-       + 沿对接边 modifier 显示矩形 glow（覆盖式 box-shadow，外向部分会被 OS 窗口边界剪掉）。
-       Phase F (#31 follow-up C)：.chat-window 接 chatLeanStyle transform 实现 self-lean
-       （朝 pet 方向 ≤3px 微偏），不影响 .chat-panel layout。 -->
-  <div class="chat-window" :style="chatLeanStyle">
-    <!-- Phase B (#31 follow-up C)：Ghost slot 提示。preview 状态时显示"松手会落这"
-         outline，相对 chat 当前位置偏移 ≤ 60px（webview 外被裁，可见偏移传达落点方向）。 -->
+  <!-- Desktop Chat Window Architecture（布局 v2 — 抽屉式）：
+       window-root → app-surface → app-body[sidebar + content-surface[content-header + messages + composer]] + SnapGhost
+       - 全宽 titlebar-surface 删除（只剩 ✕ 浪费空间）；window chrome 三件套（≡ + identity + ✕）下沉到
+         content-surface 顶部，仅占右半宽，sidebar 顶部回归纯净（创建对话 + 历史记录）。
+       - identity 区（avatar + 人格名 + mood）挂 data-tauri-drag-region 补足整窗拖动入口。
+       - sidebar 抽屉语义：collapsed = width:0 完全收起（toggle 入口在 content-header）。 -->
+  <div class="window-root" :style="chatLeanStyle">
     <SnapGhost source-label="chat" />
-    <div class="chat-panel" :class="chatSnapPreviewClass" :style="chatSnapPreviewStyle">
-      <!-- Windows 风格窗口标题栏（28px 极简）：只保留 ─ 最小化 + ✕ 关闭。
-           整片 data-tauri-drag-region（左侧大片空白即拖动区）；两个按钮 false 排除。
-           ─ 调 minimize（skipTaskbar:false 后走标准 Win 任务栏路径）；
-           ✕ 走 handleHide → 现有 hideChat IPC（进托盘，与之前一致）。 -->
-      <div class="chat-titlebar" data-tauri-drag-region>
-        <div class="chat-titlebar__sysbtns">
-          <button
-            class="chat-titlebar__btn chat-titlebar__btn--min"
-            title="最小化"
-            aria-label="最小化"
-            data-tauri-drag-region="false"
-            @click="onMinimize"
-          >─</button>
-          <button
-            class="chat-titlebar__btn chat-titlebar__btn--close"
-            title="关闭（进托盘）"
-            aria-label="关闭"
-            data-tauri-drag-region="false"
-            @click="handleHide"
-          >✕</button>
-        </div>
-      </div>
-      <div class="chat-root">
+    <div class="app-surface" :class="chatSnapPreviewClass" :style="chatSnapPreviewStyle">
+      <div class="app-body">
         <ConversationSidebar
           :conversations="conversations"
           :active-id="conversationId"
@@ -880,111 +857,123 @@ function msgOf(e: unknown): string {
           @delete="onDeleteConversation"
         />
 
-    <div class="chat-main">
-      <AppShell variant="standalone">
-        <template #header>
-          <ElButton
-            link
-            class="chat-header__sidebar-toggle"
-            :title="sidebarCollapsed ? '展开会话栏' : '收起会话栏'"
-            :aria-label="sidebarCollapsed ? '展开会话栏' : '收起会话栏'"
-            data-tauri-drag-region="false"
-            @click="toggleSidebar"
-          >
-            <ElIcon>
-              <Expand v-if="sidebarCollapsed" />
-              <Fold v-else />
-            </ElIcon>
-          </ElButton>
+        <main class="content-surface">
+          <!-- content-header：48px。四段式：
+               ≡ 抽屉开关 / identity (avatar + name + mood) / 胶囊拖动块 / ✕ 关闭。
+               拖动入口：胶囊块是独立 data-tauri-drag-region 元素（flex:1 抢占剩余空间），
+               中间有 pill 视觉提示告诉用户"这里能拖"。
+               header 整体不挂 drag-region 是因为子元素（按钮/img/span）不继承该属性，
+               早先做法只剩元素间缝隙能拖。 -->
+          <header class="content-header">
+            <button
+              class="content-header__toggle"
+              :title="sidebarCollapsed ? '展开会话栏' : '收起会话栏'"
+              :aria-label="sidebarCollapsed ? '展开会话栏' : '收起会话栏'"
+              @click="toggleSidebar"
+            >≡</button>
 
-          <div class="chat-header__identity">
-            <div class="chat-header__avatar" aria-hidden="true">
-              <!-- 三层降级：persona 自定义 PNG（#26 导出）→ momo SVG → 'M' 字符
-                   onError 区分两层 flag，让"PNG 失败回退到 momo SVG"独立于"momo SVG 失败回退到字符" -->
-              <img
-                v-if="avatarsStore.personaAvatarUrl && !personaImgFailed"
-                :src="avatarsStore.personaAvatarUrl"
-                alt=""
-                class="chat-header__avatar-img"
-                @error="personaImgFailed = true"
-              />
-              <img
-                v-else-if="!avatarFailed"
-                src="/avatar/momo-avatar.svg"
-                alt=""
-                class="chat-header__avatar-img"
-                @error="avatarFailed = true"
-              />
-              <span v-else class="chat-header__avatar-fallback">M</span>
+            <div class="content-header__identity">
+              <div class="content-header__avatar" aria-hidden="true">
+                <img
+                  v-if="avatarsStore.personaAvatarUrl && !personaImgFailed"
+                  :src="avatarsStore.personaAvatarUrl"
+                  alt=""
+                  class="content-header__avatar-img"
+                  @error="personaImgFailed = true"
+                />
+                <img
+                  v-else-if="!avatarFailed"
+                  src="/avatar/momo-avatar.svg"
+                  alt=""
+                  class="content-header__avatar-img"
+                  @error="avatarFailed = true"
+                />
+                <span v-else class="content-header__avatar-fallback">{{ personaInitial }}</span>
+              </div>
+              <div class="content-header__name-wrap">
+                <span v-if="personaName" class="content-header__name">{{ personaName }}</span>
+                <span v-else class="content-header__name content-header__name--placeholder" />
+                <span class="content-header__status">
+                  <span class="content-header__status-dot" aria-hidden="true" />
+                  {{ currentMood }}
+                </span>
+              </div>
             </div>
-            <div class="chat-header__name-wrap">
-              <span v-if="personaName" class="chat-header__title">{{ personaName }}</span>
-              <span v-else class="chat-header__title chat-header__title--placeholder" />
-              <span class="chat-header__status">
-                <span class="chat-header__status-dot" aria-hidden="true" />
-                {{ currentMood }}
-              </span>
-            </div>
+
+            <!-- 胶囊拖动块：data-tauri-drag-region 挂在本元素上；flex:1 抢占剩余空间让拖动区域够大；
+                 ::before 渲染一段灰色 pill 作为"拖动手柄"视觉提示。 -->
+            <div
+              class="content-header__drag-handle"
+              data-tauri-drag-region
+              title="拖动窗口"
+              aria-label="拖动窗口"
+            />
+
+            <button
+              class="content-header__close"
+              title="关闭（进托盘）"
+              aria-label="关闭"
+              @click="handleHide"
+            >✕</button>
+          </header>
+
+          <div class="message-scroll-surface">
+            <MessageList
+              :messages="currentMessages"
+              :streaming-message-id="currentStreamingMessageId"
+            />
           </div>
-        </template>
-
-        <MessageList :messages="currentMessages" :streaming-message-id="currentStreamingMessageId" />
-
-        <template #footer>
-          <ChatInput
-            v-model="inputDraft"
-            :input-disabled="false"
-            :send-disabled="isCurrentStreaming"
-            :show-cancel="canCancelHere"
-            :cancelling="isCancellingHere"
-            @send="handleSend"
-            @cancel="handleCancel"
-          />
-        </template>
-      </AppShell>
-    </div>
+          <div class="floating-composer">
+            <ChatInput
+              v-model="inputDraft"
+              :input-disabled="false"
+              :send-disabled="isCurrentStreaming"
+              :show-cancel="canCancelHere"
+              :cancelling="isCancellingHere"
+              @send="handleSend"
+              @cancel="handleCancel"
+            />
+          </div>
+        </main>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* #30 chat-window：padding=0 让 chat-panel 占满 webview。
-   transparent:false 切换后由 OS 提供 ~8px 圆角，外层不需再为 box-shadow 留 padding。
-   Phase F (#31 follow-up C)：transform 由 :style 注入（chatLeanStyle 朝 pet 方向 ≤3px 微偏）。
-   160ms ease 过渡让 lean 出入平滑，符合 plan §2 L2 节奏。 */
-.chat-window {
+/* === window-root（全透明缓冲层）===
+   100% × 100% 占满 webview。padding 给 .app-surface 的 box-shadow-float 留显示空间，
+   避免阴影被 webview 边界裁。Phase F transform 注入到本元素（最外层不影响内部 layout）。 */
+.window-root {
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: 12px;
   box-sizing: border-box;
   background: transparent;
-  transition: transform 160ms var(--aipet-ease-standard, ease-out);
+  transition: transform 160ms var(--aipet-ease-standard);
 }
 
-/* #30 内层 opaque 面板：圆角由 Win11 OS 提供（transparent:false + decorations:false 时
-   DWMWA_WINDOW_CORNER_PREFERENCE 默认走 ROUND ≈ 8px，与 pomodoro 独立窗一致）。
-   - CSS border-radius 设 8px 与 OS 对齐：仅用于裁剪内部子元素（chat-titlebar 顶角、
-     ConversationSidebar 左下、ChatInput 右下），与 OS 圆角不冲突。
-   - 不画 hairline / drop shadow：OS 圆角已自带系统级边界。
-   - snap-preview modifier 仍保留 outset box-shadow（transparent:false 后会被 OS 窗口
-     边界剪掉外向部分，inset 部分正常工作；后续可改 inset-only 优化，本次不动）。 */
-.chat-panel {
+/* === app-surface（唯一实体层，L0 windowbg）===
+   14px CSS 圆角 + overflow:hidden 把所有子内容裁成圆角。
+   transparent 窗口 + 此元素 opaque → 圆角外为透明 webview → 桌面透出。
+   这是"真"圆角窗的标准做法（Discord/Telegram/Arc）。
+   shadow-float 提供浮起感；snap-preview modifier 在被拖目标时覆盖式注入边描线 + glow。 */
+.app-surface {
   width: 100%;
   height: 100%;
-  background: var(--aipet-color-bg, #ffffff);
-  border-radius: 8px;
+  background: var(--aipet-color-bg);
+  border-radius: 14px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: box-shadow 180ms var(--aipet-ease-standard, ease-out);
+  box-shadow: var(--aipet-shadow-float);
+  transition: box-shadow 180ms var(--aipet-ease-standard);
 }
 
-/* T2a + T7 (#31 follow-up B)：chat 是 preview anchor 时矩形 outline + 沿对接边内向 glow。
-   .chat-panel 有 overflow:hidden + 8px 圆角；多层 box-shadow（spread 0 0 0 2px + 弥散 24px）
-   模拟 outline，但 transparent:false 切换后外向部分会被 OS 窗口边界剪掉（inset glow 不受影响）；
-   --snap-preview-intensity ∈ [0.25,1] 控制。 */
-.chat-panel.snap-preview {
+/* Snap-preview state（拖 pet 接近 chat 时反馈）：
+   覆盖式 box-shadow（含 2px primary 描边 + 24px primary glow + 浮起阴影）。
+   transparent:true + window-root padding:12 留足空间不被裁。 */
+.app-surface.snap-preview {
   box-shadow:
     0 0 0 2px
       color-mix(
@@ -998,31 +987,9 @@ function msgOf(e: unknown): string {
         var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
         transparent
       ),
-    0 8px 32px -8px rgba(0, 0, 0, 0.3),
-    0 2px 8px -2px rgba(0, 0, 0, 0.15);
+    var(--aipet-shadow-float);
 }
-
-/* Phase A (#31 follow-up C)：chat 作为 field anchor 时显示渐进 halo。
-   仅在 distance ∈ (60, 120] 段出现；进入 < 60px (preview) 时 .snap-preview 会覆盖此样式。
-   1px subtle outline + 弥散 32px 主色外光晕营造"磁场氛围"。 */
-.chat-panel.snap-field-anchor:not(.snap-preview) {
-  box-shadow:
-    0 0 0 1px
-      color-mix(
-        in srgb,
-        var(--aipet-color-primary) calc(var(--snap-field-intensity, 0) * 25%),
-        transparent
-      ),
-    0 0 32px
-      color-mix(
-        in srgb,
-        var(--aipet-color-primary) calc(var(--snap-field-intensity, 0) * 22%),
-        transparent
-      ),
-    0 8px 32px -8px rgba(0, 0, 0, 0.25),
-    0 2px 8px -2px rgba(0, 0, 0, 0.1);
-}
-.chat-panel.snap-preview--edge-right {
+.app-surface.snap-preview--edge-right {
   box-shadow:
     inset -3px 0 22px
       color-mix(
@@ -1042,9 +1009,9 @@ function msgOf(e: unknown): string {
         var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
         transparent
       ),
-    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+    var(--aipet-shadow-float);
 }
-.chat-panel.snap-preview--edge-left {
+.app-surface.snap-preview--edge-left {
   box-shadow:
     inset 3px 0 22px
       color-mix(
@@ -1064,9 +1031,9 @@ function msgOf(e: unknown): string {
         var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
         transparent
       ),
-    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+    var(--aipet-shadow-float);
 }
-.chat-panel.snap-preview--edge-top {
+.app-surface.snap-preview--edge-top {
   box-shadow:
     inset 0 3px 22px
       color-mix(
@@ -1086,9 +1053,9 @@ function msgOf(e: unknown): string {
         var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
         transparent
       ),
-    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+    var(--aipet-shadow-float);
 }
-.chat-panel.snap-preview--edge-bottom {
+.app-surface.snap-preview--edge-bottom {
   box-shadow:
     inset 0 -3px 22px
       color-mix(
@@ -1108,32 +1075,142 @@ function msgOf(e: unknown): string {
         var(--aipet-color-primary) calc(var(--snap-preview-intensity, 0) * 40%),
         transparent
       ),
-    0 8px 32px -8px rgba(0, 0, 0, 0.3);
+    var(--aipet-shadow-float);
 }
 
-/* === 窗口标题栏（28px 极简，Win11 / VSCode 风格）===
-   只保留 ─ 最小化 + ✕ 关闭；左侧大片空白即拖动区。
-   - 整片 data-tauri-drag-region；两个 button 标记 false 排除拖动。
-   - 不画自己的背景色 / border：避免在 chat-panel 8px 圆角顶部叠出"独立矩形色块"
-     破坏圆角观感。caption button 直接浮在 chat-panel bg 上（Win11/VSCode 主流做法）。
-   - 系统按钮 46×28：宽度沿用 Win 标准；hover 浅灰 / close hover 红 #c42b1c。
-   - chat-panel 本身 overflow:hidden + 8px border-radius 自动裁好标题栏顶角。 */
-.chat-titlebar {
-  flex: 0 0 28px;
+/* === content-header（content-surface 顶部 48px window chrome）===
+   布局 v2：删掉全宽 titlebar-surface 后，window chrome 三件套（≡ + identity + ✕）
+   下沉到 content-surface 顶部，只占右半宽（sidebar 侧不再有 chrome 干扰）。
+   整条 header 是 data-tauri-drag-region；左 ≡ / 右 ✕ 按钮挂 ="false" 反向声明保证点击。
+   背景与 content-surface 一致（L2 surface），无 border-bottom 避免分隔感。 */
+.content-header {
+  flex: 0 0 48px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  background: var(--aipet-color-surface);
   user-select: none;
 }
 
-.chat-titlebar__sysbtns {
+.content-header__toggle {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
   display: flex;
-  height: 100%;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--aipet-color-text-2);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  transition: background-color 100ms ease, color 100ms ease;
 }
 
-.chat-titlebar__btn {
+.content-header__toggle:hover {
+  background: color-mix(in srgb, var(--aipet-color-text-1) 8%, transparent);
+  color: var(--aipet-color-text-1);
+}
+
+.content-header__toggle:active {
+  background: color-mix(in srgb, var(--aipet-color-text-1) 14%, transparent);
+}
+
+.content-header__identity {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--aipet-space-2);
+  padding: 0 var(--aipet-space-3);
+  min-width: 0;
+}
+
+.content-header__avatar {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--aipet-color-bg);
+  border: 1px solid var(--aipet-color-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.6s var(--aipet-ease-emphasized);
+  /* 跟 sidebar 旧版一致的轻微 hover 转动 */
+}
+
+.content-header__avatar:hover {
+  transform: rotate(4deg) scale(1.04);
+}
+
+.content-header__avatar-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.content-header__avatar-fallback {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--aipet-color-primary);
+}
+
+.content-header__name-wrap {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.content-header__name {
+  font-size: var(--aipet-font-size-sm);
+  font-weight: 600;
+  color: var(--aipet-color-text-1);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.content-header__name--placeholder {
+  min-height: 1em;
+}
+
+.content-header__status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--aipet-font-size-xs);
+  color: var(--aipet-color-text-3);
+  line-height: 1;
+}
+
+.content-header__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--aipet-color-online);
+  animation: aipet-status-pulse 1.5s var(--aipet-ease-standard) infinite;
+}
+
+@keyframes aipet-status-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.content-header__close {
+  flex: 0 0 auto;
   width: 46px;
-  height: 28px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1148,173 +1225,107 @@ function msgOf(e: unknown): string {
   transition: background-color 100ms ease, color 100ms ease;
 }
 
-.chat-titlebar__btn:hover {
-  background: color-mix(in srgb, var(--aipet-color-text-1) 10%, transparent);
-}
-
-.chat-titlebar__btn:active {
-  background: color-mix(in srgb, var(--aipet-color-text-1) 18%, transparent);
-}
-
-/* Win11 标准 close-button red：hover 红底白图标，深色模式同色（Win 本身不分主题）。 */
-.chat-titlebar__btn--close:hover {
+.content-header__close:hover {
   background: #c42b1c;
   color: #ffffff;
 }
 
-.chat-titlebar__btn--close:active {
+.content-header__close:active {
   background: #a01e15;
   color: #ffffff;
 }
 
-.chat-root {
-  display: flex;
-  width: 100%;
-  /* 上层多了 28px .chat-titlebar，本元素改 flex 拉伸（min-height:0 让子元素 overflow 工作）。
-     原 height:100% 在 chat-panel(flex column) 下会撑出 overflow 把 titlebar 顶飞。 */
+/* === 胶囊拖动块 ===
+   Tauri 的 data-tauri-drag-region 不被子元素继承，所以早先做法（header 上挂）只剩
+   子元素之间的缝隙能拖。改用独立 drag-handle 元素：flex:1 吃掉 identity 与 ✕ 之间的
+   剩余空间，本元素挂 data-tauri-drag-region；::before 渲染一段 pill 作为视觉提示。 */
+.content-header__drag-handle {
   flex: 1 1 auto;
-  min-height: 0;
-}
-
-/* AppShell 在独立窗口（settings/tasks）下用 min-height:100vh 兜底，但 chat 是嵌在
-   chat-panel 内的（chat-window padding:0 → chat-panel 占满 webview → 内部高度 =
-   viewport - 28px titlebar），100vh 会撑爆把 footer 顶出 overflow:hidden 之外。
-   chat 局部撤销该约束并改 flex 拉伸。 */
-.chat-panel :deep(.aipet-shell--standalone) {
-  min-height: 0;
-  flex: 1 1 auto;
-  height: 100%;
-}
-
-.chat-main {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-/* === Header（人格信息栏，44px）=== */
-/* AppShell 的 header 现在是"人格信息栏"职责：≡ + 头像 + 人格名 + mood。
-   窗口控制（拖动 / 最小化 / 关闭）已迁到上层 .chat-titlebar，本层不再承担。 */
-.chat-header__sidebar-toggle {
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  color: var(--aipet-color-text-2);
-  border: 1px solid transparent;
-  border-radius: var(--aipet-radius-base);
-  transition: color var(--aipet-duration-fast) var(--aipet-ease-standard),
-    background-color var(--aipet-duration-fast) var(--aipet-ease-standard),
-    border-color var(--aipet-duration-fast) var(--aipet-ease-standard),
-    transform var(--aipet-duration-fast) var(--aipet-ease-standard);
-}
-
-.chat-header__sidebar-toggle :deep(.el-icon) {
-  font-size: 18px;
-}
-
-.chat-header__sidebar-toggle:hover {
-  color: var(--aipet-color-primary);
-  background: color-mix(in srgb, var(--aipet-color-primary) 12%, transparent);
-  border-color: color-mix(in srgb, var(--aipet-color-primary) 35%, transparent);
-  transform: scale(1.08);
-}
-
-.chat-header__sidebar-toggle:active {
-  transform: scale(0.96);
-}
-
-.chat-header__identity {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--aipet-space-2);
-  min-width: 0;
-  margin-left: var(--aipet-space-2);
-}
-
-.chat-header__avatar {
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  overflow: hidden;
-  /* 用 surface-soft 让头像在 header 上浮起一档(亮:#f5f5f5 / 暗:#1c1c1c) */
-  background: var(--aipet-color-surface-soft);
-  border: 1px solid var(--aipet-color-border);
+  align-self: stretch;
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 桌宠头像:hover 时 4 度倾斜 + 微放大,给"她看了你一眼"的反应 */
-  transition: transform 0.6s var(--aipet-ease-emphasized);
-  cursor: default;
+  cursor: grab;
+  min-width: var(--aipet-space-6);
 }
 
-.chat-header__avatar:hover {
-  transform: rotate(4deg) scale(1.04);
+.content-header__drag-handle::before {
+  content: '';
+  width: 64px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--aipet-color-border);
+  transition: background 120ms ease, width 120ms ease;
 }
 
-.chat-header__avatar-img {
-  width: 100%;
-  height: 100%;
-  display: block;
+.content-header__drag-handle:hover::before {
+  background: var(--aipet-color-border-strong);
+  width: 80px;
 }
 
-.chat-header__avatar-fallback {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--aipet-color-primary);
+.content-header__drag-handle:active {
+  cursor: grabbing;
 }
 
-.chat-header__name-wrap {
+.content-header__drag-handle:active::before {
+  background: var(--aipet-color-text-3);
+}
+
+/* === app-body（sidebar + content 水平容器）===
+   占 app-surface 剩余高度。min-height:0 让内部子组件 overflow 工作。 */
+.app-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* === content-surface（L2，消息区+composer 列容器）===
+   surface 阶梯 L2：light=#fafafa / dark=#262626，比 sidebar(L1) 亮、比 bg(L0) 暗一档。
+   relative positioning 给 floating-composer 提供定位上下文（C 阶段会用）。 */
+.content-surface {
+  flex: 1 1 auto;
+  background: var(--aipet-color-surface);
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 1px;
   min-width: 0;
+  min-height: 0;
+  position: relative;
 }
 
-.chat-header__title {
-  font-size: var(--aipet-font-size-base);
-  font-weight: 600;
-  color: var(--aipet-color-text-1);
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* personaName 异步加载期间占位（保持 header 高度稳定，不出现晃动） */
-.chat-header__title--placeholder {
-  min-height: 1em;
-}
-
-.chat-header__status {
+/* === message-scroll-surface（消息滚动容器外壳）===
+   注意：本元素不再是滚动容器（早先双层 overflow 导致 scrollToBottom 操作内层 ul 但实际滚动条
+   挂在本层 div 上 → 新消息被滚到视野下方"被遮掩"）。改为 flex column 容器，把滚动职责下放给
+   内部 .chat-messages (ul) 唯一负责。
+   dot-grid 背景仍保留在本层 = "桌面壁纸"不随消息滚动，符合桌面 IM 习惯。 */
+.message-scroll-surface {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--aipet-font-size-xs);
-  color: var(--aipet-color-text-3);
-  line-height: 1;
+  flex-direction: column;
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 25%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  background-position: 0 0;
 }
 
-.chat-header__status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--aipet-color-online);
-  /* 慢呼吸(1.5s),呼应流式光标节奏;桌宠"她在的"暗示。 */
-  animation: aipet-status-pulse 1.5s var(--aipet-ease-standard) infinite;
+:global(html.dark) .message-scroll-surface {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--aipet-color-text-3) 30%, transparent) 1px,
+    transparent 1px
+  );
 }
 
-@keyframes aipet-status-pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
+/* === floating-composer（Phase C 浮卡容器）===
+   padding 给 ChatInput 浮卡四周留 breathing space：
+   - 顶部 12px 让浮卡与 message-scroll 视觉拉开（上向阴影朝消息区柔和扩散）
+   - 左右 16px 与 app-surface 14px 圆角呼应（避免浮卡贴边）
+   - 底部 16px 让浮卡距 app-surface 圆角下边沿有呼吸 */
+.floating-composer {
+  flex: 0 0 auto;
+  padding: var(--aipet-space-3) var(--aipet-space-4) var(--aipet-space-4);
 }
 </style>

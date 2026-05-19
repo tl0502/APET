@@ -137,11 +137,14 @@ function onClickAction() {
 <style scoped>
 .chat-input {
   position: relative;
-  /* Vercel 风:纯色 + 1px border,无毛玻璃,无大圆角胶囊 */
+  /* Phase C floating composer：surface-raised 浮卡 + 14px 大圆角 + 上向阴影
+     （--aipet-shadow-composer = hairline border + 弥散光，Telegram/Discord 浮卡风）。
+     从 message-scroll 视觉上"浮起"一档，与之前贴底大 textarea 拉开层次。 */
   padding: var(--aipet-space-2) 56px var(--aipet-space-2) var(--aipet-space-3);
-  background: var(--aipet-color-surface-soft);
+  background: var(--aipet-color-surface-raised);
   border: 1px solid var(--aipet-color-border);
-  border-radius: var(--aipet-radius-lg);
+  border-radius: 14px;
+  box-shadow: var(--aipet-shadow-composer);
   min-height: 96px; /* 防 textarea 行数突变导致整 input 区域上下抖动 */
   box-sizing: border-box;
   transition: border-color var(--aipet-duration-fast) var(--aipet-ease-standard),
@@ -150,8 +153,8 @@ function onClickAction() {
 
 .chat-input:focus-within {
   border-color: var(--aipet-color-primary);
-  /* 统一 ring token */
-  box-shadow: var(--aipet-ring-focus);
+  /* focus 时叠加 ring + 保留 composer 上向阴影，浮卡感不丢 */
+  box-shadow: var(--aipet-ring-focus), var(--aipet-shadow-composer);
 }
 
 /* 内嵌 EP textarea:抹掉默认 border / 内 padding / 背景,纯文本气质 */

@@ -1,7 +1,12 @@
 <script setup lang="ts">
 // ConversationSidebar：左侧会话列表（ChatGPT 式）。
 //
-// 功能：
+// 布局 v2 改动：
+// - 顶部 chrome（≡ toggle + persona identity）整体迁出 → 现在挂在 ChatApp 的 content-header 上。
+// - sidebar 退回"纯净列表 + 创建对话按钮"两段式（与用户布局图一致）。
+// - collapsed 抽屉语义：width:0 + 内容 v-show 隐藏（toggle 入口已在 content-header，外部控制）。
+//
+// 功能保留：
 // - 顶部"+ 新建对话"按钮
 // - 列表按 last_activity_at DESC（后端已排）
 // - active 项高亮
@@ -9,10 +14,7 @@
 // - hover / active 项右侧浮出"⋯"按钮 → ElDropdown 菜单：
 //   - 重命名 → 切换 inline ElInput；Enter / blur 提交触发 rename emit；ESC 取消
 //   - 归档 → 直接 emit archive
-//   - 删除 → emit delete（父组件用 ElMessageBox.confirm 二次确认；ElPopconfirm 嵌
-//     ElDropdownItem 时 dropdown 自动收起会带走 popconfirm，不可靠）
-//
-// 不做（M3 B.3.d）：搜索 / 分组（今天 / 昨天 / 上周）/ 拖拽排序 / 归档列表 UI。
+//   - 删除 → emit delete（父组件用 ElMessageBox.confirm 二次确认）
 import { computed, nextTick, ref } from 'vue'
 import {
   ElButton,
@@ -34,7 +36,8 @@ interface Props {
    *  这些行的 rename/archive/delete 被禁用 + 显示 spinner；其他行完全可用。
    *  切到 streaming 行查看是允许的（不算"对它的操作"）。 */
   lockedIds?: Set<string>
-  /** P0 美化:折叠态。父组件 ChatApp 控制;折叠时宽度 280ms 动画到 0,内容隐藏。 */
+  /** 抽屉折叠态。父组件 ChatApp 控制；collapsed 时缩到 width:0 完全收起。
+   *  toggle 入口已迁到 ChatApp.content-header 的 ≡ 按钮（不再在 sidebar 内）。 */
   collapsed?: boolean
 }
 
@@ -165,7 +168,7 @@ function onDeleteRequest(id: string) {
     :class="{ 'conv-sidebar--collapsed': collapsed }"
     data-tauri-drag-region="false"
   >
-    <div class="conv-sidebar__head">
+    <div v-show="!collapsed" class="conv-sidebar__head">
       <ElButton
         type="primary"
         :disabled="disabled"
@@ -177,7 +180,7 @@ function onDeleteRequest(id: string) {
       </ElButton>
     </div>
 
-    <ul class="conv-sidebar__list">
+    <ul v-show="!collapsed" class="conv-sidebar__list">
       <li v-if="items.length === 0" class="conv-sidebar__empty">
         <span class="conv-sidebar__empty-emoji" aria-hidden="true">💭</span>
         <span>还没有对话,开始第一句吧 ~</span>
@@ -259,20 +262,22 @@ function onDeleteRequest(id: string) {
   width: 220px;
   flex: 0 0 220px;
   border-right: 1px solid var(--aipet-color-border);
-  /* Vercel 风:用 neutral-50/-900 底色跟主区 white/near-black 做色差 */
+  /* Surface L1：light=#f5f5f5 dark=#1c1c1c，比 app L0 暗一档、比 content L2 暗两档，
+     形成 Discord/Telegram 风的左侧栏深度感 */
   background: var(--aipet-color-surface-soft);
   overflow: hidden;
   transition: width var(--aipet-duration-slow) var(--aipet-ease-standard),
     flex-basis var(--aipet-duration-slow) var(--aipet-ease-standard),
-    opacity var(--aipet-duration-base) var(--aipet-ease-standard);
+    border-right-color var(--aipet-duration-slow) var(--aipet-ease-standard);
 }
 
+/* 布局 v2：抽屉语义 —— collapsed 时彻底收起（width:0），
+   toggle 入口已迁到 content-header，不再需要保留 sidebar 内的窄列。
+   border-right 同步透明，避免收起后留下 1px 灰线。 */
 .conv-sidebar--collapsed {
   width: 0;
   flex-basis: 0;
-  opacity: 0;
   border-right-color: transparent;
-  pointer-events: none;
 }
 
 .conv-sidebar__head {
@@ -290,7 +295,8 @@ function onDeleteRequest(id: string) {
 .conv-sidebar__list {
   flex: 1 1 auto;
   margin: 0;
-  padding: var(--aipet-space-2);
+  /* 紧凑桌面化 padding 8px 6px（接近 Discord/Telegram 密度） */
+  padding: var(--aipet-space-2) 6px;
   list-style: none;
   overflow-y: auto;
   display: flex;
@@ -330,7 +336,7 @@ function onDeleteRequest(id: string) {
   background: var(--aipet-color-surface);
 }
 
-/* active:在 surface 层基础上加 3px 紫色左条(品牌色保留) */
+/* active:在 surface 层基础上加 2px 紫色左条(品牌色保留,降饱和 30%) */
 .conv-item--active {
   background: var(--aipet-color-surface);
 }
@@ -341,9 +347,9 @@ function onDeleteRequest(id: string) {
   left: 3px;
   top: 8px;
   bottom: 8px;
-  width: 3px;
-  border-radius: 3px;
-  background: var(--aipet-color-active-bar);
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--aipet-color-active-bar) 70%, transparent);
 }
 
 .conv-item--active:hover {
