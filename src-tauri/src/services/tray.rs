@@ -9,12 +9,14 @@
 // 设计要点：
 // - icon 复用 app.default_window_icon()（tauri.conf.json 已引用作 default window icon，0 新增资源）
 // - 「显示/隐藏」1 项动态文案：MenuItem clone 多份传 closure，在 menu 点击 / tray hover 时 set_text
-// - tray hover (Enter) 时刷新文案：兜底外部路径（Alt+F4 hide）造成的状态错位；
-//   不在 on_window_event 里刷新（避免跨函数传 menu item handle）
+// - tray hover (Enter) 时刷新 show/hide 文案：兜底外部路径（Alt+F4 hide）造成的状态错位；
+// - AOT label 走事件驱动（R3 修复 2026-05-19）：apply 时 emit window:always-on-top:changed，
+//   tray setup 时 listen 该事件主动 set_text，避免 hover 时 block_on KV 读（频繁 hover 时
+//   阻塞 tray 事件线程；潜在死锁风险）。
 
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Listener, Manager, Wry};
 
 use crate::services::window_actions::{self, PET_WINDOW_LABEL};
 use crate::services::window_state;
@@ -34,6 +36,10 @@ const LABEL_HIDE: &str = "隐藏桌宠";
 const LABEL_AOT_ON: &str = "✓ 顶层显示";
 const LABEL_AOT_OFF: &str = "  顶层显示";
 
+/// AOT 切换跨窗口广播事件名（与 services/window_state.rs ALWAYS_ON_TOP_CHANGED_EVENT 同源）。
+/// R3 修复：tray 监听此事件被动刷新 menu 文案，不在 hover 时 block_on KV。
+const ALWAYS_ON_TOP_CHANGED_EVENT: &str = "window:always-on-top:changed";
+
 fn current_label(app: &AppHandle) -> &'static str {
     let visible = app
         .get_webview_window(PET_WINDOW_LABEL)
@@ -46,9 +52,7 @@ fn current_label(app: &AppHandle) -> &'static str {
     }
 }
 
-fn current_aot_label(app: &AppHandle) -> &'static str {
-    let on = tauri::async_runtime::block_on(window_state::load_always_on_top(app))
-        .unwrap_or(true);
+fn aot_label_for(on: bool) -> &'static str {
     if on {
         LABEL_AOT_ON
     } else {
@@ -62,12 +66,6 @@ fn refresh_label(app: &AppHandle, item: &MenuItem<Wry>) {
     }
 }
 
-fn refresh_aot_label(app: &AppHandle, item: &MenuItem<Wry>) {
-    if let Err(e) = item.set_text(current_aot_label(app)) {
-        eprintln!("[tray] failed to refresh always-on-top label: {e}");
-    }
-}
-
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let show_hide_item =
         MenuItemBuilder::with_id(MENU_ID_SHOW_HIDE, current_label(app)).build(app)?;
@@ -78,7 +76,11 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     // #28 follow-up 番茄独立窗：托盘"番茄..."入口，与 tasks tab 按钮 / pomodoro_start 自动 show 三入口并列。
     let pomodoro_item = MenuItemBuilder::with_id(MENU_ID_POMODORO, "番茄...").build(app)?;
     // #31 follow-up：alwaysOnTop 全局开关，label 带"✓"前缀指示当前状态。
-    let aot_item = MenuItemBuilder::with_id(MENU_ID_AOT, current_aot_label(app)).build(app)?;
+    // R3 修复：setup 初值仍 block_on KV 一次（仅启动期单次，无热路径影响），之后由 listen 驱动。
+    let initial_aot = tauri::async_runtime::block_on(window_state::load_always_on_top(app))
+        .unwrap_or(true);
+    let aot_item =
+        MenuItemBuilder::with_id(MENU_ID_AOT, aot_label_for(initial_aot)).build(app)?;
     let quit_item = MenuItemBuilder::with_id(MENU_ID_QUIT, "退出").build(app)?;
 
     let menu = MenuBuilder::new(app)
@@ -98,12 +100,22 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .cloned()
         .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
 
-    // clone 给两个 closure：on_menu_event（菜单点击后刷新）+ on_tray_icon_event（hover 后刷新）
+    // clone 给 closure 用
     let show_hide_for_menu = show_hide_item.clone();
     let show_hide_for_tray = show_hide_item.clone();
-    // AOT 同款双 clone：点击后刷自己 + tray Enter 时刷（兜底外部路径修改 KV）
     let aot_for_menu = aot_item.clone();
-    let aot_for_tray = aot_item.clone();
+    let aot_for_listener = aot_item.clone();
+
+    // R3 修复：listen AOT 切换事件被动刷新 menu 文案。
+    // toggle_always_on_top（托盘点击 / 未来 settings UI 改 KV）都会 emit 此事件，
+    // listener 收到后直接 set_text(label_for(payload))。hover 不再需要 block_on KV 读。
+    app.listen(ALWAYS_ON_TOP_CHANGED_EVENT, move |event| {
+        // payload 形如 "true" / "false"
+        let on = event.payload() == "true";
+        if let Err(e) = aot_for_listener.set_text(aot_label_for(on)) {
+            eprintln!("[tray] AOT listener set_text failed: {e}");
+        }
+    });
 
     let _tray = TrayIconBuilder::with_id("main")
         .icon(icon)
@@ -119,12 +131,18 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             MENU_ID_POMODORO => window_actions::show_pomodoro(app),
             MENU_ID_SETTINGS => window_actions::show_settings(app),
             MENU_ID_AOT => {
-                // 同步 block_on：托盘点击在 main thread，KV 读写 + set_always_on_top 都很快
+                // 同步 block_on：托盘点击在 main thread，KV 读写 + set_always_on_top 都很快。
+                // toggle 内部 emit ALWAYS_ON_TOP_CHANGED_EVENT，上面的 listener 自动刷 aot_for_menu。
+                // 但 listener 是异步触达，立即 hover 看到旧文案，所以这里仍主动 set 一次。
                 let app_for_async = app.clone();
                 match tauri::async_runtime::block_on(window_state::toggle_always_on_top(
                     &app_for_async,
                 )) {
-                    Ok(_) => refresh_aot_label(app, &aot_for_menu),
+                    Ok(next) => {
+                        if let Err(e) = aot_for_menu.set_text(aot_label_for(next)) {
+                            eprintln!("[tray] toggle aot set_text failed: {e}");
+                        }
+                    }
                     Err(e) => eprintln!("[tray] toggle_always_on_top failed: {e}"),
                 }
             }
@@ -132,11 +150,11 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(move |tray, event| {
-            // hover 进图标时刷新两个动态文案，兜底外部路径（Alt+F4 hide / 直改 KV）造成的状态错位
+            // hover 仅刷 show/hide（pet 可见状态 OS 即时查），AOT 文案由上面的 listener 维护，
+            // 不在 hover 路径 block_on KV（避免频繁 hover 阻塞 tray 事件线程）。
             if let TrayIconEvent::Enter { .. } = event {
                 let app = tray.app_handle();
                 refresh_label(app, &show_hide_for_tray);
-                refresh_aot_label(app, &aot_for_tray);
             }
         })
         .build(app)?;

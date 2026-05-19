@@ -55,6 +55,7 @@ function clamp01(v: number): number {
 // 单例：source→target 维度记录最近 detach 时间，30s 内再次靠近时 candidates 评分扣分。
 //
 // 设计：内存中 Map，进程重启清空（30s 短 TTL 不值得持久化）。
+// E3 修复 (2026-05-19)：isRecent / recordDetach 顺手 GC 掉过期项，避免 Map 无限增长。
 
 class DetachHistory {
   private _map = new Map<string, number>()
@@ -64,13 +65,19 @@ class DetachHistory {
   }
 
   recordDetach(sourceId: string, targetId: string, at: number = Date.now()): void {
+    this._gc(at)
     this._map.set(DetachHistory.key(sourceId, targetId), at)
   }
 
   isRecent(sourceId: string, targetId: string, now: number = Date.now()): boolean {
     const at = this._map.get(DetachHistory.key(sourceId, targetId))
     if (at === undefined) return false
-    return now - at < DETACH_RELUCTANCE_MS
+    if (now - at >= DETACH_RELUCTANCE_MS) {
+      // 顺手清掉过期项（amortized GC，无需独立 timer）
+      this._map.delete(DetachHistory.key(sourceId, targetId))
+      return false
+    }
+    return true
   }
 
   clear(): void {
@@ -80,6 +87,16 @@ class DetachHistory {
   /** 测试 helper：当前条数 */
   size(): number {
     return this._map.size
+  }
+
+  /** GC 过期项。在 recordDetach 时调用（每次 detach 都是合适的清理时机）。
+   *  O(N) where N = current entry count（实际 N ≤ window pairs，单人 N ≤ 36）。 */
+  private _gc(now: number): void {
+    for (const [k, at] of this._map) {
+      if (now - at >= DETACH_RELUCTANCE_MS) {
+        this._map.delete(k)
+      }
+    }
   }
 }
 

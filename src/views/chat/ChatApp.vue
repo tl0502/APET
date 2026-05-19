@@ -29,7 +29,6 @@ import MessageList from '@/components/chat/MessageList.vue'
 import SnapGhost from '@/components/SnapGhost.vue'
 import { useToast } from '@/composables/useToast'
 import { useSnapWindow } from '@/composables/useSnapWindow'
-import { getConfig } from '@/services/config'
 import { useAvatarsStore } from '@/stores/avatars'
 import { useNicknameStore } from '@/stores/nickname'
 import {
@@ -288,16 +287,9 @@ onMounted(async () => {
     console.warn('[ChatApp] transparency redraw workaround failed:', e)
   }
 
-  // T10 (#31 follow-up B)：AOT 前端兜底 — chat 是 lazy webview 显示后才 mount，
-  // 此时启动期 backend apply_initial_always_on_top 可能已跑过但 chat webview
-  // 当时未 ready。主动读 KV 应用一次 + listen 后续切换。
-  try {
-    const raw = await getConfig('window:always_on_top')
-    const v = raw === null ? true : raw === 'true'
-    await getCurrentWindow().setAlwaysOnTop(v)
-  } catch (e) {
-    console.warn('[ChatApp] initial setAlwaysOnTop failed:', e)
-  }
+  // T10 (#31 follow-up B)：AOT 前端 listen 后端 emit 同步切换。
+  // R1 修复 (2026-05-19)：启动期由 Rust 端 apply_initial_always_on_top 单一负责
+  // （webview 即使 visible:false 也已注册，set_always_on_top 直接生效），前端不再读 KV。
   try {
     const unlistenAot = await listen<boolean>('window:always-on-top:changed', async (ev) => {
       try {
@@ -529,10 +521,12 @@ function finalizeStream(convId: string, messageId: string, finishReason: string)
     // 后端语义：partial 为空 → DELETE DB 行；非空 → UPDATE mode='cancelled'。
     // 前端跟上：空 partial splice 删气泡（不留空泡），非空同步 mode 让 MessageBubble
     // 显「（已取消）」小标。两边视图与 DB 对齐。
+    // E4 修复 (2026-05-19)：用 trim() 判定空——LLM 流式可能只发了少量空白/换行，content 非空
+    // 但视觉上没东西，气泡空白且带「（已取消）」标签不友好。trim 后空即等同删气泡。
     const idx = state.messages.findIndex((m) => m.id === messageId)
     if (idx !== -1) {
       const target = state.messages[idx]
-      if (target.content === '') {
+      if (target.content.trim() === '') {
         state.messages.splice(idx, 1)
       } else {
         state.messages[idx] = { ...target, mode: 'cancelled' }
@@ -762,8 +756,8 @@ async function handleSend() {
     // 首启路径同步 conversationId.value，并迁移 pendingDraft（#4 修复：用户在 await sendChat
     // 期间可能继续往输入框打字，conversationId 还是 null，输入会落到 pendingDraft；切到真
     // conv 之前先把 pendingDraft 搬到 realState.draft，否则 input 会瞬间显示空白）。
+    // U1 修复 (2026-05-19)：复用外层已声明的 realState（line 715），不再 shadow。
     if (sourceConvId === null) {
-      const realState = ensureConvState(realConvId)
       if (pendingDraft.value !== '') {
         realState.draft = pendingDraft.value
         void setChatDraft(realConvId, pendingDraft.value).catch((e) => {
@@ -805,7 +799,8 @@ async function handleSend() {
 async function handleCancel() {
   // 取消的是当前 view 那个流的 assistantId（按 canCancelHere 守护，view ≠ streaming 时按钮已隐）
   if (!conversationId.value) return
-  const slot = convStates.get(conversationId.value)?.stream
+  const convId = conversationId.value
+  const slot = convStates.get(convId)?.stream
   if (!slot?.assistantId) return
   if (slot.cancelling) return // 双击防御
   slot.cancelling = true
@@ -813,8 +808,13 @@ async function handleCancel() {
     await cancelChat(slot.assistantId)
   } catch (e) {
     console.warn('[ChatApp] cancelChat failed:', e)
-    // IPC 失败 → 复原 cancelling，让用户能再点；流可能仍在跑
-    slot.cancelling = false
+    // U2 修复 (2026-05-19)：IPC 失败后，复原 cancelling 前先确认 slot 仍是当前 stream。
+    // 否则 done 事件可能已抵达并 finalizeStream 把 stream 置 null，写 orphan slot.cancelling=false
+    // 虽然无害但是悬空写。检查 current === slot 保证只在仍 active 时复位。
+    const current = convStates.get(convId)?.stream
+    if (current === slot) {
+      slot.cancelling = false
+    }
   }
   // 成功路径不复位 cancelling：等后端 done(cancelled) / error 抵达，
   // finalizeStream / handleStreamError 把 stream slot 整体置 null，cancelling 隐式消失。

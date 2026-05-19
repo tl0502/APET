@@ -159,14 +159,17 @@ describe('ConstraintStore — I2: wouldCycle 路径覆盖', () => {
 })
 
 // #30 follow-up D：removeAllInvolving — 拖子体时立即脱钩流程。
-// 删 label 的所有 in+out constraints，返被删 list 供 caller 走 detachHistory。
-describe('ConstraintStore — removeAllInvolving (#30 follow-up D)', () => {
+// E1 修复 (2026-05-19)：默认只删出向；入向需 options.includeInbound:true。
+//
+// 出向删除是拖子体的正确语义（用户拖走自己，断它对 anchor 的依附）。
+// 入向删除会误伤其他依附我的窗，仅在显式"清空所有依附关系"场景下需要。
+describe('ConstraintStore — removeAllInvolving (#30 follow-up D, E1 修复)', () => {
   let store: ConstraintStore
   beforeEach(() => {
     store = new ConstraintStore()
   })
 
-  it('删 label 出向 constraint（label 作 source）', () => {
+  it('默认只删出向 constraint（label 作 source）', () => {
     store.set(c('chat', 'pet'))
     const removed = store.removeAllInvolving('chat')
     expect(removed).toHaveLength(1)
@@ -176,11 +179,25 @@ describe('ConstraintStore — removeAllInvolving (#30 follow-up D)', () => {
     expect(store.size()).toBe(0)
   })
 
-  it('删 label 入向 constraints（多个 source 共指 label）', () => {
+  it('默认 NOT 删入向（拖目标 anchor 不应让依附它的窗脱钩）', () => {
+    store.set(c('chat', 'pet'))
+    store.set(c('settings', 'pet'))
+    // pet 出向无，仅入向有；默认不删入向
+    const removed = store.removeAllInvolving('pet')
+    expect(removed).toHaveLength(0)
+    expect(store.size()).toBe(2)
+    // 入向仍在
+    expect(store.dependentsOf('pet').map((c) => c.sourceId).sort()).toEqual([
+      'chat',
+      'settings',
+    ])
+  })
+
+  it('includeInbound:true → 删 label 入向 constraints（多个 source 共指 label）', () => {
     store.set(c('chat', 'pet'))
     store.set(c('settings', 'pet'))
     store.set(c('tasks', 'pet'))
-    const removed = store.removeAllInvolving('pet')
+    const removed = store.removeAllInvolving('pet', { includeInbound: true })
     expect(removed).toHaveLength(3)
     const sourceIds = removed.map((c) => c.sourceId).sort()
     expect(sourceIds).toEqual(['chat', 'settings', 'tasks'])
@@ -189,16 +206,27 @@ describe('ConstraintStore — removeAllInvolving (#30 follow-up D)', () => {
     expect(store.dependentsOf('pet')).toEqual([])
   })
 
-  it('同时删 label 的出向 + 入向（label 既是 source 又是 target）', () => {
+  it('includeInbound:true → 同时删 label 的出向 + 入向', () => {
     // 链：chat → pet → desktop（pet 同时是 chat 的 target 与 desktop 的 source）
     store.set(c('chat', 'pet'))
     store.set(c('pet', 'desktop'))
-    const removed = store.removeAllInvolving('pet')
+    const removed = store.removeAllInvolving('pet', { includeInbound: true })
     expect(removed).toHaveLength(2)
-    // 拓扑：pet 出向 + 入向都没了，但 chat 既不指 pet 也不存在了
     expect(store.get('chat')).toBeUndefined()
     expect(store.get('pet')).toBeUndefined()
     expect(store.size()).toBe(0)
+  })
+
+  it('默认仅删 label 出向：链 chat→pet→desktop，拖 pet → 仅 pet→desktop 被删', () => {
+    store.set(c('chat', 'pet'))
+    store.set(c('pet', 'desktop'))
+    const removed = store.removeAllInvolving('pet')
+    expect(removed).toHaveLength(1)
+    expect(removed[0]?.sourceId).toBe('pet')
+    expect(removed[0]?.targetId).toBe('desktop')
+    // chat→pet 仍在
+    expect(store.get('chat')?.targetId).toBe('pet')
+    expect(store.size()).toBe(1)
   })
 
   it('label 未参与任何 constraint → 返空 list，store 不变', () => {

@@ -87,26 +87,38 @@ class ConstraintStore {
     return false
   }
 
-  /** #30 follow-up D：删除涉及 label 的所有 constraints（出向 + 入向），返被删 list。
+  /** #30 follow-up D：删除涉及 label 的 constraints，返被删 list。
    *  用于"拖子体时立即脱钩"流程：caller 拿返回 list 走 detachHistory.recordDetach
-   *  让 30s 反向惩罚生效。 */
-  removeAllInvolving(label: string): SnapConstraint[] {
+   *  让 30s 反向惩罚生效。
+   *
+   *  E1 修复 (2026-05-19)：默认只删出向（拖子体场景的正确语义）。
+   *  之前"出向+入向都删"在 M3 多窗时会误伤——例如 settings 已吸到 chat 上，用户只想轻挪 chat，
+   *  结果 settings 也被脱钩。入向删除应是显式动作（"detach incoming"），不应在常规拖动里自动发生。
+   *
+   *  options.includeInbound = true 时保留原行为（M3 显式"清空 chat 的所有依附关系"场景预留）。 */
+  removeAllInvolving(
+    label: string,
+    options: { includeInbound?: boolean } = {},
+  ): SnapConstraint[] {
     const removed: SnapConstraint[] = []
-    // 出向：label 作为 source 的 constraint
+    // 出向：label 作为 source 的 constraint（拖子体时正确：用户要拖走它，断开它对 anchor 的依附）
     const out = this._bySource.get(label)
     if (out) {
       removed.push(out)
       this.delete(label)  // 复用现有 delete 维护双索引一致
     }
-    // 入向：所有 target === label 的 constraints
-    const inSourceIds = this._byTarget.get(label)
-    if (inSourceIds && inSourceIds.size > 0) {
-      // 复制成 array 防 delete 时 mutate iteration
-      for (const sid of Array.from(inSourceIds)) {
-        const c = this._bySource.get(sid)
-        if (c) {
-          removed.push(c)
-          this.delete(sid)
+    // 入向：所有 target === label 的 constraints（仅 includeInbound:true 时删；
+    //   常规拖动不应触达——其他窗依附我，我挪一下不代表它们也要脱钩）
+    if (options.includeInbound) {
+      const inSourceIds = this._byTarget.get(label)
+      if (inSourceIds && inSourceIds.size > 0) {
+        // 复制成 array 防 delete 时 mutate iteration
+        for (const sid of Array.from(inSourceIds)) {
+          const c = this._bySource.get(sid)
+          if (c) {
+            removed.push(c)
+            this.delete(sid)
+          }
         }
       }
     }

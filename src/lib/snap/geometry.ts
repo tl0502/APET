@@ -146,7 +146,15 @@ export function overlapThreshold(edgeLength: number): number {
   return Math.max(MIN_OVERLAP, edgeLength * OVERLAP_RATIO)
 }
 
-/** 当前 source 是否在 anchor 的某条边的"角落死区"内（两条相邻边都触发 trigger zone）。 */
+/** 当前 source 是否在 anchor 的某条边的"角落死区"内（diagonal 区域避免边角抖动）。
+ *
+ *  当前实现：source 中心与 anchor 4 corner 最近距离 ≤ CORNER_DEAD。
+ *  局限：对 320×320 大矩形窗，中心到 corner 几乎永远 > CORNER_DEAD=8 → 死区实际不触发。
+ *  这是有意的保守实现——更严格的 corner-to-corner 判定会破坏 edge-aligned snap
+ *  （两窗紧贴时双方某 corner 重合 distance=0，会误判死区拒绝正常吸附）。
+ *
+ *  M3 follow-up：真正的角落歧义判定应是「source 处于 anchor 的 diagonal-exterior 区域
+ *  且最近 corner-to-corner 距离小」，而非简单距离。届时再扩展，当前不引入误判风险。 */
 export function inCornerDead(source: Rect, anchor: Rect): boolean {
   // 检查 source 中心到 anchor 4 个角的最小距离，<= CORNER_DEAD 视为死区
   const sc = rectCenter(source)

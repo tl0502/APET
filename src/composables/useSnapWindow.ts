@@ -44,7 +44,7 @@ import {
 } from '@/lib/snap/field'
 import { VelocityTracker } from '@/lib/snap/intent'
 import { isInternalMove, markInternal } from '@/lib/snap/internalMove'
-import { loadPersistedConstraints, persistConstraints } from '@/lib/snap/persistence'
+import { loadPersistedConstraints, persistAndBroadcastConstraints } from '@/lib/snap/persistence'
 import { isPrimary, PRIMARY_LABEL } from '@/lib/snap/roles'
 import { solve } from '@/lib/snap/solver'
 import type { Edge, Rect, SnapCandidate } from '@/lib/snap/types'
@@ -52,12 +52,19 @@ import { windowRegistry } from '@/lib/snap/windowRegistry'
 
 const DRAG_END_TIMEOUT_MS = 200
 const REGISTRY_BROADCAST_EVT = 'snap:registry-update'
+/** B2 修复：新窗 mount 时 emit 此事件让现存窗回播自己的 rect。
+ *  解决"chat 懒窗 reopen 时已经错过了 pet 的初始 REGISTRY_BROADCAST" race —— chat 自己 emit hello，
+ *  pet 的 listener 收到后回播 pet rect，chat 就能在 loadPersistedConstraints 之前拿到 pet rect。
+ *  payload 即新窗 label（senderId）；接收端用此避免回播给 sender 自己。 */
+const REGISTRY_HELLO_EVT = 'snap:registry-hello'
 const CONSTRAINT_CHANGED_EVT = 'snap:constraint-changed'
 /** T2a (#31)：preview anchor 切换的跨 webview 广播事件名。
  *  T7 (#31 follow-up B)：payload 由 string|null 扩展为 PreviewAnchorPayload，承载 edge + intensity。 */
 const PREVIEW_ANCHOR_EVT = 'snap:preview-anchor'
 
 interface PreviewAnchorPayload {
+  /** A4 修复：emit 端 webview label；接收端自过滤，避免 self-echo 触发本地 ref 重复赋值。 */
+  senderId: string
   anchorId: string | null
   edge: Edge | null
   intensity: number
@@ -108,6 +115,14 @@ interface RegistryUpdatePayload {
   visible: boolean
 }
 
+/** A4 修复：所有跨 webview event 携带 senderId（emit 端的 webview label），
+ *  接收端 if (p.senderId === label) return 自过滤，避免 self-echo 触发副作用。
+ *  REGISTRY_BROADCAST 原本用 payload.id 自过滤（id === label 即 sender），延续此约定；
+ *  PREVIEW_ANCHOR / CONSTRAINT_CHANGED / FIELD_INTENSITY 需要显式 senderId 字段。 */
+interface ConstraintChangedPayload {
+  senderId: string
+}
+
 async function readWindowRect(w: Window): Promise<Rect> {
   const phys = await w.outerPosition()
   const sz = await w.outerSize()
@@ -138,52 +153,58 @@ const SETTLE_MIN_DIST = 6
 const SETTLE_AMOUNT = 1.5
 const SETTLE_FRAME_MS = 25
 
+/** 返回 true = tween 完整跑完到 toRect；false = 中途被 ESC / 新 drag 打断。
+ *  B1 修复：原来用 `dragSession.state.kind === 'idle'` 判定 tween 是否完整，
+ *  但 ESC 也会让 state 变 idle，caller 无法区分「我刚 endCommitting」和「我被 ESC 提前打断」。
+ *  现 caller 直接根据本函数返回值判断，是否回写 final 到 registry。 */
 async function tweenToRect(
   sourceId: string,
   fromRect: Rect,
   toRect: Rect,
-): Promise<void> {
+): Promise<boolean> {
   const dx = toRect.x - fromRect.x
   const dy = toRect.y - fromRect.y
   const dist = Math.sqrt(dx * dx + dy * dy)
   // 极小距离直接到位（同位置时 dx≈0 / dy≈0）
   if (dist < 0.5) {
     await safeSetPosition(sourceId, toRect.x, toRect.y)
-    return
+    return true
   }
   // 短距离跳过反向阶段
   if (dist < SETTLE_MIN_DIST) {
     for (let i = 1; i <= 4; i++) {
       // Phase F：ESC cancel 时 dragSession 已回 idle，tween 中止
-      if (dragSession.state.kind !== 'committing') return
+      if (dragSession.state.kind !== 'committing') return false
       const t = i / 4
       await safeSetPosition(sourceId, fromRect.x + dx * t, fromRect.y + dy * t)
       if (i < 4) await new Promise((r) => setTimeout(r, SETTLE_FRAME_MS))
     }
-    return
+    return true
   }
   // 帧 1-4：线性抵达 toRect
   for (let i = 1; i <= 4; i++) {
-    if (dragSession.state.kind !== 'committing') return
+    if (dragSession.state.kind !== 'committing') return false
     const t = i / 4
     await safeSetPosition(sourceId, fromRect.x + dx * t, fromRect.y + dy * t)
     await new Promise((r) => setTimeout(r, SETTLE_FRAME_MS))
   }
-  if (dragSession.state.kind !== 'committing') return
+  if (dragSession.state.kind !== 'committing') return false
   // 帧 5：沿运动反方向 1.5px（settle 微撤）
   const ux = dx / dist
   const uy = dy / dist
   await safeSetPosition(sourceId, toRect.x - SETTLE_AMOUNT * ux, toRect.y - SETTLE_AMOUNT * uy)
   await new Promise((r) => setTimeout(r, SETTLE_FRAME_MS))
-  if (dragSession.state.kind !== 'committing') return
+  if (dragSession.state.kind !== 'committing') return false
   // 帧 6：回正 toRect
   await safeSetPosition(sourceId, toRect.x, toRect.y)
+  return true
 }
 
 export function useSnapWindow(label: string): SnapWindowApi {
   let unlistenMove: UnlistenFn | null = null
   let unlistenResize: UnlistenFn | null = null
   let unlistenRegistry: UnlistenFn | null = null
+  let unlistenHello: UnlistenFn | null = null
   let unlistenConstraint: UnlistenFn | null = null
   let unlistenPreviewAnchor: UnlistenFn | null = null
   let unlistenField: UnlistenFn | null = null
@@ -269,8 +290,9 @@ export function useSnapWindow(label: string): SnapWindowApi {
       const movingRectAtMouseup = windowRegistry.get(movingId)?.rect
       const result = dragSession.commit(Date.now(), movingRectAtMouseup)
       if (result.committedConstraint || result.detached) {
-        await persistConstraints()
-        await emit(CONSTRAINT_CHANGED_EVT, null)
+        // B3 修复：persist + broadcast 原子 IPC（Rust 端串行写 KV → emit），
+        // 替代之前的 await persistConstraints() + await emit() 两步。
+        await persistAndBroadcastConstraints(label)
         // Phase F：committed 时进 committing state，跑 settle tween，完成后 endCommitting
         if (result.committedConstraint && movingRectAtMouseup) {
           const c = result.committedConstraint
@@ -278,11 +300,13 @@ export function useSnapWindow(label: string): SnapWindowApi {
           if (targetReg) {
             const final = applyConstraintToRect(movingRectAtMouseup, targetReg.rect, c)
             // c.sourceId 已等于 movingId（commit 写入时用了 candidate.movingId）
-            await tweenToRect(c.sourceId, movingRectAtMouseup, final)
+            const tweenCompleted = await tweenToRect(c.sourceId, movingRectAtMouseup, final)
             // tween 完成（或 ESC 中断后）显式回 idle
             dragSession.endCommitting()
-            // 只在 tween 完整完成时才更新 registry（ESC 中断时 ESC handler 已写回 fromRect 到 registry）
-            if (dragSession.state.kind === 'idle') {
+            // B1 修复：只在 tween 完整跑完时才回写 final 到 registry。
+            // ESC 中断时 tweenToRect 返 false，ESC handler 已用 forestSnapshot 写回 fromRect 到 registry，
+            // 这里不应再覆盖（之前用 state.kind==='idle' 判定，但 ESC 也让 state 变 idle，错误覆盖）。
+            if (tweenCompleted) {
               windowRegistry.updateRect(c.sourceId, final)
               await emit(REGISTRY_BROADCAST_EVT, {
                 id: c.sourceId,
@@ -376,35 +400,10 @@ export function useSnapWindow(label: string): SnapWindowApi {
       // Phase F (#31 follow-up C)：标记本窗为 self-lean source
       sourceDragLabelGlobal.value = label
 
-      // #30 follow-up D：secondary 首帧（armed → dragging）detachAll 立即脱钩。
-      // 只 source 模式 + 非 bypass 走此路径；primary-attract / group / bypass 跳过。
-      // 在 dragSession.onUserMove 之前做，因为 onUserMove 会推 armed → dragging/preview。
-      if (
-        st.kind === 'armed' &&
-        currentDragMode === 'source' &&
-        !bypassSnapForCurrentDrag
-      ) {
-        const removed = constraintStore.removeAllInvolving(label)
-        if (removed.length > 0) {
-          if (import.meta.env.DEV) {
-            console.log(
-              `[snap] source-drag ${label} firstFrame detachAll removed=` +
-                removed.map((c) => `${c.sourceId}->${c.targetId}`).join(','),
-            )
-          }
-          const now = Date.now()
-          for (const c of removed) {
-            // 30s 反向惩罚：防止用户拖一下就被原 anchor 吸回
-            detachHistory.recordDetach(c.sourceId, c.targetId, now)
-          }
-          try {
-            await persistConstraints()
-            await emit(CONSTRAINT_CHANGED_EVT, null)
-          } catch (e) {
-            console.warn('[useSnapWindow] detachAll persist/emit failed:', e)
-          }
-        }
-      }
+      // B6 修复：secondary first-frame detachAll 已在 onPointerDown 同步执行（见下方分支），
+      // 不再依赖此处 onMoved 时 st.kind === 'armed' 的判定。
+      // 原本依赖"第一个 onMoved 仍处于 armed"的判定逻辑脆弱：若 onMoved 在 armed 阶段就直接命中
+      // candidate，state 会跳过 armed → dragging 进 preview，detachAll 跳过 → 与设计意图不符。
 
       // 按模式找 candidate（bypass 时强制 null）
       let best: SnapCandidate | null = null
@@ -420,6 +419,13 @@ export function useSnapWindow(label: string): SnapWindowApi {
           })
         }
         best = cands[0] ?? null
+      }
+      // B8 修复：armedTimer 在第一个 onMoved 时主动清除。
+      // 原本依赖 1s 后 checkArmedTimeout 自检 state.kind === 'armed' 返 false 自然失效，
+      // 每次 drag 都泄漏一个不必要的 timer 到 1.1s 后才回收。
+      if (armedTimer !== null) {
+        clearTimeout(armedTimer)
+        armedTimer = null
       }
       dragSession.onUserMove(label, best)
 
@@ -510,8 +516,8 @@ export function useSnapWindow(label: string): SnapWindowApi {
     )
     constraintStore.delete(PRIMARY_LABEL)
     try {
-      await persistConstraints()
-      await emit(CONSTRAINT_CHANGED_EVT, null)
+      // B3 修复：原子 persist+broadcast
+      await persistAndBroadcastConstraints(label)
     } catch (e) {
       console.warn('[snap] cleanup persist/emit failed:', e)
     }
@@ -591,8 +597,9 @@ export function useSnapWindow(label: string): SnapWindowApi {
       hasOut = false
       void (async (): Promise<void> => {
         try {
-          await persistConstraints()
-          await emit(CONSTRAINT_CHANGED_EVT, null)
+          // B3 修复：原子 persist+broadcast，避免 emit 比 KV 写早抵达其他 webview
+          // 导致其他 webview 重新 load 时读到含脏 outbound 的旧 KV。
+          await persistAndBroadcastConstraints(label)
         } catch (err) {
           console.warn('[snap] onPointerDown cleanup async failed:', err)
         }
@@ -624,6 +631,30 @@ export function useSnapWindow(label: string): SnapWindowApi {
 
     // Escape hatch：Shift 或 Ctrl 按下时本次 drag 完全跳过吸附（Photoshop / Figma 直觉）
     bypassSnapForCurrentDrag = e.shiftKey || e.ctrlKey
+
+    // B6 修复：secondary source-drag 时同步执行 detachAll（不依赖第一个 onMoved 的 armed 态判定）。
+    // 仅 source 模式 + 非 bypass 走此路径；primary-attract / group / bypass 跳过。
+    // 同步执行的好处：armed → preview 跳跃（极近距离点击直接命中 candidate）也能正确脱钩。
+    if (mode === 'source' && !bypassSnapForCurrentDrag) {
+      const removed = constraintStore.removeAllInvolving(label)
+      if (removed.length > 0) {
+        if (import.meta.env.DEV) {
+          console.log(
+            `[snap] pointerdown ${label} source-mode detachAll removed=` +
+              removed.map((c) => `${c.sourceId}->${c.targetId}`).join(','),
+          )
+        }
+        const now = Date.now()
+        for (const c of removed) {
+          // 30s 反向惩罚：防止用户拖一下就被原 anchor 吸回
+          detachHistory.recordDetach(c.sourceId, c.targetId, now)
+        }
+        // fire-and-forget B3 原子 IPC（pointerdown 不能 async，且后续 arm dragSession 不依赖 KV 写完成）
+        void persistAndBroadcastConstraints(label).catch((err) => {
+          console.warn('[snap] pointerdown detachAll persist failed:', err)
+        })
+      }
+    }
 
     // arm dragSession + snapshot forest
     const snap = new Map<string, Rect>()
@@ -662,6 +693,11 @@ export function useSnapWindow(label: string): SnapWindowApi {
         rect,
         visible,
       } satisfies RegistryUpdatePayload)
+      // B2 修复：emit hello 让现存窗回播自己的 rect。
+      // 解决"chat 懒窗 reopen 时已错过 pet 的初始 REGISTRY_BROADCAST"竞争：chat 自己启动期
+      // 不知道 pet 的 rect，loadPersistedConstraints 时 windowRegistry.get('pet')=undefined
+      // → constraint 被当作 anchor-missing drop 掉。hello 出去后，pet listener 会回播 pet rect。
+      await emit(REGISTRY_HELLO_EVT, label)
     } catch (e) {
       console.error('[useSnapWindow] register self failed:', e)
     }
@@ -710,10 +746,39 @@ export function useSnapWindow(label: string): SnapWindowApi {
       console.warn('[useSnapWindow] listen registry failed:', e)
     }
 
+    // B2 修复：监听陌生窗 hello，回播自己的 rect。
+    // payload 是 sender label；sender === self 的 hello（自己刚 emit 的）跳过。
     try {
-      unlistenConstraint = await listen(CONSTRAINT_CHANGED_EVT, () => {
-        void onConstraintChanged()
+      unlistenHello = await listen<string>(REGISTRY_HELLO_EVT, async (ev) => {
+        const senderId = ev.payload
+        if (!senderId || senderId === label) return
+        try {
+          const rect = await readWindowRect(getCurrentWindow())
+          const visible = await getCurrentWindow().isVisible()
+          await emit(REGISTRY_BROADCAST_EVT, {
+            id: label,
+            rect,
+            visible,
+          } satisfies RegistryUpdatePayload)
+        } catch (e) {
+          console.warn(`[useSnapWindow] hello-back to ${senderId} failed:`, e)
+        }
       })
+    } catch (e) {
+      console.warn('[useSnapWindow] listen hello failed:', e)
+    }
+
+    try {
+      unlistenConstraint = await listen<ConstraintChangedPayload | null>(
+        CONSTRAINT_CHANGED_EVT,
+        (ev) => {
+          // A4 修复：自过滤 senderId === label，避免 sender 自己 clear+reload（已 persist 过）。
+          // 旧 payload 是 null（兼容历史 emit('snap:constraint-changed', null)）—— 仍处理，
+          // 但建议 emit 端逐步迁移到 { senderId } 形式。
+          if (ev.payload && ev.payload.senderId === label) return
+          void onConstraintChanged()
+        },
+      )
     } catch (e) {
       console.warn('[useSnapWindow] listen constraint-changed failed:', e)
     }
@@ -728,6 +793,7 @@ export function useSnapWindow(label: string): SnapWindowApi {
         previewIntensityGlobal.value = newIntensity
         try {
           await emit(PREVIEW_ANCHOR_EVT, {
+            senderId: label,
             anchorId: newAnchor,
             edge: newEdge,
             intensity: newIntensity,
@@ -738,7 +804,7 @@ export function useSnapWindow(label: string): SnapWindowApi {
       },
     )
 
-    // 监听其他 webview 广播的 preview anchor 切换（本窗 emit 也会回声，统一覆盖即可）
+    // 监听其他 webview 广播的 preview anchor 切换。A4 修复：自过滤 senderId === label
     try {
       unlistenPreviewAnchor = await listen<PreviewAnchorPayload>(PREVIEW_ANCHOR_EVT, (ev) => {
         const p = ev.payload
@@ -746,11 +812,12 @@ export function useSnapWindow(label: string): SnapWindowApi {
           previewAnchorGlobal.value = null
           previewEdgeGlobal.value = null
           previewIntensityGlobal.value = 0
-        } else {
-          previewAnchorGlobal.value = p.anchorId
-          previewEdgeGlobal.value = p.edge
-          previewIntensityGlobal.value = p.intensity
+          return
         }
+        if (p.senderId === label) return // 自回声跳过
+        previewAnchorGlobal.value = p.anchorId
+        previewEdgeGlobal.value = p.edge
+        previewIntensityGlobal.value = p.intensity
       })
     } catch (e) {
       console.warn('[useSnapWindow] listen preview-anchor failed:', e)
@@ -804,8 +871,10 @@ export function useSnapWindow(label: string): SnapWindowApi {
           }
           // B3 fix：primary 启动 load+solve 完后 emit CONSTRAINT_CHANGED 让其他 webview reload。
           // 解决 chat 早于 pet startup 时本地 load 还没拿到完整 registry 导致 anchor-missing drop 的 race。
+          // 此处只是信号事件（KV 没改），不需要走 persistAndBroadcastConstraints；直接 emit 带 senderId。
+          // A4 修复：payload 带 senderId 让 listener 自过滤；primary 本地 store 已经在 solve 前 load 过。
           try {
-            await emit(CONSTRAINT_CHANGED_EVT, null)
+            await emit(CONSTRAINT_CHANGED_EVT, { senderId: label } satisfies ConstraintChangedPayload)
           } catch (e) {
             console.warn(`[snap] ${label} startup constraint-changed emit failed:`, e)
           }
@@ -820,6 +889,7 @@ export function useSnapWindow(label: string): SnapWindowApi {
     unlistenMove?.()
     unlistenResize?.()
     unlistenRegistry?.()
+    unlistenHello?.()
     unlistenConstraint?.()
     unlistenPreviewAnchor?.()
     unlistenField?.()

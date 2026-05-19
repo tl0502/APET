@@ -88,6 +88,13 @@ async function onPointerDown(event: PointerEvent) {
     console.warn('[PetCanvas] cancelWander failed (non-fatal):', e)
   })
   try {
+    // ⚠️ 隐式契约（A3 注释 2026-05-19）：
+    // useSnapWindow.onPointerDown 已在 capture 阶段先跑（registered with capture:true 在 window 上），
+    // arm 了 dragSession。本处必须调 startDragging() 让 OS 接管拖动，否则：
+    //   - 没有 OS-level move → 没有 tauri://move 事件 → useSnapWindow 的 onMoved 路径不触发
+    //   - dragSession 永远卡在 armed 态，1s 后 ARMED_TIMEOUT_MS 自动回 idle
+    //   - 表现：用户拖 pet 完全无反应，无错误日志
+    // 替代方案（M3 follow-up）：把 startDragging 移到 useSnapWindow 内部，让 composable 自给自足。
     await getCurrentWindow().startDragging()
   } catch (e) {
     console.error('[PetCanvas] startDragging failed:', e)

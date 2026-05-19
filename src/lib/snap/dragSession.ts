@@ -87,12 +87,20 @@ class DragSession {
   }
 
   /** T2a (#31)：所有 _state 变更后调用，同步 previewAnchorId / previewEdge / previewIntensity / previewFinalRect。
-   *  preview 时反映 candidate 信息；其他状态恒 null / 0。 */
+   *  preview 时反映 candidate 信息；其他状态恒 null / 0。
+   *
+   *  B5 修复 (2026-05-19)：primary-attract 时 candidate.targetId === draggedId（被拖窗自己就是 target，
+   *  即 anchor）。原来 previewAnchorId 直接取 targetId → pet 自己高亮，但实际"将要移动"的是
+   *  secondary（candidate.movingId）。修后视觉与意图对齐：
+   *  - source-drag：targetId !== draggedId → previewAnchorId = targetId（高亮 anchor，UI "I am destination"）
+   *  - primary-attract：targetId === draggedId → previewAnchorId = movingId（高亮被反向吸的 secondary，
+   *    UI "I will move toward primary"）。配套 previewEdge 从 targetEdge 换为 sourceEdge（movingId 的对接边）。 */
   private _syncReactive(): void {
     if (this._state.kind === 'preview') {
       const c = this._state.candidate
-      previewAnchorId.value = c.targetId
-      previewEdge.value = c.targetEdge
+      const isPrimaryAttract = c.targetId === this._state.draggedId
+      previewAnchorId.value = isPrimaryAttract ? c.movingId : c.targetId
+      previewEdge.value = isPrimaryAttract ? c.sourceEdge : c.targetEdge
       // T7 (#31 follow-up B)：用 distance 算渐进 intensity，clamp [0.25, 1] 留个最低可见底
       previewIntensity.value = Math.max(0.25, Math.min(1, 1 - c.distance / TRIGGER_ZONE))
       // Phase B (#31 follow-up C)：暴露 finalRect 供 SnapGhost 渲染

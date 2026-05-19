@@ -7,7 +7,10 @@
 //   2. loadPersistedConstraints() → 从 KV 读 → parse → filter anchor missing → 写入 constraintStore
 //   3. solve(allRegisteredIds) → 把所有 attached 窗摆到正确位置
 //
-// 写入路径：dragSession.commit 成功后调 persistConstraints() 全量写一次（KV 字串短，全量写 cheap）。
+// 写入路径：
+// - persistConstraints()：仅写 KV（测试 / 兼容路径）
+// - persistAndBroadcastConstraints(senderId)：B3 修复——Rust 端原子 写 KV + emit 广播
+//   生产路径应优先用此 helper，避免 setKv + emit 分别 IPC 时的顺序 race。
 //
 // 错误兜底：
 // - getKv 失败：log + 返 {loaded:0, dropped:0}（启动不阻塞）
@@ -15,7 +18,7 @@
 // - schema v 不匹配：drop 该条（破坏性 schema 变更时 ++ SCHEMA_V，老数据自动清）
 // - anchor missing in registry：drop 该条 + warn（degrade 为 free 窗）
 
-import { getConfig, setConfig } from '@/services/config'
+import { getConfig, setConfig, snapPersistAndBroadcast } from '@/services/config'
 import { constraintStore } from './constraintStore'
 import type { PersistedConstraint, SnapConstraint } from './types'
 import { windowRegistry } from './windowRegistry'
@@ -111,7 +114,10 @@ export async function loadPersistedConstraints(
 }
 
 /** 把 constraintStore 当前全部 constraints 全量写入 KV。
- *  caller：dragSession.commit / delete constraint 后调一次。 */
+ *  caller：dragSession.commit / delete constraint 后调一次。
+ *
+ *  B3 修复后生产路径建议改用 persistAndBroadcastConstraints(senderId) — 后者在 Rust 端
+ *  把"写 KV + emit 广播"串行化，避免 emit 比写抵达其他 webview 更早。 */
 export async function persistConstraints(deps: PersistenceDeps = defaultDeps): Promise<void> {
   const list = constraintStore.list()
   const persisted: PersistedConstraint[] = list.map((c) => ({ ...c, v: SCHEMA_V }))
@@ -120,6 +126,26 @@ export async function persistConstraints(deps: PersistenceDeps = defaultDeps): P
     await deps.setKv(SNAP_KV_KEY, json)
   } catch (e) {
     console.error('[snap/persistence] persistConstraints failed:', e)
+  }
+}
+
+/** B3 修复：原子写 KV + 跨 webview emit 'snap:constraint-changed'。
+ *  Rust 端串行（先写 KV，写完才 emit），保证其他 webview 收到事件 reload KV 时读到的是新值。
+ *
+ *  caller：useSnapWindow 内所有 commit / detach / cleanup 路径，替代两步走的
+ *  `await persistConstraints(); await emit(CONSTRAINT_CHANGED_EVT, null)`。
+ *  - senderId：调用方 webview 的 label，listener 端用此过滤自回声。
+ *  - 失败仅 console.error，不抛（commit 流程不应因 IPC 失败回滚 store）。
+ *
+ *  注：本函数不接受 deps 注入；测试若需 mock 应直接调 persistConstraints。 */
+export async function persistAndBroadcastConstraints(senderId: string): Promise<void> {
+  const list = constraintStore.list()
+  const persisted: PersistedConstraint[] = list.map((c) => ({ ...c, v: SCHEMA_V }))
+  const json = JSON.stringify(persisted)
+  try {
+    await snapPersistAndBroadcast(json, senderId)
+  } catch (e) {
+    console.error('[snap/persistence] persistAndBroadcastConstraints failed:', e)
   }
 }
 

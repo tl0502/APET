@@ -17,7 +17,6 @@ import PetCanvas from '@/components/PetCanvas.vue'
 import PetReminderBubble from '@/components/PetReminderBubble.vue'
 import { useToast } from '@/composables/useToast'
 import { useSnapWindow } from '@/composables/useSnapWindow'
-import { getConfig } from '@/services/config'
 import { getChatRegisterStatus } from '@/services/shortcut'
 import {
   PET_VIEW_CHANGED_EVENT,
@@ -35,10 +34,9 @@ let unlistenChat: UnlistenFn | null = null
 let unlistenViewChanged: UnlistenFn | null = null
 let unlistenAot: UnlistenFn | null = null
 
-/** T10 (#31 follow-up B)：AOT KV key + 默认值，与 [src-tauri/src/services/window_state.rs] 同源 */
-const AOT_KV_KEY = 'window:always_on_top'
+/** T10 (#31 follow-up B)：AOT 跨窗口广播事件名（Rust 端 toggle 时 emit）。
+ *  R1 修复后前端不再启动期 read KV，仅 listen 此事件接 Rust 后续切换。 */
 const AOT_CHANGED_EVT = 'window:always-on-top:changed'
-const AOT_DEFAULT = true
 
 // #30 磁吸窗口系统：pet 是 anchor 之一（也是负责启动期 load persistence 的窗）。
 // composable 在 onMounted 注册 listener，在 onBeforeUnmount 清理。
@@ -83,16 +81,10 @@ onMounted(async () => {
     console.warn('[App] getPetViewPreset failed, fallback half:', e)
   }
 
-  // T10 (#31 follow-up B)：AOT 前端兜底 — 启动期主动读 KV 应用一次 + listen 后端 emit
-  // 同步切换。后端 [window_state.rs apply_initial_always_on_top] setup 阶段已做一次，
-  // 此处是双保险（chat 是 lazy webview，setup 期注册时序不绝对可靠）。
-  try {
-    const raw = await getConfig(AOT_KV_KEY)
-    const v = raw === null ? AOT_DEFAULT : raw === 'true'
-    await getCurrentWindow().setAlwaysOnTop(v)
-  } catch (e) {
-    console.warn('[App] initial setAlwaysOnTop failed:', e)
-  }
+  // T10 (#31 follow-up B)：AOT 前端 listen 后端 emit 同步切换。
+  // R1 修复 (2026-05-19)：启动期由 Rust 端 apply_initial_always_on_top 单一负责，
+  // 前端不再读 KV 应用初始值——避免三处（Rust + App.vue + ChatApp.vue）默认常量不同步埋雷。
+  // 前端只 listen window:always-on-top:changed 接 Rust 后续切换。
   try {
     unlistenAot = await listen<boolean>(AOT_CHANGED_EVT, async (ev) => {
       try {
