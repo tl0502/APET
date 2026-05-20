@@ -15,6 +15,7 @@ desktop.ini
 node_modules/
 dist/
 dist-ssr/
+coverage/
 *.local
 npm-debug.log*
 pnpm-debug.log*

@@ -10,6 +10,7 @@ export default [
       'dist/',
       'src-tauri/',
       'node_modules/',
+      'coverage/',
       '.github/',
       '.vscode/',
       '.claude/',
