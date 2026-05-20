@@ -14,6 +14,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import AppShell from '@/components/layouts/AppShell.vue'
 import PetCanvas from '@/components/PetCanvas.vue'
+import PetOnboardingBubble from '@/components/PetOnboardingBubble.vue'
 import PetReminderBubble from '@/components/PetReminderBubble.vue'
 import { useToast } from '@/composables/useToast'
 import { useSnapWindow } from '@/composables/useSnapWindow'
@@ -150,6 +151,7 @@ onBeforeUnmount(() => {
   <AppShell variant="transparent" :class="snapPreviewClass" :style="snapPreviewStyle">
     <PetCanvas :view="view" :size="size" />
     <PetReminderBubble />
+    <PetOnboardingBubble />
   </AppShell>
 </template>
 

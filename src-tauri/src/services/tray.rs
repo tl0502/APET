@@ -1,10 +1,11 @@
-// 系统托盘服务（#6 + #9 设置入口）
+// 系统托盘服务（#6 + #9 设置入口 + #35 ADR-021 P1 workspace 入口）
 //
 // 行为：
 // - 启动时注册到 Windows 托盘（任务栏 ^ 展开后可见，用户可拖出常驻）
-// - 左键单击/双击托盘图标 → 无操作（用户决策：仅菜单可操作，避免误触）
-// - 右键 → 弹菜单：显示/隐藏（动态文案）/ 设置（#9 激活，唤起 settings 窗口）/ 退出
-// - 主窗 + settings 窗 CloseRequested 拦截在 lib.rs，改 hide；唯一退出路径 = 托盘"退出"
+// - 左键单击 → 无操作；左键双击 → toggle workspace（#35 Phase E，与 VSCode-style "双击图标主面板"惯例对齐）
+// - 右键 → 弹菜单：显示/隐藏 / 工作台 / 番茄 / 任务 / 设置 / AOT / 退出
+// - 主窗 + settings/chat/tasks/pomodoro/workspace CloseRequested 拦截在 lib.rs，改 hide
+// - 唯一退出路径 = 托盘"退出"
 //
 // 设计要点：
 // - icon 复用 app.default_window_icon()（tauri.conf.json 已引用作 default window icon，0 新增资源）
@@ -15,7 +16,7 @@
 //   阻塞 tray 事件线程；潜在死锁风险）。
 
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Listener, Manager, Wry};
 
 use crate::services::window_actions::{self, PET_WINDOW_LABEL};
@@ -25,6 +26,8 @@ const MENU_ID_SHOW_HIDE: &str = "tray:show-hide";
 const MENU_ID_SETTINGS: &str = "tray:settings";
 const MENU_ID_TASKS: &str = "tray:tasks";
 const MENU_ID_POMODORO: &str = "tray:pomodoro";
+/// #35 ADR-021 P1 workspace 主窗入口（与 chat 同款"开关式"）。
+const MENU_ID_WORKSPACE: &str = "tray:workspace";
 /// #31 follow-up：alwaysOnTop 全局开关菜单项
 const MENU_ID_AOT: &str = "tray:always-on-top";
 const MENU_ID_QUIT: &str = "tray:quit";
@@ -75,6 +78,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let tasks_item = MenuItemBuilder::with_id(MENU_ID_TASKS, "任务...").build(app)?;
     // #28 follow-up 番茄独立窗：托盘"番茄..."入口，与 tasks tab 按钮 / pomodoro_start 自动 show 三入口并列。
     let pomodoro_item = MenuItemBuilder::with_id(MENU_ID_POMODORO, "番茄...").build(app)?;
+    // #35 ADR-021 P1 workspace 入口；放 pomodoro 之前（与 plan 一致：workspace > 番茄 > 任务 > 设置 重要性序）
+    let workspace_item = MenuItemBuilder::with_id(MENU_ID_WORKSPACE, "工作台...").build(app)?;
     // #31 follow-up：alwaysOnTop 全局开关，label 带"✓"前缀指示当前状态。
     // R3 修复：setup 初值仍 block_on KV 一次（仅启动期单次，无热路径影响），之后由 listen 驱动。
     let initial_aot = tauri::async_runtime::block_on(window_state::load_always_on_top(app))
@@ -86,6 +91,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let menu = MenuBuilder::new(app)
         .item(&show_hide_item)
         .separator()
+        .item(&workspace_item)
         .item(&pomodoro_item)
         .item(&tasks_item)
         .item(&settings_item)
@@ -129,6 +135,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             }
             MENU_ID_TASKS => window_actions::show_tasks(app),
             MENU_ID_POMODORO => window_actions::show_pomodoro(app),
+            MENU_ID_WORKSPACE => window_actions::show_workspace(app),
             MENU_ID_SETTINGS => window_actions::show_settings(app),
             MENU_ID_AOT => {
                 // 同步 block_on：托盘点击在 main thread，KV 读写 + set_always_on_top 都很快。
@@ -152,9 +159,22 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .on_tray_icon_event(move |tray, event| {
             // hover 仅刷 show/hide（pet 可见状态 OS 即时查），AOT 文案由上面的 listener 维护，
             // 不在 hover 路径 block_on KV（避免频繁 hover 阻塞 tray 事件线程）。
-            if let TrayIconEvent::Enter { .. } = event {
-                let app = tray.app_handle();
-                refresh_label(app, &show_hide_for_tray);
+            match event {
+                TrayIconEvent::Enter { .. } => {
+                    let app = tray.app_handle();
+                    refresh_label(app, &show_hide_for_tray);
+                }
+                // #35 Phase E：左键双击 → toggle workspace（与 chat 全局快捷键 / 托盘菜单
+                // 并列的第三入口；VSCode-style "双击图标主面板"惯例）。
+                // 保持 show_menu_on_left_click(false)：单击仍无操作，仅双击触发，避免误触。
+                TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    let app = tray.app_handle();
+                    window_actions::toggle_workspace(app);
+                }
+                _ => {}
             }
         })
         .build(app)?;

@@ -180,5 +180,11 @@ pub async fn onboarding_complete(app: AppHandle) -> Result<(), String> {
     if let Err(e) = app.emit("onboarding:step-done", serde_json::json!({ "step": "soul-pledge" })) {
         eprintln!("[onboarding_complete] emit step-done failed (non-fatal): {e}");
     }
+    // #35 ADR-021 P1 Phase E：通知 pet 窗弹一次 workspace 引导气泡（PetOnboardingBubble
+    // 监听本事件 + KV 防重）。失败仅 eprintln 不阻断主路径（用户错过引导但仍可走托盘
+    // / 快捷键 / 托盘双击三入口发现 workspace）。
+    if let Err(e) = app.emit("onboarding:workspace-intro", serde_json::json!({})) {
+        eprintln!("[onboarding_complete] emit workspace-intro failed (non-fatal): {e}");
+    }
     Ok(())
 }

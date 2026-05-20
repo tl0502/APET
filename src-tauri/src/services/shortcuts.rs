@@ -26,6 +26,12 @@ pub const DEFAULT_SHORTCUT_CHAT: &str = "Ctrl+Alt+Space";
 pub const SHORTCUT_CHAT_EVENT: &str = "shortcut:chat";
 pub const SHORTCUT_REGISTER_FAILED_EVENT: &str = "shortcut:register-failed";
 
+/// #35 ADR-021 P1 workspace 主窗快捷键（Phase E）。
+/// MVP 阶段只暴露启动期注册 + 失败留痕查询；用户改键 UI 留 M2 follow-up（plan 风险 5 决策）。
+pub const CONFIG_KEY_SHORTCUT_WORKSPACE: &str = "shortcut:workspace";
+pub const DEFAULT_SHORTCUT_WORKSPACE: &str = "Ctrl+Alt+W";
+pub const SHORTCUT_WORKSPACE_EVENT: &str = "shortcut:workspace";
+
 #[derive(Serialize, Clone)]
 pub struct ShortcutChatPayload {
     pub source: &'static str,
@@ -55,6 +61,9 @@ pub struct ProbeResult {
 pub struct ShortcutRegistry {
     pub current_chat: Mutex<Option<String>>,
     pub last_chat_error: Mutex<Option<ShortcutRegisterFailedPayload>>,
+    /// #35 Phase E：workspace 启动期注册留痕（与 chat 平行；不复用因事件名 / 默认键不同）。
+    pub current_workspace: Mutex<Option<String>>,
+    pub last_workspace_error: Mutex<Option<ShortcutRegisterFailedPayload>>,
 }
 
 fn parse_shortcut(s: &str) -> Result<Shortcut, String> {
@@ -262,6 +271,122 @@ pub fn handle_shortcut_pressed<R: Runtime>(
         };
         if let Err(e) = app.emit(SHORTCUT_CHAT_EVENT, &payload) {
             eprintln!("[shortcut] emit chat failed: {e}");
+        }
+    }
+}
+
+// ============================================================
+// #35 Phase E：workspace 快捷键（与 chat 平行；handler 单独 emit shortcut:workspace）
+// ============================================================
+
+/// 启动期注册 workspace 快捷键。失败 emit + 留痕，不阻断启动（plan 风险 5：键冲突时
+/// 仍可走托盘 / DoubleClick 三入口的另外两路）。
+pub fn register_workspace_on_startup<R: Runtime>(app: &AppHandle<R>) {
+    let stored = block_on(config::get(app, CONFIG_KEY_SHORTCUT_WORKSPACE)).unwrap_or(None);
+    let shortcut_str = stored.unwrap_or_else(|| DEFAULT_SHORTCUT_WORKSPACE.to_string());
+
+    match register_workspace_internal(app, &shortcut_str) {
+        Ok(()) => {
+            eprintln!("[shortcut] registered workspace shortcut: {shortcut_str}");
+            clear_last_workspace_error(app);
+        }
+        Err(e) => {
+            eprintln!("[shortcut] register workspace failed for '{shortcut_str}': {e}");
+            let payload = ShortcutRegisterFailedPayload {
+                shortcut: shortcut_str,
+                error: e,
+            };
+            set_last_workspace_error(app, payload.clone());
+            // 复用同一个失败事件名（前端按 payload.shortcut 判定是哪个快捷键）
+            let _ = app.emit(SHORTCUT_REGISTER_FAILED_EVENT, payload);
+        }
+    }
+}
+
+fn register_workspace_internal<R: Runtime>(
+    app: &AppHandle<R>,
+    shortcut_str: &str,
+) -> Result<(), String> {
+    let shortcut = parse_shortcut(shortcut_str)?;
+    app.global_shortcut()
+        .on_shortcut(shortcut, |app, shortcut, event| {
+            handle_workspace_shortcut_pressed(app, shortcut, event);
+        })
+        .map_err(|e| e.to_string())?;
+    let registry = app.state::<ShortcutRegistry>();
+    let mut slot = registry
+        .current_workspace
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    *slot = Some(shortcut_str.to_string());
+    Ok(())
+}
+
+fn set_last_workspace_error<R: Runtime>(
+    app: &AppHandle<R>,
+    payload: ShortcutRegisterFailedPayload,
+) {
+    if let Some(registry) = app.try_state::<ShortcutRegistry>() {
+        if let Ok(mut slot) = registry.last_workspace_error.lock() {
+            *slot = Some(payload);
+        }
+    }
+}
+
+fn clear_last_workspace_error<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(registry) = app.try_state::<ShortcutRegistry>() {
+        if let Ok(mut slot) = registry.last_workspace_error.lock() {
+            *slot = None;
+        }
+    }
+}
+
+/// 读启动期 register workspace 留痕（前端 WorkspaceApp mount 时查询）。
+///
+/// MVP 暂未消费（plan 风险 5 决策：M1 失败时仍可走托盘 / 双击两入口；M2 settings UI
+/// 重设快捷键时才暴露给前端）。allow dead_code 标记预留位。
+#[allow(dead_code)]
+pub fn last_workspace_register_error<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<ShortcutRegisterFailedPayload> {
+    let registry = app.try_state::<ShortcutRegistry>()?;
+    let slot = registry.last_workspace_error.lock().ok()?;
+    slot.clone()
+}
+
+/// 读当前已注册的 workspace 快捷键（None = 启动期 register 失败）。
+///
+/// 同 last_workspace_register_error：M2 settings UI 消费方上线后启用。
+#[allow(dead_code)]
+pub fn current_workspace_shortcut<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let registry = app.try_state::<ShortcutRegistry>()?;
+    let slot = registry.current_workspace.lock().ok()?;
+    slot.clone()
+}
+
+pub fn handle_workspace_shortcut_pressed<R: Runtime>(
+    app: &AppHandle<R>,
+    shortcut: &Shortcut,
+    event: tauri_plugin_global_shortcut::ShortcutEvent,
+) {
+    eprintln!(
+        "[shortcut] workspace handler fired: shortcut={:?} state={:?}",
+        shortcut,
+        event.state()
+    );
+    if event.state() == GsState::Pressed {
+        // 同 chat：onboarding 未完成时静默不 emit
+        let gate_open = app
+            .try_state::<ConsentGate>()
+            .map(|g| g.is_open())
+            .unwrap_or(false);
+        if !gate_open {
+            eprintln!("[shortcut] workspace suppressed (onboarding not complete)");
+            return;
+        }
+        // workspace 不需要 source/timestamp（toggle 是幂等动作），payload 为空对象
+        if let Err(e) = app.emit(SHORTCUT_WORKSPACE_EVENT, serde_json::json!({})) {
+            eprintln!("[shortcut] emit workspace failed: {e}");
         }
     }
 }

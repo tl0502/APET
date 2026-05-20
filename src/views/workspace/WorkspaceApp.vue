@@ -28,7 +28,7 @@ import { WorkspaceManager } from '@/lib/workspace/manager'
 import { KvWorkspacePersistence } from '@/lib/workspace/persistence'
 import type { PanelDescriptor } from '@/lib/workspace/types'
 import { getConfig, setConfig } from '@/services/config'
-import { hideWorkspace } from '@/services/window'
+import { hideWorkspace, toggleWorkspace } from '@/services/window'
 
 // === 单实例 WorkspaceManager（全窗生命周期）===
 const mgr = new WorkspaceManager({
@@ -219,6 +219,23 @@ onMounted(async () => {
     unlistenFns.push(un)
   } catch (e) {
     console.warn('[WorkspaceApp] listen visibility-changed failed:', e)
+  }
+
+  // #35 Phase E：listen 全局快捷键 Ctrl+Alt+W → toggleWorkspace（与 ChatApp listen
+  // shortcut:chat 同款模式）。Rust 端 register_workspace_on_startup 启动期注册，handler
+  // emit 'shortcut:workspace'；workspace 窗内监听后立即调 toggleWorkspace IPC（自我隐藏）。
+  // 注：workspace 已 visible 时 toggle = hide；hidden 时 = show + focus。两路径均期望。
+  try {
+    const un = await listen('shortcut:workspace', async () => {
+      try {
+        await toggleWorkspace()
+      } catch (err) {
+        console.error('[WorkspaceApp] toggleWorkspace failed:', err)
+      }
+    })
+    unlistenFns.push(un)
+  } catch (e) {
+    console.warn('[WorkspaceApp] listen shortcut:workspace failed:', e)
   }
 })
 
