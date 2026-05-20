@@ -69,6 +69,24 @@ export function togglePomodoro(): Promise<void> {
 }
 
 /**
+ * #35 ADR-021 P1 workspace 主窗 show/hide/toggle。
+ *
+ * 同 settings/tasks "关 = hide"（layout 由前端在 onBeforeUnmount 持久化到 KV `workspace:layout`）。
+ * 三入口：托盘菜单"工作台..."/ 托盘左键双击 / 全局快捷键 Ctrl+Alt+W；全部走 toggleWorkspace。
+ */
+export function showWorkspace(): Promise<void> {
+  return invoke<void>('workspace_show')
+}
+
+export function hideWorkspace(): Promise<void> {
+  return invoke<void>('workspace_hide')
+}
+
+export function toggleWorkspace(): Promise<void> {
+  return invoke<void>('workspace_toggle')
+}
+
+/**
  * #24 视角档位（pet 角色窗）。
  * - 'half'：320×320 等比，相机看胸口（默认；对话/表情场景）
  * - 'full'：320×512（1:1.6），相机看全身（装扮/动作场景）

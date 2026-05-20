@@ -58,6 +58,7 @@ export default defineConfig(({ command }) => ({
         onboarding: path.resolve(projectRoot, 'onboarding.html'),
         tasks: path.resolve(projectRoot, 'tasks.html'),
         pomodoro: path.resolve(projectRoot, 'pomodoro.html'),
+        workspace: path.resolve(projectRoot, 'workspace.html'),
       },
     },
   },

@@ -31,6 +31,10 @@ pub const TASKS_WINDOW_LABEL: &str = "tasks";
 /// 启动期 visible:false；由托盘菜单"番茄..."/tasks tab 按钮 / pomodoro_start 自动唤起。
 /// alwaysOnTop 由前端 PomodoroApp.vue 按 phase 动态切换（FOCUS/PAUSED_F 置顶；其余不置顶）。
 pub const POMODORO_WINDOW_LABEL: &str = "pomodoro";
+/// Workspace 主窗 label（与 tauri.conf.json 静态注册一致；#35 ADR-021 P1）。
+/// 启动期 visible:false；由托盘菜单"工作台..."/ 左键双击 / 全局快捷键 Ctrl+Alt+W 三路唤起。
+/// 关闭语义同 settings/tasks/chat：拦截 CloseRequested → hide（保留 webview + layout）。
+pub const WORKSPACE_WINDOW_LABEL: &str = "workspace";
 
 /// #30 follow-up G：跨 webview 广播窗口 visibility 变化的事件名。
 pub const VISIBILITY_CHANGED_EVENT: &str = "window:visibility-changed";
@@ -261,6 +265,50 @@ pub(crate) fn toggle_pomodoro(app: &AppHandle) {
                 let _ = window.show();
                 let _ = window.set_focus();
                 emit_visibility_changed(app, POMODORO_WINDOW_LABEL, true);
+            }
+        }
+    }
+}
+
+/// 显示 workspace 主窗（#35 ADR-021 P1）。`visible:false` 静态注册；
+/// 由托盘菜单"工作台..."/ 左键双击 / 全局快捷键 Ctrl+Alt+W 三路唤起。
+pub(crate) fn show_workspace(app: &AppHandle) {
+    if !is_gate_open(app) {
+        show_onboarding(app);
+        return;
+    }
+    if let Some(window) = app.get_webview_window(WORKSPACE_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        emit_visibility_changed(app, WORKSPACE_WINDOW_LABEL, true);
+    }
+}
+
+/// 隐藏 workspace 主窗（不销毁，保留 dockview layout + panel 实例；
+/// 同 settings/tasks 模式；KV `workspace:layout` 在前端 onBeforeUnmount 持久化）。
+pub(crate) fn hide_workspace(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(WORKSPACE_WINDOW_LABEL) {
+        let _ = window.hide();
+        emit_visibility_changed(app, WORKSPACE_WINDOW_LABEL, false);
+    }
+}
+
+/// 切换 workspace 可见性（托盘左键双击 + Ctrl+Alt+W + 菜单"工作台..."三入口都走这里）。
+pub(crate) fn toggle_workspace(app: &AppHandle) {
+    if !is_gate_open(app) {
+        show_onboarding(app);
+        return;
+    }
+    if let Some(window) = app.get_webview_window(WORKSPACE_WINDOW_LABEL) {
+        match window.is_visible() {
+            Ok(true) => {
+                let _ = window.hide();
+                emit_visibility_changed(app, WORKSPACE_WINDOW_LABEL, false);
+            }
+            _ => {
+                let _ = window.show();
+                let _ = window.set_focus();
+                emit_visibility_changed(app, WORKSPACE_WINDOW_LABEL, true);
             }
         }
     }

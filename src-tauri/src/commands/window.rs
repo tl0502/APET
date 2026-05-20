@@ -9,8 +9,9 @@
 use crate::services::consent_gate::ConsentGate;
 use crate::services::onboarding;
 use crate::services::window_actions::{
-    hide_chat, hide_onboarding, hide_pomodoro, hide_settings, hide_tasks, show_chat, show_pet,
-    show_pomodoro, show_settings, show_tasks, toggle_chat, toggle_pomodoro, toggle_tasks,
+    hide_chat, hide_onboarding, hide_pomodoro, hide_settings, hide_tasks, hide_workspace,
+    show_chat, show_pet, show_pomodoro, show_settings, show_tasks, show_workspace, toggle_chat,
+    toggle_pomodoro, toggle_tasks, toggle_workspace,
 };
 use crate::services::window_state::{self, LastPosition};
 use tauri::{AppHandle, Emitter, Manager};
@@ -112,6 +113,27 @@ pub async fn pomodoro_hide(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn pomodoro_toggle(app: AppHandle) -> Result<(), String> {
     toggle_pomodoro(&app);
+    Ok(())
+}
+
+/// #35 ADR-021 P1 workspace 主窗 show/hide/toggle。同 settings/tasks "关 = hide"。
+/// 由托盘菜单"工作台..."/ 左键双击 / 全局快捷键 Ctrl+Alt+W 三路唤起；前端
+/// `services/window.ts` wrapper 调用同名 wrapper。
+#[tauri::command]
+pub async fn workspace_show(app: AppHandle) -> Result<(), String> {
+    show_workspace(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn workspace_hide(app: AppHandle) -> Result<(), String> {
+    hide_workspace(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn workspace_toggle(app: AppHandle) -> Result<(), String> {
+    toggle_workspace(&app);
     Ok(())
 }
 

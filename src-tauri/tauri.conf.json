@@ -104,6 +104,22 @@
         "resizable": false,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "workspace",
+        "title": "工作台 — AI 桌宠",
+        "url": "workspace.html",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 520,
+        "transparent": false,
+        "decorations": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "resizable": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {

@@ -8,7 +8,7 @@ mod services;
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
     emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL,
-    POMODORO_WINDOW_LABEL, SETTINGS_WINDOW_LABEL, TASKS_WINDOW_LABEL,
+    POMODORO_WINDOW_LABEL, SETTINGS_WINDOW_LABEL, TASKS_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
 };
 use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer};
 use tauri::Manager;
@@ -308,6 +308,7 @@ pub fn run() {
                         || label == SETTINGS_WINDOW_LABEL
                         || label == CHAT_WINDOW_LABEL
                         || label == TASKS_WINDOW_LABEL
+                        || label == WORKSPACE_WINDOW_LABEL
                     {
                         api.prevent_close();
                         let _ = window.hide();
@@ -505,6 +506,10 @@ pub fn run() {
             commands::window::pomodoro_show,
             commands::window::pomodoro_hide,
             commands::window::pomodoro_toggle,
+            // #35 ADR-021 P1 workspace 主窗 show/hide/toggle（同 settings/tasks "关 = hide"）
+            commands::window::workspace_show,
+            commands::window::workspace_hide,
+            commands::window::workspace_toggle,
             // #28 PomodoroService（6 IPC）— 番茄状态机 + drift 校准 + KV active_session
             commands::pomodoro::pomodoro_start,
             commands::pomodoro::pomodoro_pause,

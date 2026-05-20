@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力集 — pet / settings / chat 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动 + 头像文件选择（#25 用户头像上传）+ 番茄独立窗 fullscreen/AOT 切换（#28 follow-up）。",
-  "windows": ["pet", "settings", "chat", "tasks", "pomodoro"],
+  "description": "默认能力集 — pet / settings / chat / tasks / pomodoro / workspace 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动 + 头像文件选择（#25 用户头像上传）+ 番茄独立窗 fullscreen/AOT 切换（#28 follow-up）+ workspace 主窗（#35 ADR-021 P1）。",
+  "windows": ["pet", "settings", "chat", "tasks", "pomodoro", "workspace"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
