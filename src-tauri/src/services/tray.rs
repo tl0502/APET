@@ -33,8 +33,8 @@ const TOOLTIP: &str = "AI 桌宠";
 const LABEL_SHOW: &str = "显示桌宠";
 const LABEL_HIDE: &str = "隐藏桌宠";
 /// AOT label：用 set_text 模式带勾标（同 show_hide 同款；避免 Tauri 2 CheckMenuItem v2 实战示例少的风险）
-const LABEL_AOT_ON: &str = "✓ 顶层显示";
-const LABEL_AOT_OFF: &str = "  顶层显示";
+const LABEL_AOT_ON: &str = "✓ 置于顶层";
+const LABEL_AOT_OFF: &str = "  置于顶层";
 
 /// AOT 切换跨窗口广播事件名（与 services/window_state.rs ALWAYS_ON_TOP_CHANGED_EVENT 同源）。
 /// R3 修复：tray 监听此事件被动刷新 menu 文案，不在 hover 时 block_on KV。
