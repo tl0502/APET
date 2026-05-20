@@ -7,11 +7,11 @@ mod services;
 
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
-    CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL,
-    SETTINGS_WINDOW_LABEL, TASKS_WINDOW_LABEL,
+    emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL,
+    POMODORO_WINDOW_LABEL, SETTINGS_WINDOW_LABEL, TASKS_WINDOW_LABEL,
 };
 use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
@@ -315,11 +315,9 @@ pub fn run() {
                         // visibilitychange（已知 Tauri/WebView2 bug，参 issues #6864 #9524 #10592）。
                         // 改由 Rust 主动 emit 事件，前端各 useSnapWindow 监听同步 windowRegistry
                         // visible → 别窗 candidates / solver / occupancy 不再把隐形窗当合法 anchor。
-                        // 事件名与 services/window_actions.rs::VISIBILITY_CHANGED_EVENT 同步。
-                        let _ = window.app_handle().emit(
-                            "window:visibility-changed",
-                            serde_json::json!({ "label": label, "visible": false }),
-                        );
+                        // P2 修复 (review 2)：走 emit_visibility_changed helper（与 window_actions
+                        // 的 show_*/hide_*/toggle_* 同源），避免事件名 / payload schema 漂移。
+                        emit_visibility_changed(window.app_handle(), label, false);
                     } else if label == POMODORO_WINDOW_LABEL {
                         // #28 follow-up 修订 #2：与 pet/settings 同款"关 = hide"+ 首次关闭
                         // OS 系统通知「番茄窗口已隐藏，计时继续在后台运行」。
@@ -335,10 +333,8 @@ pub fn run() {
                         let _ = window.hide();
                         // #30 follow-up G：与 chat/settings/tasks 同源 — 通知前端
                         // useSnapWindow 同步 visible=false。
-                        let _ = window.app_handle().emit(
-                            "window:visibility-changed",
-                            serde_json::json!({ "label": label, "visible": false }),
-                        );
+                        // P2 修复 (review 2)：改用 emit_visibility_changed helper。
+                        emit_visibility_changed(window.app_handle(), label, false);
                         let app_handle = window.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
                             const HINT_KV: &str = "pomodoro:hide_hint_shown";

@@ -37,15 +37,13 @@ import {
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { getCurrentWindow, LogicalPosition } from '@tauri-apps/api/window'
-import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import AppShell from '@/components/layouts/AppShell.vue'
 import SnapGhost from '@/components/SnapGhost.vue'
 import { useSnapWindow } from '@/composables/useSnapWindow'
-import { REGISTRY_BROADCAST_EVT } from '@/composables/useSnapWindow'
 import { useFocusAOT } from '@/composables/useFocusAOT'
 import { constraintStore } from '@/lib/snap/constraintStore'
 import { persistAndBroadcastConstraints } from '@/lib/snap/persistence'
-import { windowRegistry } from '@/lib/snap/windowRegistry'
 import type { Rect } from '@/lib/snap/types'
 import {
   getActivePomodoro,
@@ -97,6 +95,8 @@ const {
   isFieldAnchor: pomoIsFieldAnchor,
   fieldIntensityFor: pomoFieldIntensity,
   selfLean: pomoSelfLean,
+  syncRustSnap: pomoSyncRustSnap,
+  broadcastSelfRect: pomoBroadcastSelfRect,
 } = useSnapWindow('pomodoro')
 
 const pomoSnapPreviewClass = computed(() => {
@@ -195,21 +195,30 @@ async function readSelfRect(): Promise<Rect> {
 }
 
 async function broadcastVisibility(visible: boolean, rect: Rect): Promise<void> {
-  windowRegistry.updateVisible('pomodoro', visible)
+  // P6 修复 (review 2)：走 composable 暴露的 broadcastSelfRect，统一 payload schema
+  // （含 visualInset 字段，与 useSnapWindow 内部其他 emit 路径一致），避免 contract 分叉。
   try {
-    await emit(REGISTRY_BROADCAST_EVT, { id: 'pomodoro', rect, visible })
+    await pomoBroadcastSelfRect(rect, visible)
   } catch (e) {
     console.warn('[pomodoro-app] broadcast visibility failed:', e)
   }
 }
 
 /** 进入全屏前断开 pomodoro 自身出向 constraint（仅删 source=pomodoro 的边）。
- *  不删入向（M3 多窗时其他窗若依附 pomodoro，全屏不应强拽它们）。 */
+ *  不删入向（M3 多窗时其他窗若依附 pomodoro，全屏不应强拽它们）。
+ *
+ *  P1 修复 (review 2)：persist+broadcast 后必须本地 syncRustSnap。本 webview emit 的
+ *  constraint-changed 会被 A4 senderId 自过滤跳过自己 → 自己 webview 永远不会
+ *  loadPersistedConstraints + syncRustSnap，要等 pet webview 收到 broadcast → 跨 webview
+ *  reload → 才间接修正 Rust SnapState。这中间窗口内 pet 拖动会让 Rust BFS 仍看到
+ *  pomodoro 出向，mark internal_until[pomodoro] + setPosition（fullscreen 被 OS 忽略，
+ *  但 guard 100ms 内会吞掉 pomodoro 合法 Moved）。M3 多 primary 启用后 BFS 真会拽。 */
 async function detachForFullscreen(): Promise<void> {
   const removed = constraintStore.removeAllInvolving('pomodoro')
   if (removed.length > 0) {
     try {
       await persistAndBroadcastConstraints('pomodoro')
+      await pomoSyncRustSnap()
     } catch (e) {
       console.warn('[pomodoro-app] persist after fullscreen detach failed:', e)
     }
@@ -235,21 +244,28 @@ async function toggleFullscreen() {
         await broadcastVisibility(false, preFullscreenRect)
       }
       // 4. 关 AOT（setFullscreen 与 AOT 某些 WM 互斥）
-      // 改走 useFocusAOT：先翻 isFullscreen 标志再 resync，让 shouldKeepTopmost 返 false
+      // 先翻 isFullscreen 标志再 resync，让 shouldKeepTopmost 返 false
       // → useFocusAOT 综合判断后 setAlwaysOnTop(false)，同步 lastAOT cache（避免后续判 noop）
       isFullscreen.value = true
       await focusAOT.resync()
-    }
-    await w.setFullscreen(next)
-    isFullscreen.value = next
-    if (!next) {
-      // 退出全屏：先复位 OS rect，再标记 visible=true，最后恢复 AOT
+      // 5. setFullscreen
+      await w.setFullscreen(true)
+    } else {
+      // 退出：与进入对称的反向序列
+      // P7 修复 (review 2)：先翻 isFullscreen=false 让 useFocusAOT.shouldKeepTopmost 回到
+      // phase-driven，避免 setFullscreen(false) 触发 onFocusChanged 时 shouldKeepTopmost 还读
+      // 旧的 isFullscreen=true（短窗口期 ~10ms 的 AOT 错位）。
+      isFullscreen.value = false
+      // 1. setFullscreen(false) 让窗回到原 size
+      await w.setFullscreen(false)
+      // 2. 复位 OS rect
       if (preFullscreenRect) {
         try {
           await w.setPosition(new LogicalPosition(preFullscreenRect.x, preFullscreenRect.y))
         } catch (e) {
           console.warn('[pomodoro-app] restore pre-fullscreen position failed:', e)
         }
+        // 3. 标记 visible=true 重新广播
         await broadcastVisibility(true, preFullscreenRect)
         preFullscreenRect = null
       } else {
@@ -261,8 +277,8 @@ async function toggleFullscreen() {
           console.warn('[pomodoro-app] fallback visibility restore failed:', e)
         }
       }
-      // isFullscreen 已在上面设回 false，resync 会让 useFocusAOT 重新综合 phase + focus
-      void focusAOT.resync()
+      // 4. resync 让 useFocusAOT 综合 phase + focus 重设 AOT
+      await focusAOT.resync()
     }
   } catch (e) {
     console.warn('[pomodoro-app] setFullscreen failed:', e)

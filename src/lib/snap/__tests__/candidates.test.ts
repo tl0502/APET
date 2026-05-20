@@ -545,4 +545,55 @@ describe('findReverseAttract (#30 follow-up D)', () => {
     // movingId 仍是 secondary（不是 primary）
     expect(cands[0]?.movingId).toBe('chat')
   })
+
+  // P3 修复 (review 2)：findReverseAttract 必须把全 registry 传给 findCandidates，
+  // 让 computeEdgeOccupancy 能 lookup 其他 secondary 的 source rect。原 bug：传
+  // mini-registry [primaryReg] → 其他 secondary 不在 registry → occupancy 永远空 →
+  // 新反向吸引的 secondary 可能与已占用边段完全重叠。
+  it('P3 regression: 已占用边段不能被反向吸引到重叠位置', () => {
+    // chat 已吸到 pet.right top 部分（投影 y=0..200，占 pet.right 边段 [0, 200]）
+    constraintStore.set({
+      sourceId: 'chat',
+      targetId: 'pet',
+      sourceEdge: 'left',
+      targetEdge: 'right',
+      offset: 0,
+      enabled: true,
+      createdAt: 0,
+    })
+    const pet = r(0, 0, 320, 400)
+    const chat = reg('chat', r(320, 0, 320, 200)) // 吸在 pet.right [0, 200]
+    // pomodoro 想吸 pet.right，但放在与 chat 完全重叠的 y 位置（投影也是 0..200）
+    const pomo = reg('pomodoro', r(325, 0, 320, 200)) // 视觉与 chat 重叠
+    const cands = findReverseAttract('pet', pet, [chat, pomo])
+    // 若 P3 未修：occupancy 空 → cand 直接给 offset=0 → pomodoro 也吸到 [0, 200] 重叠 chat
+    // 修复后：findFreePlacement 检测 [0, 200] 被占，把 pomodoro 滑到 free 段 [200, 400]
+    // 找到 cand：起点 y=200（offset=200 - chat 起点 0 = 200）
+    const pomoCand = cands.find((c) => c.movingId === 'pomodoro')
+    if (pomoCand) {
+      // pomodoro 最终 y 必须 ≥ 200（不与 chat 占用段重叠）
+      expect(pomoCand.finalRect.y).toBeGreaterThanOrEqual(200)
+    }
+    // 也可能没 cand（free 段不够长 → findFreePlacement 返 null）— 但绝不能给重叠位置
+  })
+
+  it('P3 regression: free 段不够时 pomodoro 不进 candidate（不重叠）', () => {
+    // chat 占满整条 pet.right 边
+    constraintStore.set({
+      sourceId: 'chat',
+      targetId: 'pet',
+      sourceEdge: 'left',
+      targetEdge: 'right',
+      offset: 0,
+      enabled: true,
+      createdAt: 0,
+    })
+    const pet = r(0, 0, 320, 320)
+    const chat = reg('chat', r(320, 0, 320, 320)) // 占满 pet.right
+    const pomo = reg('pomodoro', r(325, 0, 320, 320)) // 想吸 pet.right
+    const cands = findReverseAttract('pet', pet, [chat, pomo])
+    const pomoCand = cands.find((c) => c.movingId === 'pomodoro')
+    // 整条 pet.right 已被占满 → 没有 free 段容下 pomodoro → 不该有 cand
+    expect(pomoCand).toBeUndefined()
+  })
 })

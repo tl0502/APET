@@ -969,7 +969,7 @@ function msgOf(e: unknown): string {
 
 /* Snap-preview state（拖 pet 接近 chat 时反馈）：
    覆盖式 box-shadow（含 2px primary 描边 + 24px primary glow + 浮起阴影）。
-   transparent:true + window-root padding:12 留足空间不被裁。 */
+   transparent:true 让 box-shadow 自然溢出 .app-surface 边界（无需 window-root padding）。 */
 .app-surface.snap-preview {
   box-shadow:
     0 0 0 2px

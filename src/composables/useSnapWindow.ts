@@ -111,6 +111,14 @@ export interface SnapWindowApi {
   /** Phase F (#31 follow-up C)：本窗作为 source 拖动 + 在 field 内 → 朝 anchor 偏移 (dx,dy) ≤ 3px。
    *  null = 不显示 lean（非拖动 / 不在 field 内）。 */
   selfLean: ComputedRef<{ dx: number; dy: number } | null>
+  /** P1 修复 (review 2)：caller 在外部改动 constraintStore（如 PomodoroApp 全屏 detach）后调，
+   *  把全量 constraints 推到 Rust SnapState，避免依赖跨 webview broadcast 延迟才让 Rust 端
+   *  收敛——本 webview emit 的 constraint-changed 会被 A4 senderId 自过滤跳过自己。 */
+  syncRustSnap: () => Promise<void>
+  /** P6 修复：caller 在外部改动本窗 visible（如 PomodoroApp 进入/退出全屏）后调，
+   *  统一通过 composable 内部 broadcastSelfRect 走，保证 payload schema（含 visualInset 等）
+   *  与本模块其他 emit 路径一致。 */
+  broadcastSelfRect: (rect: Rect, visible: boolean) => Promise<void>
 }
 
 interface RegistryUpdatePayload {
@@ -209,7 +217,8 @@ async function tweenToRect(
 
 export interface UseSnapWindowOptions {
   /** #30 follow-up F：OS rect 内"视觉可见层"的内缩量（logical px）。
-   *  用于 chat 这类有 CSS padding 留 box-shadow 空间的窗 — 不传则按全 0（pet/pomodoro/settings）。
+   *  用于有 CSS padding 让 box-shadow 溢出 .app-surface 的窗 — 不传则按全 0
+   *  （M2 实际窗口 chat/pet/pomodoro/settings/tasks 均无 inset；保留 API 供 M3 复用）。
    *  candidates / occupancy / solver 全程用 visual rect 做贴边几何，避免 padding 间隙。 */
   visualInset?: { top: number; right: number; bottom: number; left: number }
 }
@@ -984,13 +993,16 @@ export function useSnapWindow(
   const handleVisibilityChange = async (target: string, nextVisible: boolean): Promise<void> => {
     const reg = windowRegistry.get(target)
     if (!reg) {
-      // 之前没注册过的窗（例如 hello 阶段还没收到 rect），先 upsert 一个最小 entry
-      // 此 rect 仅做占位，下一次该窗 hello 回播会覆盖
+      // 之前没注册过的窗（例如 hello 阶段还没收到 rect），先 upsert 一个最小 entry。
+      // P4 修复 (review 2)：placeholder 永远 visible=false，直到第一次真正的 REGISTRY_BROADCAST
+      // 带 rect 抵达后 onRegistryUpdate 才把 visible 修正。理由：0×0 rect 进 candidates.ts 评估
+      // 时 rectEdgeGeometry.length=0 → computeEdgeOccupancy 返空 → 浪费一次 evaluation 周期；
+      // findCandidates 顶头的 `if (!target.visible) continue` 把它干净跳过。
       if (target === label) return // 自己未注册不正常，跳过
       windowRegistry.upsert({
         id: target,
         rect: { x: 0, y: 0, w: 0, h: 0 },
-        visible: nextVisible,
+        visible: false,
       })
       return
     }
@@ -1085,7 +1097,16 @@ export function useSnapWindow(
     if (armedTimer !== null) clearTimeout(armedTimer)
   })
 
-  return { isPreviewAnchor, previewEdgeFor, previewIntensityFor, isFieldAnchor, fieldIntensityFor, selfLean }
+  return {
+    isPreviewAnchor,
+    previewEdgeFor,
+    previewIntensityFor,
+    isFieldAnchor,
+    fieldIntensityFor,
+    selfLean,
+    syncRustSnap,
+    broadcastSelfRect,
+  }
 }
 
 // ───── helper（避免 useSnapWindow 直接 import geometry，防 circular dep 担心） ─────

@@ -275,8 +275,8 @@ export function findCandidates(
 //
 // 反向吸引：当 primary（pet）拖动且 pet 没有 dependents 时，从 secondary 视角找它们
 // 该不该吸到 primary 上。对每个 visible secondary，调用 findCandidates(secondaryId,
-// secondaryRect, [primaryReg])（registry 仅含 primary），把得到的 candidates 合并 + sort。
-// candidate.movingId === 该 secondary id，candidate.targetId === primary id。
+// secondaryRect, registry)，得到的 candidates 合并 + sort。candidate.movingId === 该
+// secondary id，candidate.targetId === primary id。
 //
 // 设计要点：
 // - 不传 velocity（primary drag 时 velocity 是 primary 的，反向语义复杂；MVP 不接）
@@ -284,6 +284,25 @@ export function findCandidates(
 // - primary-attract 在 commit 时只取最佳一个（findReverseAttract 返 sorted list，caller 取 [0]）
 // - 已 attached 到该 primary 的 secondary 不会进 candidate list（被 dragSession.commit 写入时
 //   replace 同 source 的旧 constraint，事实上等价 no-op 不影响）
+//
+// P3 修复 (review 2)：registry 必须包含**全部**已知窗（含 primary + 所有 secondary），
+// 而不是 mini [primaryReg]。原因：findCandidates 内部 computeEdgeOccupancy 会用
+// `constraintStore.list()` 全局 constraint 算占用，但用 registry 反查每条 constraint 的
+// source rect — registry 漏了其他 secondary（如已吸到 pet.right 的 chat）→ 那些 source
+// 在 registry 中找不到 → 占用区段被 filter 掉 → 评估时认为边段是空的 → pomodoro 可能
+// 被吸到与 chat 完全重叠的位置。
+//
+// 同时要保证 primary 用的是 **当前最新 rect**（用户正在拖中），不能用 registry 里
+// 可能 stale 的副本 → 用最新 primaryRect 替换 registry 中的 primary 项（或追加）。
+//
+// 其他 secondary 不应被当作 attract target（反向吸引语义只针对 primary）→ 把它们标记
+// 为 !visible 让 findCandidates 顶部的 `if (!target.visible) continue` 跳过 — 但
+// computeEdgeOccupancy 内部也有 !visible 过滤！需 candidates.ts 的 occupancy 不能也跟着
+// 把它们排除 → 这就是为什么 visible 过滤需要双层语义。
+//
+// 妥协方案：findCandidates 仍走 visible 过滤所以 occupancy 也会跳过 invisible。换成
+// 直接在 inner loop 里 `if (target.id !== primaryId) continue`，绕过 visible 标记 hack
+// — 比临时改 visible flag 更显式。
 
 export function findReverseAttract(
   primaryId: string,
@@ -291,14 +310,32 @@ export function findReverseAttract(
   registry: ReadonlyArray<WindowRegistration>,
   opts: Pick<FindCandidatesOptions, 'now' | 'detachHistoryInstance'> = {},
 ): SnapCandidate[] {
-  const primaryReg: WindowRegistration = { id: primaryId, rect: primaryRect, visible: true }
+  // 构造 full registry：把 primary 的最新 rect 替换 / 追加到 registry，其他窗保持原样。
+  // 这样 computeEdgeOccupancy 能 lookup 任一 secondary 的 source rect 算正确占用。
+  const hasPrimary = registry.some((w) => w.id === primaryId)
+  const primaryWithLatest: WindowRegistration = {
+    id: primaryId,
+    rect: primaryRect,
+    visible: true,
+    ...(registry.find((w) => w.id === primaryId)?.visualInset
+      ? { visualInset: registry.find((w) => w.id === primaryId)!.visualInset }
+      : {}),
+  }
+  const fullRegistry = hasPrimary
+    ? registry.map((w) => (w.id === primaryId ? primaryWithLatest : w))
+    : [...registry, primaryWithLatest]
+
   const out: SnapCandidate[] = []
   for (const sec of registry) {
     if (sec.id === primaryId) continue
     if (!sec.visible) continue
-    // 仅 primary 作为可吸附 target 的 mini registry
-    const cands = findCandidates(sec.id, sec.rect, [primaryReg], opts)
-    for (const c of cands) out.push(c)
+    // findCandidates 内部对每个 target 评估；这里只想吸 primary，所以用
+    // existingConstraintTargetId=primaryId 让 EXISTING_BIAS 生效，
+    // 然后从结果中过滤只保留 targetId === primaryId（其他 secondary→secondary 也可能命中但不要）
+    const cands = findCandidates(sec.id, sec.rect, fullRegistry, opts)
+    for (const c of cands) {
+      if (c.targetId === primaryId) out.push(c)
+    }
   }
   out.sort((a, b) => a.score - b.score)
   return out
