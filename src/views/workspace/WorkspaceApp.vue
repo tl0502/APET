@@ -20,6 +20,7 @@ import { ChatLineRound, Files, Setting } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
 import WorkspaceShell from './WorkspaceShell.vue'
 import ActivityBar from './ActivityBar.vue'
+import CommandPalette from './CommandPalette.vue'
 import PlaceholderPanel from './panels/PlaceholderPanel.vue'
 
 import { WORKSPACE_MANAGER_KEY } from '@/composables/useWorkspaceManager'
@@ -111,8 +112,8 @@ function registerDefaults() {
       id: 'workspace.togglePalette',
       title: '命令面板（Ctrl+P）',
       handler: () => {
-        // Phase D 实装：mgr.setContextKey('paletteVisible', !mgr.getContextKey('paletteVisible'))
-        // Phase C 阶段先注册占位，让 ActivityBar 的命令面板按钮不抛
+        const cur = mgr.getContextKey('paletteVisible') === true
+        mgr.setContextKey('paletteVisible', !cur)
       },
     })
   } catch (e) {
@@ -179,8 +180,20 @@ async function onClose() {
 }
 
 function onGlobalKeydown(e: KeyboardEvent) {
+  // Ctrl+P (Cmd+P) → 命令面板（仅 workspace 窗内生效；与浏览器"打印"冲突由 preventDefault 处理）
+  // 不挂 Ctrl+Shift+P：MVP 阶段单触发够用，避免与系统/IDE 撞
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
+    e.preventDefault()
+    try {
+      void mgr.executeCommand('workspace.togglePalette')
+    } catch (err) {
+      console.warn('[WorkspaceApp] toggle palette via Ctrl+P failed:', err)
+    }
+    return
+  }
+
   if (e.key !== 'Escape') return
-  // 同 ChatApp：弹窗 / 输入聚焦时让组件 cancel，不一律 hide
+  // Esc 弹窗 / input 聚焦时让组件 cancel，不一律 hide
   if (document.querySelector('.el-message-box, .el-dialog__wrapper, .el-overlay')) return
   const active = document.activeElement
   if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
@@ -235,6 +248,7 @@ onBeforeUnmount(() => {
         <ActivityBar v-if="ready" />
       </template>
     </WorkspaceShell>
+    <CommandPalette v-if="ready" />
   </AppShell>
 </template>
 
