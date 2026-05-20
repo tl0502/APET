@@ -1,6 +1,6 @@
 ---
 title: 桌面应用 UI 范式（非 Web）
-updated: 2026-05-19
+updated: 2026-05-20
 related:
   - ../architecture/system-architecture.md
   - ../decisions.md
@@ -24,6 +24,10 @@ related:
   - **悬浮型**（pet / pomodoro / chat）：`decorations: false` + 自绘 chrome，承担长期可见 / 可贴边 / 可拖动的桌面伙伴角色
   - **工具型**（settings / tasks / onboarding）：`decorations: true` + 系统标题栏，承担一次性配置 / 列表浏览
 - 跨窗口共享状态走 SQLite + IPC 事件，不走 URL query string
+
+### Updated 2026-05-20（ADR-021 引入 workspace shell）
+
+工具型窗（settings / tasks / 未来 wardrobe-studio / persona-workshop / debug-tools 等）合并进单一 workspace 主窗，作为内部 dockable panel；悬浮型窗（pet / chat 磁吸浮窗 / pomodoro 浮窗）保留独立 BrowserWindow，承担长期可见 / 可贴边 / 可拖动的桌面伙伴角色。**判定标准**：是否参与 ADR-020 磁吸拓扑 / 是否需要 AOT / 是否长期可见，三者任一为是 = 独立窗，否则 = workspace panel。**入口**：托盘左键双击 / 托盘右键菜单"打开工作区" / 全局 Ctrl+Alt+W；onboarding 完成后 pet 旁一次性 tooltip 引导用户发现。**Supersedes**：本节"新增功能时优先问是不是一个新窗口"隐含的"工具型窗都独立化"默认。
 
 ## 2. 表面分层（surface hierarchy）
 

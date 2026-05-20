@@ -1,6 +1,6 @@
 ---
 title: AIPET 开发踩坑笔记
-updated: 2026-05-11
+updated: 2026-05-20
 related:
   - STATUS.md
   - WORKFLOW.md
@@ -181,6 +181,55 @@ related:
 - 单测覆盖不到这个坑（cargo test 跑在独立 tokio runtime，不复现 nested block_on）。**只能靠前端真调 IPC 实测**
 
 **出处**：[#11](https://github.com/tl0502/APET/issues/11) `set_chat_shortcut` latent bug → [#21](https://github.com/tl0502/APET/issues/21) Step 3 触发 → fix `afae148`，2026-05-11
+
+---
+
+## 11. WebView2 不触发 DOM `visibilitychange`（窗口隐藏路径）
+
+**症状**：监听 `document.addEventListener('visibilitychange', ...)` 在窗口 `window.hide()` 时**不触发**。前端无法在窗口被隐藏（托盘 / ESC / boss-key / 关闭按钮）的瞬间清理状态。
+
+**根因**：Tauri 在 Windows 走 WebView2，OS 层 `ShowWindow(SW_HIDE)` 不会让 WebView2 把 DOM visibility 标记为 `hidden`（issues [tauri-apps/tauri#6864](https://github.com/tauri-apps/tauri/issues/6864) / [#9524](https://github.com/tauri-apps/tauri/issues/9524) / [#10592](https://github.com/tauri-apps/tauri/issues/10592)）。macOS / Linux 行为不同；只有 Windows 出现，且没有任何错误信号。
+
+**处理**：
+
+- 不要依赖 `document.visibilitychange` 做窗口隐藏 / 显示的时机判断
+- 在 Rust 端 `window_actions.rs` 的所有 `show_*` / `hide_*` / `toggle_*` 路径里**主动 emit** 自定义全局事件（如 `window:visibility-changed { label, visible }`），前端 `listen` 该事件做清理
+- CloseRequested 分支也要 emit（用户点 X 走 close-to-hide 时不走 hide IPC）
+
+**出处**：[#30](https://github.com/tl0502/APET/issues/30) follow-up G 关窗时未清磁吸 registry → 改 Rust 主动广播，2026-05-19
+
+---
+
+## 12. Windows WebView2 多窗 `setPosition` IPC 是抖动元凶（链式磁吸）
+
+**症状**：前端 N 个窗形成磁吸链（A→B→C），拖 A 时 B/C 跟随，N≥2 视觉明显抖动；rAF 节流 / batch IPC 都救不了。
+
+**根因**：Tauri 2 Windows webview2 上 `setPosition` IPC 单次 roundtrip ≥5ms（实测）。N 个 dep 每帧串行 N 次 IPC，60Hz 期望 16.7ms / 帧的预算被吃光：N=2 跌 33Hz，N=3 跌 22Hz；叠加 `startDragging` 触发 OS-level move 抢锁，dep 窗位置追不上 anchor，视觉表现为子窗"被甩在后面又突然蹦上来"。**前端任何 JS 层优化都治标不治本** —— 单次 IPC 5ms 是硬性下限。
+
+**处理**：
+
+- group-drag / 链式 solver 路径必须**移到 Rust 端**：订阅 `WindowEvent::Moved`，本地维护 constraint forest，批量 `set_position` 所有 dep。同进程 Win32 `SetWindowPos` 是 μs 级，60fps 完全顶得住
+- 同步策略：前端是 constraint 的权威源（drag commit / detach / 持久化 load 都在前端），constraint 变化时 IPC 全量推到 Rust state；Rust 只读不写，避免双向写入冲突
+- 防死循环：Rust 端 `set_position` 会触发 dep 自己的 `WindowEvent::Moved` → 又被本服务接住 → 死循环。用 `internal_until` guard（按 label 分桶 + 100ms TTL，覆盖 WebView2 set→OS→Moved 回灌的 IPC roundtrip）
+- 角色守卫：solver 只在"主动方"是 primary（拥有整族拖动语义的窗）时触发；secondary 窗即使有 dependents 也直接返。否则 secondary 之间 constraint 会让 secondary 获得整族拖动能力，违反 ADR-020 角色模型
+
+**出处**：[#30](https://github.com/tl0502/APET/issues/30) follow-up I `src-tauri/src/services/snap.rs`，2026-05-20
+
+---
+
+## 13. transparent + 自绘圆角窗的 `padding` 双刃剑
+
+**症状**：透明窗 `.window-root { padding: Npx }` 给 `box-shadow-float` 留显示空间，看起来无害。一段时间后用户反馈"窗看起来字小了 / sidebar 窄了 / 标题栏元素挤"——但你没改过那些子项的 CSS。
+
+**根因**：`.window-root` 占满 webview，套 `padding: 12px` 后 `.app-surface` 实际宽高 = webview − 24px。内部所有 flex 布局（sidebar 宽、content-header 三件套、字体相对感觉）按比例缩窄。视觉差异**仅 12px**，但占小窗（chat 380×480）实际比例 = 3.1% 宽 + 2.5% 高，叠加 box-shadow 视觉错觉，感受被放大到"明显变形"。开发期写 padding 时 anchor 不到这个二阶效应，commit 后过几天才被察觉。
+
+**处理**：
+
+- 透明窗 box-shadow 溢出问题应优先**信任 webview 透明区**（box-shadow 可超出 `.app-surface` 边界画到透明区，被裁掉的只是模糊半径外缘小部分，视觉损失远小于 padding 收缩内部布局的代价）
+- 若必须用 padding 留 shadow 空间，**同步评估内部 flex 布局压力**：sidebar 宽 / header 三件套 / 字体大小在 padding 后还能否舒展
+- magnetic 系统的 `visualInset` 模型用来补偿 padding 让两窗吸附后看起来贴边（不是物理 OS rect 贴边）—— 一旦 padding 删除，visualInset 必须**同步置零**，否则磁吸落位偏 12px
+
+**出处**：[#30](https://github.com/tl0502/APET/issues/30) follow-up F→I 期间 chat `.window-root` padding:12 副作用被察觉 → 删 padding + 删 `visualInset(12)`，2026-05-20
 
 ---
 

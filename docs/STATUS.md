@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-18
+updated: 2026-05-20
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -19,11 +19,11 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（提醒 + 番茄 + 磁吸已落地，待办/物理交互/人格工坊待办）
-- **当前 session 在做**：[#30](https://github.com/tl0502/APET/issues/30) 磁吸窗口系统 constraint-based partial mesh + Forest-walk solver（uncommitted；114 vitest 通过）→ [#31](https://github.com/tl0502/APET/issues/31) follow-up A（T1-T5：view_preset 联动 + preview indicator + commit tween + chat header 36×36 + pet drag hook + AOT 托盘开关）→ follow-up B（T6-T10：group-drag anchor 角色 + 矩形 outline 沿对接边 + TRIGGER_ZONE 24→60 + chat header grip 纹 + AOT 前端兜底）。共 132 vitest pass / typecheck / lint / cargo check 通过
-- **下一步**：dev 实测 8 项（plan §6.2 / zippy-baking-dusk.md §T11.5）→ 通过则 commit 拆 3 + close #30 #31 → 否则补 fix
+- **当前 milestone**：M2 W3 进行中（提醒 + 番茄 + 磁吸已落地 = 6/7；待办 + 物理交互待办）
+- **当前 session 在做**：[#30](https://github.com/tl0502/APET/issues/30) 磁吸窗口 follow-up E-I 全套落地（pomodoro 入磁吸 + edge occupancy + visualInset + 关窗清理 + 焦点 AOT + Rust solver 抗抖）+ chat .window-root padding 副作用修复。262 vitest pass / typecheck / lint / cargo check 全绿
+- **下一步**：#30 关闭 → [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
 - **阻塞**：无
-- **展示窗口**：~10 天后产品展示。M2 三件套 #22 + #28 已就位（+ 番茄独立窗 + 磁吸 follow-up 加分），10 天 demo 链路完整：「设置提醒 → 启动番茄 → FOCUS 期硬提醒打断 / 软提醒缓冲 → REST 时合并展示」+ chat 吸 pet 联动拖动
+- **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套已就位，demo 链路完整：「设置提醒 → 启动番茄 → FOCUS 期硬/软提醒 → REST 合并展示」+ 多窗磁吸（pet + chat + pomodoro 自由贴边、链式拖动无抖动）
 
 ---
 
@@ -43,9 +43,10 @@ related:
 - ✅ [#22](https://github.com/tl0502/APET/issues/22) C: ReminderService MVP（6 IPC + Scheduler 5s polling + OS 通知 + 桌宠气泡 + Tasks 独立窗）
 - ✅ [#28](https://github.com/tl0502/APET/issues/28) D: PomodoroService MVP（5 IPC + drift 校准 + Scheduler 1s + FOCUS 期协作: hard 打断/soft 缓冲 + LivingPet wander 跳过）
   - ↳ ✅ [#31](https://github.com/tl0502/APET/issues/31) follow-up `fb78924`：番茄独立窗（Pomotroid 型 360×480 frameless / 全屏 focus / 三入口 / 位置记忆 / phase-driven AOT / OS 首次关闭通知）+ 顺手修 4 bug（PomodoroPanel 倒计时 / listener race / 全屏 hide 保留 / hide_hint toast 不可见）
-- 🟡 [#30](https://github.com/tl0502/APET/issues/30) B.3.c: 磁吸窗口系统 constraint-based partial mesh + Forest-walk solver（uncommitted；114 vitest pass；待 dev 实测 → commit + close）
-  - ↳ 🟡 [#31](https://github.com/tl0502/APET/issues/31) follow-up A T1-T5（uncommitted；plan `pure-beaming-salamander.md`）：view_preset onResized + solver / preview indicator dragSession reactive ref / commit tween 150ms cubic / chat header 36×36 + hover scale / pet drag hook 扩 selector / AOT 托盘开关 + window_state.rs backend 持久化
-  - ↳ 🟡 [#31](https://github.com/tl0502/APET/issues/31) follow-up B T6-T10（uncommitted；plan `zippy-baking-dusk.md`）：anchor 角色 group-drag 模式（修拖 pet 脱钩 bug；Winamp/VS docking）/ 矩形 outline 沿对接边 + 渐进 intensity / TRIGGER_ZONE 24→60 / chat header grip 纹 / AOT 前端 listen 兜底
+- 🟡 [#30](https://github.com/tl0502/APET/issues/30) B.3.c: 磁吸窗口系统 constraint-based partial mesh + Forest-walk solver — **代码完成，待 close**
+  - ↳ ✅ follow-up A-D `6948daf` `00586b6`：角色模型 + 反向吸引 + ATTACH 10 + escape hatch + cascade drag 修复
+  - ↳ ✅ audit 17 项 `605bd11`：race / cross-webview 同步 / 边界 / 死代码
+  - ↳ ✅ follow-up E-I（本 session）：pomodoro 入磁吸 + edge occupancy + visualInset + 关窗 registry 清理 + 焦点 AOT + Rust solver 抗链式抖动 + chat padding 副作用修复（262 vitest pass）
 - ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 

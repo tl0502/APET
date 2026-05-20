@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 决策记录
-updated: 2026-05-18
+updated: 2026-05-20
 related:
   - README.md
   - WORKFLOW.md
@@ -145,10 +145,69 @@ related:
 - **代价**：放弃 chat ↔ tasks 互吸（用户期望管理，M3 视实际使用频率再考虑升级 partial mesh）；tasks 默认窗体 800×600 → 420×600 + 透明无装饰，需回归测试 M2 #22 任务面板的现有交互；通用 composable + SnapManager 单例比硬编码多 ~0.5d；物理阈值是经验取值，M2 W4 自测可能微调（直接改本 ADR 不走 Supersedes 流程，标 *Updated YYYY-MM-DD*）。
 - **Updated 2026-05-18（架构改写为 constraint-based partial mesh）**：用户提出"别的窗之间也能磁吸"+"pet 与 spoke 拓扑平等" → 原 hub-spoke 推翻。新架构 = **Constraint-based Partial Mesh + Forest-Walk Solver**。核心数据 `SnapConstraint = { sourceId, targetId, sourceEdge, targetEdge, offset, enabled, createdAt }`；5 条不变量：**I1** 每窗至多 1 constraint、**I2** commit 前实时环检测（沿 attachedTo 链向上追到 self 即 reject）、**I3** drag 期间 constraint 临时挂起仅显示 ghost、**I4** 任一窗 onMoved → 走 `solve(roots)` 而非递归 setPosition、**I5** pet 与其他窗在拓扑上平等（pet 仅靠位置稳定 + memoryBias 实际成为常被吸的 anchor）。**Solver = BFS over forest**（I1+I2 保证图必为森林，无需 Kahn topo sort）。Drag session 状态机：`Idle → Dragging → PreviewSnap → Commit / Cancel(ESC)`；ESC 回滚需快照整个森林 Rect 而非仅 source 窗 constraint。**几何参数全面更新**：trigger zone 24px、corner dead zone 24×24（防角落抖动）、projection overlap 阈值 `max(72, edge × 0.25)`、candidate score = `distance × 0.6 + overlapPenalty × 0.2 + (1 − memoryBias) × 0.2`（memoryBias ∈ [-0.5, 0.5]，30s 内 detach 反向惩罚 -0.5，已存在 attachment +0.5）。**Tauri 集成**：`isInternalMove` 按窗口分桶 + rAF 释放 guard（防 setPosition → onMoved → setPosition 死循环）；wander 走专属 `pet:wander:tween_frame` 事件不走 onMoved（living_pet.rs +4 行 emit）。**持久化**：单 KV key `snap:constraints` 存 JSON 数组；启动 load + solve；anchor 缺失自动 downgrade free。**BossKey**：仅改 `visible=false` 不清 constraint，恢复时 solve(roots) 重定位。**文件结构** `src/lib/snap/`：types / registry / constraintStore / solver / candidates / dragSession / internalMove / persistence + `src/composables/useSnapWindow.ts`。**估时** S1-S9 共 ~3.6d（原 hub-spoke 2.5d +1.1d，多在 solver + 几何工具单测 + ESC 森林快照 + isInternalMove guard）。**Supersedes（本 ADR 内部）**：原"选了什么"中"Hub-spoke 拓扑 / `useSnapWindow(target='pet')` / 右优先动态 fallback / 断开 20px+吸引 30px / 跟随 16ms throttle / 链式跟随用 emit-listen"被替代；**保留**："强吸附"视觉语义、圆角阴影、chat 380×480 / tasks 420×600 默认尺寸、tauri.conf decorations/transparent/alwaysOnTop/skipTaskbar 改造、失焦收缩合并 B.3.b、跨屏允许、150ms ease-out 吸附动画、BossKey 全 hide。
 
+- **Updated 2026-05-20（follow-up A-I 全部落地：角色模型 + 反向吸引 + 占用 + 视觉边距 + 关窗清理 + 焦点 AOT + Rust solver）**：B.3.c 实施期完整迭代。**角色模型**（follow-up D）：pet 硬编码 primary、其余 secondary；primary 拖动且有 dependents 走 group-drag，primary 无 dependents 走 primary-attract（反向吸引附近 secondary 写 `secondary→primary`），secondary 拖动走 source + 首帧 detachAll；新增不变量 **I3'：constraint.sourceId 永远不是 primary**（commit 路径 + cleanupDirtyPrimaryOutbound 保证）。**参数收紧**：ATTACH 10px / DETACH 18px / FIELD_RADIUS 20（与 PowerToys FancyZones / Photoshop grid 同档），Shift 或 Ctrl 拖动 escape hatch 跳过本次吸附。**occupancy + offset snap**（follow-up F）：edge 上多窗共占检测 + 自动滑入 free segment，避免多窗叠在同位置。**visualInset 模型**（follow-up F）：window 可声明视觉边距，candidates / solver 全程用 visual rect 做贴边几何（消除 padding 带来的视觉缝隙；初版给 chat 加 12px 后实测 padding 与子项挤压副作用大，回退 padding=0 / inset=0）。**关窗清理**（follow-up G）：WebView2 不触发 DOM visibilitychange（Tauri #6864/#9524/#10592），改 Rust 端 window_actions 主动 emit `window:visibility-changed`，前端 listen 后清 registry + 退出 dragSession。**焦点 AOT**（follow-up H）：`useFocusAOT` composable，工具窗（chat / pomodoro）平时 AOT=false，被 focus 时升 topmost，失焦降回；pet 始终 topmost；解决工具窗互相遮掩。**pomodoro 入磁吸**（follow-up E）：作 secondary 参与；全屏开/关自动 detach + 复位。**Rust solver**（follow-up I）：前端 group-drag 路径 Windows webview2 setPosition IPC ≥5ms，N=2 链跌 33Hz、N=3 跌 22Hz、严重视觉抖动；改 Rust 端订阅 `WindowEvent::Moved` 本地维护 constraint forest + visualInset，批量 SetWindowPos（同进程 μs 级），完全替代前端 group-drag。同步策略：前端是 constraint 权威源，commit/detach/load 后调 `snap_sync_constraints` 全量推到 Rust state；Rust 只读不写避免双向冲突。防死循环：`internal_until` guard（label 分桶 + 100ms TTL）跳过自递归。**角色守卫**：Rust `on_window_moved` 入口 `is_primary` 检查（与前端 PRIMARY_LABELS 镜像，硬编码 `pet`）— 只有 primary 拖动触发 BFS solver，避免 secondary 之间 constraint 让 secondary 获得整族拖动能力。**新文件**：`src-tauri/src/services/snap.rs` / `src/lib/snap/edgeSegments.ts` / `src/lib/snap/roles.ts` / `src/composables/useFocusAOT.ts`。**测试**：262 vitest pass（+33：edgeSegments 24 + visualInset 9 + candidates 占用 6）+ cargo check 全绿。
+
+---
+
+### ADR-021 Single-window workspace + dockable panel 架构
+
+- **为什么**：M2 W3 复盘发现 settings / tasks / 未来 hub-chat / wardrobe-studio / persona-workshop / debug-tools 等"工具型窗"独立 BrowserWindow 化产生三处问题：① [SettingsApp.vue](../src/views/settings/SettingsApp.vue) 与 [TasksApp.vue](../src/views/tasks/TasksApp.vue) 在 AppShell + ElTabs 左排自绘 ✕ 等 ~70 行模板+CSS 已逐字符复制（PomodoroPanel 之后是第三次复制），未来 wardrobe / personas / debug-tools 还要复制 3-5 次；② 每加一模块多一个独立 Tauri window 带来启动开销 / 任务栏污染 / 主题分散；③ 用户感知散乱浮窗群 ≠ 桌面专业伙伴的产品定位。需在 ADR-015 chat 三形态 + ADR-020 partial mesh 不变前提下给工具型窗一个统一容器。
+
+- **选了什么**：**VSCode 简版 workspace shell**（左 Activity Bar + 中 Main dock 区，Bottom Panel M3 接入；不引 Obsidian 双 sidebar / Figma 三栏固定）+ **[dockview-vue 5.x](https://github.com/mathuo/dockview)**（3.1k★ 活跃维护、零依赖、原生 dock/split/floating/serialize；~150KB gzip 与 EP 加起来 ~460KB 仍在 ADR-017 预算内）+ **WorkspaceManager / DockviewAdapter 双层分层**（见下"分层契约"）+ **PanelRegistry 静态注册 13 字段 schema**（见下）+ **Lazy keep-alive** mount（首次访问 cache，per-panel 可 override）+ **Pinia + Tauri 事件复用**（不引 workspace eventBus）+ **MVP 同期 Ctrl+Shift+P 命令面板**（panel 数 21）。**唤起**：托盘左键双击（推翻 [tray.rs](../src-tauri/src/services/tray.rs#L5) 原"双击无操作"决策，误触风险评估为零）+ 托盘右键"打开工作区" + 全局 Ctrl+Alt+W。**主窗**：1100×720 default / 800×520 min，decorations:false + 自绘 36px titlebar，hidden 启动 + KV `workspace:{last_visible,rect,layout,last_active_panel}` 持久化，关闭走 hide。**首启焦点** chat.hub。**保留独立窗**：pet 角色窗 / chat 磁吸浮窗（ADR-020 节点）/ pomodoro 浮窗（[#31](https://github.com/tl0502/APET/issues/31) 飘窗）/ onboarding（ADR-019 续接不变）。**双入口共享 service**：pomodoro 浮窗 + `pomodoro.console` panel 共享 PomodoroService（console 嵌迷你倒计时，Start 不弹浮窗）；chat 磁吸窗 + `chat.hub` panel 共享 ConversationStore（P2 抽 `ChatBody.vue` 业务壳层 + 引入 **ChatSession**（业务对象 = 一会话）+ **ConversationTab**（panel 实例 = 当前选中哪个 session），panel 内用 `localActiveSessionId` 避免 M4 多实例时重构数据层）。**chat.hub MVP `singleton:true`**（M4 视呼声开放多实例，数据层已就位无需重构）；**personas.workshop multi-instance**（`instanceKey=personaId`，`beforeClose` 拦截未保存）。**Onboarding 完成引导**：pet 旁一次性 tooltip + KV `onboarding:workspace_intro_seen`。**Activity Bar ≤ 7 项硬约束**（顶 Chat/Tasks/Personas/Wardrobe + 底 Settings/Help = 6，M5+ 加 GameRoom = 7 上限；后续 Memory/Plugins/Debug 等入口禁止再加 Activity Bar 项，全部走命令面板，阻止 [VSCode 自己踩过的"settings 成垃圾桶"反模式](https://code.visualstudio.com/api/ux-guidelines/activity-bar)）。**ADR-021 不影响**：ADR-015 / ADR-017 / ADR-019 / ADR-020；BossKey 加 hide workspace 一行调用。
+
+- **分层契约（强制）**：
+  - **WorkspaceManager**（`src/lib/workspace/manager.ts`，纯 TS service，无 Vue / dockview 依赖）：管 panel registration / state / lifecycle / commands / when DSL 求值 / layout serialize / contextKey 反应式订阅。API：`registerPanel(d) / openPanel(id, options?) / revealPanel(id) / closePanel(id, force?) / serializeLayout() / loadLayout(json) / setContextKey(k,v) / getContextKey(k)`。100% 单测覆盖。
+  - **DockviewAdapter**（`src/lib/workspace/dockview-adapter.ts`，renderer 桥接层）：监听 WorkspaceManager state 变更并调 dockview API；**是唯一被允许 `import` 任何 dockview API 的模块**。
+  - **业务代码强制约束**（panel 组件 / pinia store / IPC handler / composable）：**禁止** `import` 任何 dockview API；所有 panel 操作走 WorkspaceManager 实例（`provide/inject` 或 `useWorkspaceManager()` composable 注入）。代码 review 须把关。
+  - 设计原型：[VSCode `ILayoutService` / `IViewsService` / `IEditorService`](https://code.visualstudio.com/api/references/contribution-points)；保证未来若 dockview 出问题可换 GoldenLayoutAdapter / 自封 adapter 而不动业务。
+
+- **PanelDescriptor schema（13 字段）**：
+
+  ```ts
+  interface PanelDescriptor {
+    // 核心
+    id: string                                      // 'settings.theme' | ...
+    title: string | ((instance?) => string)         // 多实例下函数化
+    component: () => Promise<Component>             // 懒加载 .vue
+    category: 'chat' | 'task' | 'creation' | 'config' | 'debug' | 'play'
+
+    // 行为
+    singleton?: boolean                             // 默认 true
+    instanceKey?: (props) => string                 // 多实例必需
+    closable?: boolean                              // 默认 true
+    beforeClose?: (instance) => Promise<boolean>    // 未保存拦截
+    mountStrategy?: 'lazy' | 'always' | 'on-demand' // 默认 lazy + keep-alive
+
+    // 入口
+    defaultLocation?: 'main' | 'main.right' | 'bottom'
+    icon?: Component
+    when?: string                                   // VSCode-style when clause DSL
+
+    // 命令面板（MVP 同期）
+    commands?: CommandDescriptor[]                  // 该 panel 暴露给 Ctrl+Shift+P
+  }
+  ```
+
+  `when` 例：`"persona.active && consent.granted"` / `"!debug.banned"` / `"persona.active && (debug.enabled || dev.mode)"`。MVP 实现 ~30 行 mini-parser 支持 `&&` `||` `!` 三操作符 + 简单 key 求值（[VSCode when clause](https://code.visualstudio.com/api/references/when-clause-contexts) 同款 DSL）；M3+ 视需求扩展 `==` `!=` `in` 等不破坏 schema。**数据订阅生命周期由 service 自主管理**（如 AgentService 持续 buffer 所有 tool calls；panel mount 时从 buffer 读 + listen update，unmount 时仅取消 listen 不影响 service 运行）—— 不在 descriptor 层放 `alwaysSubscribe` 字段（违反"service 单一真相源"原则）。
+
+  21 panel 跨 M1-M5 注册：chat.hub (M4) / tasks.{reminder,pomodoro_console,todo} (M2-M3) / personas.{list,workshop,sandbox} (M2) / wardrobe.{studio,gallery,anniversary} (M4) / memory.browser (M3) / debug.{agent_tools,llm_console} (M3) / settings.{theme,provider,persona,nickname,voice,shortcuts} (M1-M3) / help.{about,changelog} (M1)。
+
+- **迁移阶段**：
+  - **P0 spike + 决策**（1-1.5d）：dockview-vue isolated POC 验 9 项 — ① [SFC 集成实操](https://github.com/mathuo/dockview/issues/897)（issue #897 仍 open，文档对 Vue SFC 不友好，直接读 typedoc + 源码不靠教程）/ ② EP 主题集成 / ③ EP popper z-index 与 floating panel 冲突（[Ant Design zIndexContext RFC](https://github.com/ant-design/ant-design/discussions/45154) 同款通病）/ ④ floating panel 内中文 IME 候选框是否被裁剪 / ⑤ ResizeObserver 与 Tauri webview 兼容 / ⑥ serialize 体积实测（vite build --report 给准确数据）/ ⑦ keep-alive mount 内存表现 / ⑧ popout window 在 Tauri 跨平台行为（即使 MVP 不用也须知边界）/ ⑨ shadow DOM 在 Tauri webview 支持
+  - **P1 workspace shell**（3-4d）：tauri.conf.json 加 label='workspace'；WorkspaceManager 实现 + 100% 单测（panel 注册去重 / openPanel 幂等 / revealPanel 已开未开两路径 / when DSL 求值 / layout serialize 往返 / contextKey 变化触发 panel 显隐）+ DockviewAdapter + when mini-parser；WorkspaceShell.vue + ActivityBar.vue + PanelRegistry 数据；3 个空 panel 占位；3 路唤起；命令面板基础设施 + 命令注册器
+  - **P2 迁移现有 panel + Chat 抽取**（3-4d）：settings 5 + tasks 3 panel 全迁；chat 拆 `ChatBody.vue` 业务壳层 + `ChatSession` 业务对象 + `ConversationTab` panel 局部状态；删 settings.html / tasks.html 及对应 Tauri 窗；hideSettings/hideTasks IPC 替换为 `workspaceManager.openPanel(id)`；托盘菜单精简
+  - **P3 layout 持久化 + 抛光**（1-1.5d）：workspace:layout KV + 防御性 load（已删 panel id 自动 fallback）+ 重置布局菜单 + [desktop-ui-principles §7 反例自检](design/desktop-ui-principles.md)
+  - **P4 hub chat 入驻**（M4 B.3.e 自然完成，原计划独立 hub 窗 → workspace 一个 panel）
+  - **总计 8-11.5d**（不含 hub chat M4）；插入时机为 [#30](https://github.com/tl0502/APET/issues/30) / [#31](https://github.com/tl0502/APET/issues/31) follow-up commit close 之后
+
+- **代价**：① dockview-vue ~150KB gzip（合 EP ~460KB 仍在 ADR-017 < 12% 体积预算内；P0 spike ⑥ 出准确数据；周下载 920 = "not popular" 社区小，踩坑要靠源码）；② 主题需写 dockview CSS variable → aipet token 桥接 ~50 行；③ [tray.rs](../src-tauri/src/services/tray.rs#L5) "左键单击/双击托盘图标 → 无操作"决策被推翻（误触风险评估为零，commit 注释加说明）；④ chat.hub MVP `singleton:true` 限制（M4 视呼声开放；数据层已就位无需重构）；⑤ [#29 todo](https://github.com/tl0502/APET/issues/29) 等 P0 spike + ADR 出后才开工（拖延 1-2d，省一次后续迁移）；⑥ ChatApp.vue 460+ 行抽 `ChatBody.vue` + `ChatSession` + `ConversationTab` +1.1-1.5d（回报：M4 多实例零重构 + 两形态改一处即可，符合 ADR-015 数据层共享设计）；⑦ MVP 不支持 panel undock 飘出（M4+ 视需求加；天然规避 dockview popout window 在 Tauri 跨平台不一致问题）；⑧ workspace 体验失败可 rollback ≤ 0.5d（panel 组件本身零改动可回独立窗，WorkspaceManager 单测和 Adapter 也可丢弃）；⑨ Tauri 多窗 → 单窗使 [capabilities](https://v2.tauri.app/security/capabilities/) 集中，frontend XSS blast radius 由"该窗权限"扩大到"workspace 全部权限"；桌宠场景真实威胁低（无远程内容 / 无第三方插件 / Markdown 输出已 sanitize），但 P1+ 接插件系统时需回头评估"插件沙盒窗"或启用 [Isolation Pattern](https://v2.tauri.app/concept/inter-process-communication/isolation/)；⑩ WorkspaceManager 100% 单测是 P1 出口必需（放弃单测就放弃 R1 分层全部价值），+0.5d 已计入 P1 工时。
+
+- **Supersedes**：[desktop-ui-principles.md §1](design/desktop-ui-principles.md) "多窗 ≠ 单页路由"隐含的"工具型窗都独立化"默认（改写见该文档 *Updated 2026-05-20*）；[tray.rs:5](../src-tauri/src/services/tray.rs#L5) "左键单击/双击托盘图标 → 无操作"决策（双击改为 workspace toggle）；原 SettingsApp.vue / TasksApp.vue 中 ~70 行 ElTabs 左排自绘 ✕ 复制粘贴模板（P2 后两文件删除）。
+
 ---
 
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-021**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-022**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。
