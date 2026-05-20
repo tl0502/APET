@@ -29,6 +29,7 @@ import MessageList from '@/components/chat/MessageList.vue'
 import SnapGhost from '@/components/SnapGhost.vue'
 import { useToast } from '@/composables/useToast'
 import { useSnapWindow } from '@/composables/useSnapWindow'
+import { useFocusAOT } from '@/composables/useFocusAOT'
 import { useAvatarsStore } from '@/stores/avatars'
 import { useNicknameStore } from '@/stores/nickname'
 import {
@@ -82,6 +83,13 @@ const chatSnapPreviewStyle = computed(() => ({
   '--snap-preview-intensity': String(chatPreviewIntensity.value),
   '--snap-field-intensity': String(chatFieldIntensity.value),
 }))
+
+// #30 follow-up H：focus-driven AOT。
+// chat 平时 AOT=false（在 pet 之下），被 focus 时升 topmost，失焦时降回，避免与其他
+// 工具窗（pomodoro）互相遮掩。pet 永远 topmost 不受影响 — 即使 chat AOT=true，pet 仍在
+// 它之上（Windows 同 topmost 层内由 OS focus 决定 z-order，pet 是桌宠主窗一直 focus-able）。
+// 不传 shouldKeepTopmost：chat 无"专注模式"语义，纯走 focus 状态。
+useFocusAOT()
 
 // Phase F (#31 follow-up C)：self-lean transform 应用到最外层 .window-root
 // 不影响内层 .app-surface 的 border-radius / box-shadow。
@@ -287,21 +295,10 @@ onMounted(async () => {
     console.warn('[ChatApp] transparency redraw workaround failed:', e)
   }
 
-  // T10 (#31 follow-up B)：AOT 前端 listen 后端 emit 同步切换。
-  // R1 修复 (2026-05-19)：启动期由 Rust 端 apply_initial_always_on_top 单一负责
-  // （webview 即使 visible:false 也已注册，set_always_on_top 直接生效），前端不再读 KV。
-  try {
-    const unlistenAot = await listen<boolean>('window:always-on-top:changed', async (ev) => {
-      try {
-        await getCurrentWindow().setAlwaysOnTop(ev.payload)
-      } catch (e) {
-        console.warn('[ChatApp] AOT changed listen apply failed:', e)
-      }
-    })
-    unlistenFns.push(unlistenAot)
-  } catch (e) {
-    console.warn('[ChatApp] listen AOT changed failed:', e)
-  }
+  // #30 follow-up H：chat 不再 listen window:always-on-top:changed（pet 全局开关）。
+  // 原 R1 修复让 chat 跟随 pet AOT 是为了"用户关 pet AOT 时 chat 也不抢前台" —
+  // 现在 useFocusAOT 接管：chat 平时 AOT=false 不抢前台，只在被 focus 时升 topmost，
+  // 完全满足这个需求，且解决了"chat 没独立 AOT 控制"的副作用。
 
   // store init：nickname / avatar store 是 MessageBubble 跨窗口共享依赖；chat 窗 mount 时
   // 主动 load + ensureListener，避免 MessageBubble 渲染时拿不到数据。
@@ -942,13 +939,13 @@ function msgOf(e: unknown): string {
 
 <style scoped>
 /* === window-root（全透明缓冲层）===
-   100% × 100% 占满 webview。padding 给 .app-surface 的 box-shadow-float 留显示空间，
-   避免阴影被 webview 边界裁。Phase F transform 注入到本元素（最外层不影响内部 layout）。 */
+   100% × 100% 占满 webview。Phase F transform 注入到本元素（最外层不影响内部 layout）。
+   注：早先有 padding:12px 给 box-shadow-float 留显示空间，但实际效果是把 .app-surface
+   挤小一圈，sidebar / content-header 子项按比例缩窄（identity 拥挤、字体相对感觉变细）。
+   transparent webview 已可让 box-shadow 溢出 .app-surface 边界，padding 收益小于副作用。 */
 .window-root {
   width: 100%;
   height: 100%;
-  padding: 12px;
-  box-sizing: border-box;
   background: transparent;
   transition: transform 160ms var(--aipet-ease-standard);
 }

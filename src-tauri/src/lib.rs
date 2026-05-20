@@ -11,7 +11,7 @@ use services::window_actions::{
     SETTINGS_WINDOW_LABEL, TASKS_WINDOW_LABEL,
 };
 use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
@@ -232,6 +232,9 @@ pub fn run() {
                 eprintln!("[setup] apply_initial_pomodoro_position failed: {e}");
             }
             app.manage(PomodoroSaveDebouncer::default());
+            // #30 follow-up I：磁吸 solver state。前端 commit / detach 后 invoke snap_sync_constraints
+            // 同步全量 constraint；Moved 事件触发 Rust 端 BFS solver + 批量 set_position 替代前端 IPC。
+            app.manage(crate::services::snap::SnapState::default());
             // #31 follow-up：alwaysOnTop 全局同步（pet + chat 两窗）
             // 启动期读 KV → 应用到两窗（覆盖 tauri.conf 默认值 pet:true / chat:false）。
             // 默认 KV 不存在时取 DEFAULT_ALWAYS_ON_TOP = true（pet 主体在主视角应用之上不被遮挡）。
@@ -308,6 +311,15 @@ pub fn run() {
                     {
                         api.prevent_close();
                         let _ = window.hide();
+                        // #30 follow-up G：WebView2 不会在 window.hide() 时触发 DOM
+                        // visibilitychange（已知 Tauri/WebView2 bug，参 issues #6864 #9524 #10592）。
+                        // 改由 Rust 主动 emit 事件，前端各 useSnapWindow 监听同步 windowRegistry
+                        // visible → 别窗 candidates / solver / occupancy 不再把隐形窗当合法 anchor。
+                        // 事件名与 services/window_actions.rs::VISIBILITY_CHANGED_EVENT 同步。
+                        let _ = window.app_handle().emit(
+                            "window:visibility-changed",
+                            serde_json::json!({ "label": label, "visible": false }),
+                        );
                     } else if label == POMODORO_WINDOW_LABEL {
                         // #28 follow-up 修订 #2：与 pet/settings 同款"关 = hide"+ 首次关闭
                         // OS 系统通知「番茄窗口已隐藏，计时继续在后台运行」。
@@ -321,6 +333,12 @@ pub fn run() {
                         // 已标记"导致用户永远看不到提示。失败均 best-effort eprintln 不阻塞 hide。
                         api.prevent_close();
                         let _ = window.hide();
+                        // #30 follow-up G：与 chat/settings/tasks 同源 — 通知前端
+                        // useSnapWindow 同步 visible=false。
+                        let _ = window.app_handle().emit(
+                            "window:visibility-changed",
+                            serde_json::json!({ "label": label, "visible": false }),
+                        );
                         let app_handle = window.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
                             const HINT_KV: &str = "pomodoro:hide_hint_shown";
@@ -379,6 +397,10 @@ pub fn run() {
                             debouncer.schedule(pom);
                         }
                     }
+                    // #30 follow-up I：所有窗 Moved 都触发 snap solver（fast-path 内部判定）。
+                    // has_dependents 无 dep 时立刻 return，无开销；有 dep 才进 BFS + set_position。
+                    // 替代前端 group-drag 路径每帧 N 次 setPosition IPC，消除链式拖动抖动。
+                    crate::services::snap::on_window_moved(app, label);
                 }
                 _ => {}
             }
@@ -408,6 +430,9 @@ pub fn run() {
             // B3 修复：persist+broadcast 原子 IPC（替代前端 persistConstraints+emit 的两步走，
             // 避免 emit 比 KV 写抵达其他 webview 更早导致的状态分歧）
             commands::config::snap_persist_and_broadcast,
+            // #30 follow-up I：Rust 端磁吸 solver 同步入口（前端 commit / detach / persistence load
+            // 后 invoke 一次全量推 constraints + insets，Moved 事件由 Rust 端独立驱动 BFS solver）
+            services::snap::snap_sync_constraints,
             // #9 window 控制（settings show/hide）+ #10 pet 位置 get/save + #14 chat show/hide/toggle
             commands::window::settings_show,
             commands::window::settings_hide,

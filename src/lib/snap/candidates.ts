@@ -18,8 +18,10 @@
 //   同向运动 → 0（candidate 减分更优先）；垂直 / 反向 → 1（无奖励，不惩罚）。
 
 import { constraintStore } from './constraintStore'
+import { computeEdgeOccupancy, findFreePlacement, projectSourceOntoEdge } from './edgeSegments'
 import {
   applyConstraint,
+  applyVisualInset,
   ATTACH_ZONE,
   DETACH_ZONE,
   DETACH_BIAS,
@@ -30,6 +32,7 @@ import {
   overlapThreshold,
   projectionOverlap,
   rectEdgeGeometry,
+  reverseVisualInset,
   TIME_LOCKOUT_MS,
   TRIGGER_ZONE,
   W_DISTANCE,
@@ -158,12 +161,17 @@ export function findCandidates(
   const timeLocked =
     dockedAt !== undefined && now - dockedAt < TIME_LOCKOUT_MS
 
+  // #30 follow-up F：取 source inset（registry 已注册自己时；否则 undefined → no-op）
+  const sourceInset = registry.find((w) => w.id === sourceId)?.visualInset
+  const sourceVisualRect = applyVisualInset(sourceRect, sourceInset)
+
   const out: SnapCandidate[] = []
 
   for (const target of registry) {
     if (target.id === sourceId) continue
     if (!target.visible) continue
-    if (inCornerDead(sourceRect, target.rect)) continue
+    const targetVisualRect = applyVisualInset(target.rect, target.visualInset)
+    if (inCornerDead(sourceVisualRect, targetVisualRect)) continue
 
     // #31 follow-up C：per-target distance zone（hysteresis 核心）
     // - target 是当前 docked 目标 + 在 200ms time lockout 内 → Infinity（永不放手）
@@ -177,25 +185,51 @@ export function findCandidates(
     }
 
     for (const [sEdge, tEdge] of EDGE_PAIRS) {
-      const distance = edgeDistance(sourceRect, target.rect, sEdge, tEdge)
+      const distance = edgeDistance(sourceVisualRect, targetVisualRect, sEdge, tEdge)
       if (distance > zone) continue
 
-      const sGeo = rectEdgeGeometry(sourceRect, sEdge)
-      const overlap = projectionOverlap(sourceRect, target.rect, sEdge, tEdge)
+      const sGeo = rectEdgeGeometry(sourceVisualRect, sEdge)
+      const overlap = projectionOverlap(sourceVisualRect, targetVisualRect, sEdge, tEdge)
       const threshold = overlapThreshold(sGeo.length)
       if (overlap < threshold) continue
 
       // offset 反推：candidates 评分阶段就把"切向偏移"算好，commit 时直接用
       // 例：sourceEdge='right' / targetEdge='left' → 两条都垂直边，offset 是 y 方向
       //     offset = source.y - anchor.y = sGeo.start - tGeo.start
-      const tGeo = rectEdgeGeometry(target.rect, tEdge)
-      const offset = sGeo.start - tGeo.start
+      //
+      // 注：offset 在 visual 坐标系算（source 与 anchor 同坐标系，纯相对量）。
+      const tGeo = rectEdgeGeometry(targetVisualRect, tEdge)
+      let offset = sGeo.start - tGeo.start
 
-      const finalRect = applyConstraint(sourceRect, target.rect, {
+      // #30 follow-up F：边段占用检查 + 错位磁吸自动滑入。
+      // 占用计算也用 visual rect（与 source projection 同坐标系）。
+      // 注：computeEdgeOccupancy 内部又会用 registry 取每条 constraint 的 source rect —
+      //   该函数自己已知 registry 项含 visualInset，下方实现已切换到 visualRect。
+      const projection = projectSourceOntoEdge(sourceVisualRect, targetVisualRect, tEdge)
+      if (!projection) continue
+      const occ = computeEdgeOccupancy(
+        target.id,
+        tEdge,
+        constraintStore.list(),
+        registry,
+        sourceId,
+      )
+      const projLen = projection.end - projection.start
+      const neededLen = Math.max(threshold, projLen)
+      const placedStart = findFreePlacement(projection, occ, neededLen)
+      if (placedStart === null) continue
+      const slideDelta = placedStart - projection.start
+      offset += slideDelta
+
+      // applyConstraint 在 visual 坐标系算 source 应到达的 visual rect
+      const finalVisualRect = applyConstraint(sourceVisualRect, targetVisualRect, {
         sourceEdge: sEdge,
         targetEdge: tEdge,
         offset,
       })
+      // 反推回 OS rect（caller setPosition 用 OS 坐标）。
+      // - 视觉 rect 内缩 inset → OS rect 外扩同样的 inset，得到 source 原始尺寸的 OS rect
+      const finalRect = reverseVisualInset(finalVisualRect, sourceInset)
 
       const distNorm = clamp01(distance / TRIGGER_ZONE)
       const overlapPenalty = clamp01(1 - overlap / threshold)

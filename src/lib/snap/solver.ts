@@ -11,7 +11,7 @@
 // 单人项目 N ≤ 6 → 常数级。
 
 import { constraintStore as defaultStore, type ConstraintStore } from './constraintStore'
-import { applyConstraint } from './geometry'
+import { applyConstraint, applyVisualInset, reverseVisualInset } from './geometry'
 import type { Rect } from './types'
 import { windowRegistry as defaultRegistry, type WindowRegistry } from './windowRegistry'
 
@@ -51,11 +51,19 @@ export function solve(
     for (const c of deps2) {
       const sourceWin = registry.get(c.sourceId)
       // anchor rect 优先用 BFS 期间已计算的新位置（newRects），fallback 当前 registry 中的位置
-      const anchorRect = newRects.get(c.targetId) ?? registry.get(c.targetId)?.rect
-      if (!sourceWin || !anchorRect || !sourceWin.visible) continue
+      const anchorOsRect = newRects.get(c.targetId) ?? registry.get(c.targetId)?.rect
+      if (!sourceWin || !anchorOsRect || !sourceWin.visible) continue
       if (!c.enabled) continue
 
-      const computed = applyConstraint(sourceWin.rect, anchorRect, c)
+      // #30 follow-up F：solver 也用 visual rect 算 applyConstraint，与 candidates.ts 同坐标系
+      // 避免 "candidates 路径无 padding 间隙、solver 路径有 padding 间隙" 的不一致。
+      // - anchor inset 优先从 registry 取（newRects 不带 inset，但同 anchor 的 inset 不变）
+      const anchorReg = registry.get(c.targetId)
+      const anchorVisualRect = applyVisualInset(anchorOsRect, anchorReg?.visualInset)
+      const sourceVisualRect = applyVisualInset(sourceWin.rect, sourceWin.visualInset)
+
+      const finalVisualRect = applyConstraint(sourceVisualRect, anchorVisualRect, c)
+      const computed = reverseVisualInset(finalVisualRect, sourceWin.visualInset)
       newRects.set(c.sourceId, computed)
       queue.push(c.sourceId)
     }

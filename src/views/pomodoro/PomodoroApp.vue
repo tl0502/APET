@@ -36,9 +36,17 @@ import {
   VideoPause,
   VideoPlay,
 } from '@element-plus/icons-vue'
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWindow, LogicalPosition } from '@tauri-apps/api/window'
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import AppShell from '@/components/layouts/AppShell.vue'
+import SnapGhost from '@/components/SnapGhost.vue'
+import { useSnapWindow } from '@/composables/useSnapWindow'
+import { REGISTRY_BROADCAST_EVT } from '@/composables/useSnapWindow'
+import { useFocusAOT } from '@/composables/useFocusAOT'
+import { constraintStore } from '@/lib/snap/constraintStore'
+import { persistAndBroadcastConstraints } from '@/lib/snap/persistence'
+import { windowRegistry } from '@/lib/snap/windowRegistry'
+import type { Rect } from '@/lib/snap/types'
 import {
   getActivePomodoro,
   getPomodoroTodayStats,
@@ -79,6 +87,38 @@ const isFullscreen = ref(false)
 const focusMinDraft = ref<number>(DEFAULT_FOCUS_MIN)
 const restMinDraft = ref<number>(DEFAULT_REST_MIN)
 
+// === 磁吸接入（#30 follow-up E）===
+// pomodoro 作为 secondary 参与磁吸：紧凑模式正常吸附；全屏模式由 toggleFullscreen 主动
+// detach + visible=false 让其他窗忽略本窗。reactive ref 仅在紧凑模式渲染消费。
+const {
+  isPreviewAnchor: pomoIsPreviewAnchor,
+  previewEdgeFor: pomoPreviewEdge,
+  previewIntensityFor: pomoPreviewIntensity,
+  isFieldAnchor: pomoIsFieldAnchor,
+  fieldIntensityFor: pomoFieldIntensity,
+  selfLean: pomoSelfLean,
+} = useSnapWindow('pomodoro')
+
+const pomoSnapPreviewClass = computed(() => {
+  const cls: Record<string, boolean> = {
+    'snap-preview': pomoIsPreviewAnchor.value,
+    'snap-field-anchor': pomoIsFieldAnchor.value,
+  }
+  if (pomoIsPreviewAnchor.value && pomoPreviewEdge.value) {
+    cls[`snap-preview--edge-${pomoPreviewEdge.value}`] = true
+  }
+  return cls
+})
+const pomoSnapPreviewStyle = computed(() => ({
+  '--snap-preview-intensity': String(pomoPreviewIntensity.value),
+  '--snap-field-intensity': String(pomoFieldIntensity.value),
+}))
+const pomoLeanStyle = computed(() => {
+  const lean = pomoSelfLean.value
+  if (!lean) return {}
+  return { transform: `translate(${lean.dx.toFixed(2)}px, ${lean.dy.toFixed(2)}px)` }
+})
+
 const phaseMeta = computed(() => getPhaseMeta(active.value?.phase ?? null))
 
 const progressPct = computed(() => {
@@ -109,35 +149,120 @@ const todaySummary = computed(() => {
   return { completed: todayStats.value.completed, avg, cancelled: todayStats.value.cancelled }
 })
 
-// === phase-driven AOT（修订 #3） ===
-function shouldAOT(phase: PomodoroPhase | null): boolean {
+// === phase-driven AOT（修订 #3 + #30 follow-up H 整合） ===
+// FOCUS / PAUSED_F 期保持 topmost（番茄专注模式不被任何窗盖住，优先级高于 focus）。
+// 其他 phase 走 useFocusAOT 的 focus-driven 逻辑（被点中升 topmost，失焦降回）。
+//
+// 整合后单一权威：所有 setAlwaysOnTop 都经 useFocusAOT.resync → applyAOT 幂等 cache，
+// 避免之前 applyAOT(phase) 与 toggleFullscreen 的 setAlwaysOnTop(false) 并发写引发抖动。
+function shouldAOTForPhase(phase: PomodoroPhase | null): boolean {
   return phase === 'FOCUS' || phase === 'PAUSED_F'
 }
 
-async function applyAOT(phase: PomodoroPhase | null) {
-  // 全屏期间窗已是 fullscreen，AOT 无意义且可能冲突；只在非全屏时同步
-  if (isFullscreen.value) return
-  try {
-    await getCurrentWindow().setAlwaysOnTop(shouldAOT(phase))
-  } catch (e) {
-    console.warn('[pomodoro-app] setAlwaysOnTop failed:', e)
-  }
+// useFocusAOT 调用：shouldKeepTopmost 让 phase 强制 topmost 优先于 focus；
+// fullscreen 期也返 false（全屏窗 AOT 无意义且可能与 setFullscreen 冲突）。
+const focusAOT = useFocusAOT({
+  shouldKeepTopmost: () => !isFullscreen.value && shouldAOTForPhase(active.value?.phase ?? null),
+})
+
+// caller 接口：phase / fullscreen 变化时调一次让 useFocusAOT 重算综合 AOT 状态。
+async function applyAOT(_phase: PomodoroPhase | null) {
+  await focusAOT.resync()
 }
 
 // === 全屏 toggle ===
+// #30 follow-up E：全屏期间 pomodoro rect = 整屏，参与磁吸会让其他窗在屏幕任何位置都
+// 匹配 pomodoro projection overlap，必须主动从 snap 网络脱开。
+//
+// 时序（进入）：保存进入前 rect 快照 → 断开 pomodoro 出向 constraint（含 persist + 广播）
+//   → emit visible=false 让其他窗的 findCandidates 跳过本窗 → 关 AOT → setFullscreen(true)
+// 时序（退出）：setFullscreen(false) → setPosition 复位到快照 rect → emit visible=true
+//   重广播 → 恢复 phase-driven AOT。**复位不重建 constraint**——用户期望"复位 = 视觉还原，
+//   不自动重连"，避免全屏前后吸附状态不一致带来的惊讶。
+let preFullscreenRect: Rect | null = null
+
+async function readSelfRect(): Promise<Rect> {
+  const w = getCurrentWindow()
+  const pos = await w.outerPosition()
+  const size = await w.outerSize()
+  const sf = await w.scaleFactor()
+  return {
+    x: Math.round(pos.x / sf),
+    y: Math.round(pos.y / sf),
+    w: Math.round(size.width / sf),
+    h: Math.round(size.height / sf),
+  }
+}
+
+async function broadcastVisibility(visible: boolean, rect: Rect): Promise<void> {
+  windowRegistry.updateVisible('pomodoro', visible)
+  try {
+    await emit(REGISTRY_BROADCAST_EVT, { id: 'pomodoro', rect, visible })
+  } catch (e) {
+    console.warn('[pomodoro-app] broadcast visibility failed:', e)
+  }
+}
+
+/** 进入全屏前断开 pomodoro 自身出向 constraint（仅删 source=pomodoro 的边）。
+ *  不删入向（M3 多窗时其他窗若依附 pomodoro，全屏不应强拽它们）。 */
+async function detachForFullscreen(): Promise<void> {
+  const removed = constraintStore.removeAllInvolving('pomodoro')
+  if (removed.length > 0) {
+    try {
+      await persistAndBroadcastConstraints('pomodoro')
+    } catch (e) {
+      console.warn('[pomodoro-app] persist after fullscreen detach failed:', e)
+    }
+  }
+}
+
 async function toggleFullscreen() {
   const next = !isFullscreen.value
   try {
     const w = getCurrentWindow()
     if (next) {
-      // 进入全屏前关 AOT，避免 setFullscreen 与 AOT 在某些 WM 上互斥
-      await w.setAlwaysOnTop(false).catch(() => {})
+      // 1. 快照进入前 rect（退出时用此复位）
+      try {
+        preFullscreenRect = await readSelfRect()
+      } catch (e) {
+        console.warn('[pomodoro-app] snapshot pre-fullscreen rect failed:', e)
+        preFullscreenRect = null
+      }
+      // 2. 断开 snap constraint（在 setFullscreen 之前，避免中间帧别窗看到 pomodoro 已变巨型 rect 还带 constraint）
+      await detachForFullscreen()
+      // 3. 标记 visible=false 让其他窗 findCandidates 跳过
+      if (preFullscreenRect) {
+        await broadcastVisibility(false, preFullscreenRect)
+      }
+      // 4. 关 AOT（setFullscreen 与 AOT 某些 WM 互斥）
+      // 改走 useFocusAOT：先翻 isFullscreen 标志再 resync，让 shouldKeepTopmost 返 false
+      // → useFocusAOT 综合判断后 setAlwaysOnTop(false)，同步 lastAOT cache（避免后续判 noop）
+      isFullscreen.value = true
+      await focusAOT.resync()
     }
     await w.setFullscreen(next)
     isFullscreen.value = next
     if (!next) {
-      // 退出全屏后恢复 phase-driven AOT
-      void applyAOT(active.value?.phase ?? null)
+      // 退出全屏：先复位 OS rect，再标记 visible=true，最后恢复 AOT
+      if (preFullscreenRect) {
+        try {
+          await w.setPosition(new LogicalPosition(preFullscreenRect.x, preFullscreenRect.y))
+        } catch (e) {
+          console.warn('[pomodoro-app] restore pre-fullscreen position failed:', e)
+        }
+        await broadcastVisibility(true, preFullscreenRect)
+        preFullscreenRect = null
+      } else {
+        // 异常路径：进入时没拿到 rect 快照，至少把 visible 还原成 true
+        try {
+          const cur = await readSelfRect()
+          await broadcastVisibility(true, cur)
+        } catch (e) {
+          console.warn('[pomodoro-app] fallback visibility restore failed:', e)
+        }
+      }
+      // isFullscreen 已在上面设回 false，resync 会让 useFocusAOT 重新综合 phase + focus
+      void focusAOT.resync()
     }
   } catch (e) {
     console.warn('[pomodoro-app] setFullscreen failed:', e)
@@ -392,8 +517,15 @@ onBeforeUnmount(() => {
     <div class="pomo-fs__hint">按 <kbd>Esc</kbd> 退出全屏</div>
   </div>
 
-  <!-- 紧凑模式：标准 360×480 widget -->
-  <AppShell v-else variant="standalone">
+  <!-- 紧凑模式：标准 360×480 widget，包 .window-root 挂 snap lean / preview class / SnapGhost
+       与 ChatApp 同模型。全屏模式 v-if 分支不参与磁吸（toggleFullscreen 已主动 detach + visible=false）。 -->
+  <div v-else class="window-root" :style="pomoLeanStyle">
+    <SnapGhost source-label="pomodoro" />
+    <AppShell
+      variant="standalone"
+      :class="pomoSnapPreviewClass"
+      :style="pomoSnapPreviewStyle"
+    >
     <template #header>
       <span class="pomo-shell__title" data-tauri-drag-region>番茄</span>
       <ElButton
@@ -542,13 +674,26 @@ onBeforeUnmount(() => {
         </span>
       </footer>
     </div>
-  </AppShell>
+    </AppShell>
+  </div>
 </template>
 
 <style scoped>
 /* ============================================================
  * 紧凑模式（360×480）
  * ============================================================ */
+
+/* === window-root：磁吸 wrapper（lean transform / SnapGhost / preview-class anchor） ===
+   pomodoro 是 opaque 窗（transparent:false / decorations:false），与 chat 透明窗不同：
+   - 无圆角阴影 → 不需要 chat 那种 12px padding 让 box-shadow 露出
+   - 整窗即 AppShell 全占 → width/height 100%
+   - lean transform 用 chat 同款 160ms ease 过渡，磁吸吸引时细微贴附 ≤3px */
+.window-root {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  transition: transform 160ms var(--aipet-ease-standard);
+}
 
 .pomo-shell__title {
   flex: 1 1 auto;

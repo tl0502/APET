@@ -47,11 +47,15 @@ import { isInternalMove, markInternal } from '@/lib/snap/internalMove'
 import { loadPersistedConstraints, persistAndBroadcastConstraints } from '@/lib/snap/persistence'
 import { isPrimary, PRIMARY_LABEL } from '@/lib/snap/roles'
 import { solve } from '@/lib/snap/solver'
+import { snapSyncConstraints, type RustVisualInset } from '@/services/config'
 import type { Edge, Rect, SnapCandidate } from '@/lib/snap/types'
 import { windowRegistry } from '@/lib/snap/windowRegistry'
 
 const DRAG_END_TIMEOUT_MS = 200
-const REGISTRY_BROADCAST_EVT = 'snap:registry-update'
+/** 跨 webview 广播 rect / visible 变化的事件名。
+ *  外部 caller（如 PomodoroApp 全屏 toggle 时手动改 visible）也需引用此常量，
+ *  导出避免硬编码字面量漂移。 */
+export const REGISTRY_BROADCAST_EVT = 'snap:registry-update'
 /** B2 修复：新窗 mount 时 emit 此事件让现存窗回播自己的 rect。
  *  解决"chat 懒窗 reopen 时已经错过了 pet 的初始 REGISTRY_BROADCAST" race —— chat 自己 emit hello，
  *  pet 的 listener 收到后回播 pet rect，chat 就能在 loadPersistedConstraints 之前拿到 pet rect。
@@ -113,6 +117,9 @@ interface RegistryUpdatePayload {
   id: string
   rect: Rect
   visible: boolean
+  /** #30 follow-up F：sender 自己的 visualInset，让接收端注册时同步贴边几何参数。
+   *  缺省 / undefined 表示该窗无 padding（与之前行为兼容）。 */
+  visualInset?: { top: number; right: number; bottom: number; left: number }
 }
 
 /** A4 修复：所有跨 webview event 携带 senderId（emit 端的 webview label），
@@ -200,7 +207,18 @@ async function tweenToRect(
   return true
 }
 
-export function useSnapWindow(label: string): SnapWindowApi {
+export interface UseSnapWindowOptions {
+  /** #30 follow-up F：OS rect 内"视觉可见层"的内缩量（logical px）。
+   *  用于 chat 这类有 CSS padding 留 box-shadow 空间的窗 — 不传则按全 0（pet/pomodoro/settings）。
+   *  candidates / occupancy / solver 全程用 visual rect 做贴边几何，避免 padding 间隙。 */
+  visualInset?: { top: number; right: number; bottom: number; left: number }
+}
+
+export function useSnapWindow(
+  label: string,
+  options: UseSnapWindowOptions = {},
+): SnapWindowApi {
+  const visualInset = options.visualInset
   let unlistenMove: UnlistenFn | null = null
   let unlistenResize: UnlistenFn | null = null
   let unlistenRegistry: UnlistenFn | null = null
@@ -293,12 +311,18 @@ export function useSnapWindow(label: string): SnapWindowApi {
         // B3 修复：persist + broadcast 原子 IPC（Rust 端串行写 KV → emit），
         // 替代之前的 await persistConstraints() + await emit() 两步。
         await persistAndBroadcastConstraints(label)
+        // #30 follow-up I：commit 后同步 Rust SnapState（Rust solver 在下次 Moved 接管 group-drag）
+        await syncRustSnap()
         // Phase F：committed 时进 committing state，跑 settle tween，完成后 endCommitting
         if (result.committedConstraint && movingRectAtMouseup) {
           const c = result.committedConstraint
           const targetReg = windowRegistry.get(c.targetId)
           if (targetReg) {
-            const final = applyConstraintToRect(movingRectAtMouseup, targetReg.rect, c)
+            // #30 follow-up F：用 currentCand.finalRect（candidates.ts 已经反推 visual→OS）。
+            // 原本本地 applyConstraintToRect 重算会绕过 visualInset 模型，造成 chat 等带 padding
+            // 的窗在 commit 时位置算回"贴 OS rect 边"而非"贴 visual rect 边"，padding 间隙复现。
+            const final = currentCand?.finalRect
+              ?? applyConstraintToRect(movingRectAtMouseup, targetReg.rect, c)
             // c.sourceId 已等于 movingId（commit 写入时用了 candidate.movingId）
             const tweenCompleted = await tweenToRect(c.sourceId, movingRectAtMouseup, final)
             // tween 完成（或 ESC 中断后）显式回 idle
@@ -349,7 +373,42 @@ export function useSnapWindow(label: string): SnapWindowApi {
   async function broadcastSelfRect(rect: Rect, visible: boolean): Promise<void> {
     windowRegistry.updateRect(label, rect)
     windowRegistry.updateVisible(label, visible)
-    await emit(REGISTRY_BROADCAST_EVT, { id: label, rect, visible } satisfies RegistryUpdatePayload)
+    await emit(REGISTRY_BROADCAST_EVT, {
+      id: label,
+      rect,
+      visible,
+      visualInset,
+    } satisfies RegistryUpdatePayload)
+  }
+
+  /** #30 follow-up I：把 constraintStore 全量 + 各窗 visualInset 推到 Rust 端 SnapState。
+   *  Rust 端在 Moved 事件后接管 BFS solver + 批量 set_position，避免前端 group-drag 路径
+   *  N 次 setPosition IPC 在 Windows 上排队导致的链式抖动。
+   *
+   *  caller 路径：commit 后 / detach 后 / persistence load 完 / removeAllInvolving 后。
+   *  失败仅 warn — Rust state 不同步只是回退到前端 solver（仍能工作，只是会抖）。
+   *
+   *  幂等：每次全量 sync，Rust 端 sync_constraints 内部 clear+rewrite，调用频率受限于
+   *  constraint 变化频率（drag commit 节奏 ≤ 1Hz），不在 onMoved 高频路径上。 */
+  async function syncRustSnap(): Promise<void> {
+    const all = constraintStore.list().map((c) => ({
+      sourceId: c.sourceId,
+      targetId: c.targetId,
+      sourceEdge: c.sourceEdge,
+      targetEdge: c.targetEdge,
+      offset: c.offset,
+    }))
+    const insets: Record<string, RustVisualInset> = {}
+    for (const reg of windowRegistry.list()) {
+      if (reg.visualInset) {
+        insets[reg.id] = reg.visualInset
+      }
+    }
+    try {
+      await snapSyncConstraints(all, insets)
+    } catch (e) {
+      console.warn('[useSnapWindow] snapSyncConstraints failed (fallback to JS solver):', e)
+    }
   }
 
   async function onMoved(): Promise<void> {
@@ -375,22 +434,16 @@ export function useSnapWindow(label: string): SnapWindowApi {
       // T6 (#31 follow-up B)：anchor 拖动 — 走 solver 把 dependents 平移跟随，
       // 不算 candidate / 不写 constraint。dragEnd 200ms watchdog 仍 schedule，
       // 让 dragSession 在松手后回 idle（commit no-op，但状态机要走完）。
-      const result = solve([label])
-      if (import.meta.env.DEV && result.size === 0) {
-        console.warn(
-          `[snap] group-drag ${label} solve returned 0 dependents — ` +
-            `constraintStore.dependentsOf returns [${constraintStore.dependentsOf(label).map((c) => c.sourceId).join(',')}]`,
-        )
-      }
-      for (const [id, r] of result) {
-        await safeSetPosition(id, r.x, r.y)
-        windowRegistry.updateRect(id, r)
-        await emit(REGISTRY_BROADCAST_EVT, {
-          id,
-          rect: r,
-          visible: true,
-        } satisfies RegistryUpdatePayload)
-      }
+      //
+      // #30 follow-up I：Rust 端 SnapState 已接管 BFS solver + 批量 set_position。
+      // 前端这里完全短路 — 不再 solve / setPosition / emit REGISTRY_BROADCAST，
+      // 避免双方同时写位置造成"前端追 Rust"的 ping-pong 抖动（windowRegistry rect 也会
+      // 在 dep 窗自己的 onMoved 路径上被对应 webview 更新并广播，跨 webview 同步走那条）。
+      //
+      // 旧前端实现（Promise.all + inflight throttle）见 git log；实测 N=2 链 30Hz、
+      // N=3 链 22Hz、严重视觉抖动。换 Rust 端后 60Hz 稳定无 IPC 排队（Win32 SetWindowPos μs 级）。
+      //
+      // 仅保留 scheduleDragEnd 让状态机正常退出（armed→dragging→idle）。
       scheduleDragEnd()
     } else if (userDragging) {
       // 被拖窗作为 source — 算 candidates → 推 dragSession
@@ -468,17 +521,16 @@ export function useSnapWindow(label: string): SnapWindowApi {
       }
       scheduleDragEnd()
     } else {
-      // 非用户拖（wander / 程序 setPosition）→ solver 推 dependent 窗
-      const result = solve([label])
-      for (const [id, r] of result) {
-        await safeSetPosition(id, r.x, r.y)
-        windowRegistry.updateRect(id, r)
-        await emit(REGISTRY_BROADCAST_EVT, {
-          id,
-          rect: r,
-          visible: true,
-        } satisfies RegistryUpdatePayload)
-      }
+      // 非用户拖（wander / 程序 setPosition）路径。
+      //
+      // #30 follow-up I：Rust 端 on_window_moved 已接管 BFS solver + 批量 set_position，
+      // 前端这里**也短路**（与 group-drag 同理）。pet wander 后端直接 set_position 触发 Moved
+      // → Rust solver 自动推所有 dep，不需要再走前端 solve + 4 次 IPC。
+      //
+      // dep 窗的 windowRegistry rect 同步靠 dep 自己 onMoved 路径上的 broadcastSelfRect
+      // （Rust set_position dep 后 dep 的 webview 收到 Moved 事件 → 自己更新 + emit REGISTRY_BROADCAST）。
+      //
+      // 旧前端实现见 git log。
     }
   }
 
@@ -488,8 +540,22 @@ export function useSnapWindow(label: string): SnapWindowApi {
     if (existing) {
       windowRegistry.updateRect(p.id, p.rect)
       windowRegistry.updateVisible(p.id, p.visible)
+      // #30 follow-up F：visualInset 也同步（窗启动期首次广播 / 后续 inset 不会变，但写入幂等）
+      if (p.visualInset !== undefined) {
+        windowRegistry.upsert({
+          id: p.id,
+          rect: p.rect,
+          visible: p.visible,
+          visualInset: p.visualInset,
+        })
+      }
     } else {
-      windowRegistry.upsert({ id: p.id, rect: p.rect, visible: p.visible })
+      windowRegistry.upsert({
+        id: p.id,
+        rect: p.rect,
+        visible: p.visible,
+        visualInset: p.visualInset,
+      })
     }
   }
 
@@ -500,6 +566,9 @@ export function useSnapWindow(label: string): SnapWindowApi {
     // 每次 detach 都自动失效。30s 惩罚是 webview-local 内存，与 store 持久化语义无关，不应联动。
     await loadPersistedConstraints()
     await cleanupDirtyPrimaryOutbound()
+    // #30 follow-up I：onConstraintChanged 是跨 webview reload 路径，本窗 store 已 reload，
+    // 同步 Rust SnapState 确保它跟得上（每个 webview 都会调一次，Rust 端 sync_constraints 幂等）
+    await syncRustSnap()
   }
 
   /** #30 follow-up D：primary 角色不应该有 outbound constraint（所有 commit 路径都写 secondary→primary）。
@@ -518,6 +587,8 @@ export function useSnapWindow(label: string): SnapWindowApi {
     try {
       // B3 修复：原子 persist+broadcast
       await persistAndBroadcastConstraints(label)
+      // #30 follow-up I：cleanup 后同步 Rust SnapState
+      await syncRustSnap()
     } catch (e) {
       console.warn('[snap] cleanup persist/emit failed:', e)
     }
@@ -600,6 +671,8 @@ export function useSnapWindow(label: string): SnapWindowApi {
           // B3 修复：原子 persist+broadcast，避免 emit 比 KV 写早抵达其他 webview
           // 导致其他 webview 重新 load 时读到含脏 outbound 的旧 KV。
           await persistAndBroadcastConstraints(label)
+          // #30 follow-up I：脏 primary outbound 清理后同步 Rust SnapState
+          await syncRustSnap()
         } catch (err) {
           console.warn('[snap] onPointerDown cleanup async failed:', err)
         }
@@ -650,9 +723,11 @@ export function useSnapWindow(label: string): SnapWindowApi {
           detachHistory.recordDetach(c.sourceId, c.targetId, now)
         }
         // fire-and-forget B3 原子 IPC（pointerdown 不能 async，且后续 arm dragSession 不依赖 KV 写完成）
-        void persistAndBroadcastConstraints(label).catch((err) => {
-          console.warn('[snap] pointerdown detachAll persist failed:', err)
-        })
+        void persistAndBroadcastConstraints(label)
+          .then(() => syncRustSnap()) // #30 follow-up I：detachAll 后同步 Rust SnapState
+          .catch((err) => {
+            console.warn('[snap] pointerdown detachAll persist failed:', err)
+          })
       }
     }
 
@@ -687,11 +762,12 @@ export function useSnapWindow(label: string): SnapWindowApi {
     try {
       const rect = await readWindowRect(win)
       const visible = await win.isVisible()
-      windowRegistry.upsert({ id: label, rect, visible })
+      windowRegistry.upsert({ id: label, rect, visible, visualInset })
       await emit(REGISTRY_BROADCAST_EVT, {
         id: label,
         rect,
         visible,
+        visualInset,
       } satisfies RegistryUpdatePayload)
       // B2 修复：emit hello 让现存窗回播自己的 rect。
       // 解决"chat 懒窗 reopen 时已错过 pet 的初始 REGISTRY_BROADCAST"竞争：chat 自己启动期
@@ -759,6 +835,7 @@ export function useSnapWindow(label: string): SnapWindowApi {
             id: label,
             rect,
             visible,
+            visualInset,
           } satisfies RegistryUpdatePayload)
         } catch (e) {
           console.warn(`[useSnapWindow] hello-back to ${senderId} failed:`, e)
@@ -885,6 +962,113 @@ export function useSnapWindow(label: string): SnapWindowApi {
     }, 300)
   })
 
+  // #30 follow-up G：webview hide / show 同步。
+  // 关键：WebView2 在 window.hide() 时 **不会** 触发 DOM visibilitychange（已知 Tauri/
+  // WebView2 bug，参 issues #6864 / #9524 / #10592 — document.visibilityState 永远为
+  // 'visible'）。所以必须靠后端 Rust 主动 emit 'window:visibility-changed' 通知前端。
+  //
+  // 不同步会导致 windowRegistry 内本窗 visible 永远 true：
+  //   - 其他窗 findCandidates 仍把本窗当 anchor 候选 → 拖近隐形窗仍被吸附
+  //   - 其他窗 edgeOccupancy 仍把本窗当占用 → 拒绝合法 candidate
+  //   - solver 仍把本窗的 dep 推到本窗旁
+  //
+  // 关键：只同步 visible 标志，不删 constraint。用户期望"关掉 chat 一会儿再打开
+  // 还吸在 pet 旁"——constraint 保留，重开后 onMounted 启动期 solver 会按 constraint
+  // 把 chat 摆回 pet 旁。
+  let unlistenVisibility: UnlistenFn | null = null
+  const VISIBILITY_EVT = 'window:visibility-changed'
+  interface VisibilityPayload {
+    label: string
+    visible: boolean
+  }
+  const handleVisibilityChange = async (target: string, nextVisible: boolean): Promise<void> => {
+    const reg = windowRegistry.get(target)
+    if (!reg) {
+      // 之前没注册过的窗（例如 hello 阶段还没收到 rect），先 upsert 一个最小 entry
+      // 此 rect 仅做占位，下一次该窗 hello 回播会覆盖
+      if (target === label) return // 自己未注册不正常，跳过
+      windowRegistry.upsert({
+        id: target,
+        rect: { x: 0, y: 0, w: 0, h: 0 },
+        visible: nextVisible,
+      })
+      return
+    }
+    if (reg.visible === nextVisible) return // 幂等
+    windowRegistry.updateVisible(target, nextVisible)
+
+    // 本窗自己 hide 时：清拖动残留（用户拖到一半时被外部 hide 的极端 case）
+    if (target === label && !nextVisible) {
+      dragSession.cancel()
+      currentDragMode = null
+      bypassSnapForCurrentDrag = false
+      if (armedTimer !== null) {
+        clearTimeout(armedTimer)
+        armedTimer = null
+      }
+      clearDragEndTimer()
+      if (fieldAnchorGlobal.value === label) {
+        fieldAnchorGlobal.value = null
+        fieldIntensityGlobal.value = 0
+        try {
+          await emit(FIELD_INTENSITY_EVT, {
+            sourceId: label,
+            anchorId: null,
+            intensity: 0,
+          } satisfies FieldIntensityPayload)
+        } catch {
+          /* ignore */
+        }
+      }
+      if (sourceDragLabelGlobal.value === label) {
+        sourceDragLabelGlobal.value = null
+      }
+      if (previewAnchorGlobal.value === label) {
+        previewAnchorGlobal.value = null
+        previewEdgeGlobal.value = null
+        previewIntensityGlobal.value = 0
+        try {
+          await emit(PREVIEW_ANCHOR_EVT, {
+            senderId: label,
+            anchorId: null,
+            edge: null,
+            intensity: 0,
+          } satisfies PreviewAnchorPayload)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    // 别窗成为 anchor / source 时本窗有缓存的 preview/field 状态指向它 → 清掉
+    // （别窗已经 hide 的极端 race；它本地的 emit clear 还未到达 / 已发但乱序）
+    if (target !== label && !nextVisible) {
+      if (fieldAnchorGlobal.value === target) {
+        fieldAnchorGlobal.value = null
+        fieldIntensityGlobal.value = 0
+      }
+      if (previewAnchorGlobal.value === target) {
+        previewAnchorGlobal.value = null
+        previewEdgeGlobal.value = null
+        previewIntensityGlobal.value = 0
+      }
+    }
+  }
+  try {
+    // 同步上下文（useSnapWindow 函数主体）无法 await — 用 .then 桥接 listen Promise
+    listen<VisibilityPayload>(VISIBILITY_EVT, (ev) => {
+      if (!ev.payload) return
+      void handleVisibilityChange(ev.payload.label, ev.payload.visible)
+    })
+      .then((fn) => {
+        unlistenVisibility = fn
+      })
+      .catch((e) => {
+        console.warn('[useSnapWindow] listen visibility-changed failed:', e)
+      })
+  } catch (e) {
+    console.warn('[useSnapWindow] listen visibility-changed setup failed:', e)
+  }
+
   onBeforeUnmount(() => {
     unlistenMove?.()
     unlistenResize?.()
@@ -893,6 +1077,7 @@ export function useSnapWindow(label: string): SnapWindowApi {
     unlistenConstraint?.()
     unlistenPreviewAnchor?.()
     unlistenField?.()
+    unlistenVisibility?.()
     stopPreviewAnchorWatch?.()
     if (escHandler) window.removeEventListener('keydown', escHandler, true)
     if (pointerDownHandler) window.removeEventListener('pointerdown', pointerDownHandler, true)

@@ -31,3 +31,31 @@ export function deleteConfig(key: string): Promise<void> {
 export function snapPersistAndBroadcast(value: string, senderId: string): Promise<void> {
   return invoke<void>('snap_persist_and_broadcast', { value, senderId })
 }
+
+/** #30 follow-up I：把全量 constraints + per-window visualInset 推到 Rust 端 SnapState。
+ *  Rust 端 Moved 事件后接管 BFS solver + 批量 set_position，替代前端 group-drag 路径 N 次 IPC，
+ *  消除链式拖动抖动（Windows webview2 setPosition IPC ≥5ms，N=3 链跌到 22Hz）。
+ *
+ *  caller：useSnapWindow 内 commit / detach / persistence load 路径上调一次。
+ *  constraint 结构需与 Rust SnapConstraint 对齐（camelCase；仅 5 字段）。 */
+export interface RustSnapConstraint {
+  sourceId: string
+  targetId: string
+  sourceEdge: 'left' | 'right' | 'top' | 'bottom'
+  targetEdge: 'left' | 'right' | 'top' | 'bottom'
+  offset: number
+}
+
+export interface RustVisualInset {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+export function snapSyncConstraints(
+  constraints: RustSnapConstraint[],
+  insets: Record<string, RustVisualInset>,
+): Promise<void> {
+  return invoke<void>('snap_sync_constraints', { constraints, insets })
+}

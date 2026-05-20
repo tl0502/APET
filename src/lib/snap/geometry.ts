@@ -10,6 +10,41 @@
 
 import type { Edge, Rect } from './types'
 
+// ───── visual rect helpers (#30 follow-up F) ─────
+
+/** OS rect 内缩 inset 得到"视觉 rect"。
+ *  inset 缺省 / 全 0 → 原 rect（pet / pomodoro 等无 padding 窗）。
+ *  inset 非零（如 chat 12px）→ 用于磁吸贴边几何，避免 padding 间隙。
+ *
+ *  注意：返回值是新对象，原 rect 不被 mutate。 */
+export function applyVisualInset(
+  rect: Rect,
+  inset?: { top: number; right: number; bottom: number; left: number },
+): Rect {
+  if (!inset) return rect
+  return {
+    x: rect.x + inset.left,
+    y: rect.y + inset.top,
+    w: Math.max(0, rect.w - inset.left - inset.right),
+    h: Math.max(0, rect.h - inset.top - inset.bottom),
+  }
+}
+
+/** visual rect 反推 OS rect：把 inset 加回去。
+ *  applyConstraint 输出 source 的"应到达 visual rect"，caller 用此换回 OS rect 喂 setPosition。 */
+export function reverseVisualInset(
+  visualRect: Rect,
+  inset?: { top: number; right: number; bottom: number; left: number },
+): Rect {
+  if (!inset) return visualRect
+  return {
+    x: visualRect.x - inset.left,
+    y: visualRect.y - inset.top,
+    w: visualRect.w + inset.left + inset.right,
+    h: visualRect.h + inset.top + inset.bottom,
+  }
+}
+
 // ───── 几何常量 ─────
 
 /** 拖动期 source 边与 anchor 边距离小于此值 → 进入吸附 trigger zone。

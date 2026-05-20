@@ -6,8 +6,13 @@
 // #21 锁死边界：所有 `show_*` / `toggle_*`（让主体窗口可见的路径）前置 ConsentGate
 // 检查。gate=false（onboarding 未完成）时改为 `show_onboarding`，把焦点引导回宣誓页。
 // `hide_*` 不查 gate（降级操作）；`show_onboarding` 自己不查（gate 关时它正是出口）。
+//
+// #30 follow-up G：所有 show_* / hide_* / toggle_* 在 window.show()/hide() 后必须调
+// emit_visibility_changed —— WebView2 不在 hide 时触发 DOM visibilitychange（已知
+// Tauri/WebView2 bug，参 #6864 #9524 #10592），所以靠后端事件让前端 useSnapWindow
+// 同步 windowRegistry visible 标志，让 candidates / solver / occupancy 跳过隐形窗。
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::services::consent_gate::ConsentGate;
 
@@ -27,6 +32,22 @@ pub const TASKS_WINDOW_LABEL: &str = "tasks";
 /// alwaysOnTop 由前端 PomodoroApp.vue 按 phase 动态切换（FOCUS/PAUSED_F 置顶；其余不置顶）。
 pub const POMODORO_WINDOW_LABEL: &str = "pomodoro";
 
+/// #30 follow-up G：跨 webview 广播窗口 visibility 变化的事件名。
+pub const VISIBILITY_CHANGED_EVENT: &str = "window:visibility-changed";
+
+/// hide / show 后调一次：通知所有 webview 同步 visible 字段。
+/// 失败仅 eprintln，不阻塞主路径（visibility 不同步只是 snap 失效，不影响用户基本操作）。
+pub(crate) fn emit_visibility_changed(app: &AppHandle, label: &str, visible: bool) {
+    if let Err(e) = app.emit(
+        VISIBILITY_CHANGED_EVENT,
+        serde_json::json!({ "label": label, "visible": visible }),
+    ) {
+        eprintln!(
+            "[window_actions] emit {VISIBILITY_CHANGED_EVENT} for {label}={visible} failed: {e}"
+        );
+    }
+}
+
 /// 进程级闸门读取。state 未 manage（setup 早期 / 极端 dev 路径）时保守返 false。
 fn is_gate_open(app: &AppHandle) -> bool {
     app.try_state::<ConsentGate>()
@@ -43,12 +64,14 @@ pub(crate) fn show_pet(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+        emit_visibility_changed(app, PET_WINDOW_LABEL, true);
     }
 }
 
 pub(crate) fn hide_pet(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
         let _ = window.hide();
+        emit_visibility_changed(app, PET_WINDOW_LABEL, false);
     }
 }
 
@@ -61,10 +84,12 @@ pub(crate) fn toggle_pet(app: &AppHandle) {
         match window.is_visible() {
             Ok(true) => {
                 let _ = window.hide();
+                emit_visibility_changed(app, PET_WINDOW_LABEL, false);
             }
             _ => {
                 let _ = window.show();
                 let _ = window.set_focus();
+                emit_visibility_changed(app, PET_WINDOW_LABEL, true);
             }
         }
     }
@@ -79,6 +104,7 @@ pub(crate) fn show_settings(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+        emit_visibility_changed(app, SETTINGS_WINDOW_LABEL, true);
     }
 }
 
@@ -86,6 +112,7 @@ pub(crate) fn show_settings(app: &AppHandle) {
 pub(crate) fn hide_settings(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
         let _ = window.hide();
+        emit_visibility_changed(app, SETTINGS_WINDOW_LABEL, false);
     }
 }
 
@@ -98,6 +125,7 @@ pub(crate) fn show_chat(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(CHAT_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+        emit_visibility_changed(app, CHAT_WINDOW_LABEL, true);
     }
 }
 
@@ -105,6 +133,7 @@ pub(crate) fn show_chat(app: &AppHandle) {
 pub(crate) fn hide_chat(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(CHAT_WINDOW_LABEL) {
         let _ = window.hide();
+        emit_visibility_changed(app, CHAT_WINDOW_LABEL, false);
     }
 }
 
@@ -118,10 +147,12 @@ pub(crate) fn toggle_chat(app: &AppHandle) {
         match window.is_visible() {
             Ok(true) => {
                 let _ = window.hide();
+                emit_visibility_changed(app, CHAT_WINDOW_LABEL, false);
             }
             _ => {
                 let _ = window.show();
                 let _ = window.set_focus();
+                emit_visibility_changed(app, CHAT_WINDOW_LABEL, true);
             }
         }
     }
@@ -135,6 +166,7 @@ pub(crate) fn show_onboarding(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+        emit_visibility_changed(app, ONBOARDING_WINDOW_LABEL, true);
     }
 }
 
@@ -143,6 +175,7 @@ pub(crate) fn show_onboarding(app: &AppHandle) {
 pub(crate) fn hide_onboarding(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
         let _ = window.hide();
+        emit_visibility_changed(app, ONBOARDING_WINDOW_LABEL, false);
     }
 }
 
@@ -155,6 +188,7 @@ pub(crate) fn show_tasks(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+        emit_visibility_changed(app, TASKS_WINDOW_LABEL, true);
     }
 }
 
@@ -162,6 +196,7 @@ pub(crate) fn show_tasks(app: &AppHandle) {
 pub(crate) fn hide_tasks(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
         let _ = window.hide();
+        emit_visibility_changed(app, TASKS_WINDOW_LABEL, false);
     }
 }
 
@@ -175,10 +210,12 @@ pub(crate) fn toggle_tasks(app: &AppHandle) {
         match window.is_visible() {
             Ok(true) => {
                 let _ = window.hide();
+                emit_visibility_changed(app, TASKS_WINDOW_LABEL, false);
             }
             _ => {
                 let _ = window.show();
                 let _ = window.set_focus();
+                emit_visibility_changed(app, TASKS_WINDOW_LABEL, true);
             }
         }
     }
@@ -195,6 +232,7 @@ pub(crate) fn show_pomodoro(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POMODORO_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+        emit_visibility_changed(app, POMODORO_WINDOW_LABEL, true);
     }
 }
 
@@ -203,6 +241,7 @@ pub(crate) fn show_pomodoro(app: &AppHandle) {
 pub(crate) fn hide_pomodoro(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POMODORO_WINDOW_LABEL) {
         let _ = window.hide();
+        emit_visibility_changed(app, POMODORO_WINDOW_LABEL, false);
     }
 }
 
@@ -216,10 +255,12 @@ pub(crate) fn toggle_pomodoro(app: &AppHandle) {
         match window.is_visible() {
             Ok(true) => {
                 let _ = window.hide();
+                emit_visibility_changed(app, POMODORO_WINDOW_LABEL, false);
             }
             _ => {
                 let _ = window.show();
                 let _ = window.set_focus();
+                emit_visibility_changed(app, POMODORO_WINDOW_LABEL, true);
             }
         }
     }

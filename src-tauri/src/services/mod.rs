@@ -50,6 +50,10 @@ pub mod scheduler;
 // 运行时态走 KV `pomodoro:active_session`（不污染 pomodoro_sessions 表；lesson #2）。
 pub mod pomodoro;
 pub mod shortcuts;
+// #30 follow-up I：Rust 端磁吸 solver。
+// 修复链式 group-drag 抖动：Rust 端直接 set_position 替代前端 N 次 IPC（μs vs ms 数量级差）。
+// 前端是 constraint 权威源，通过 snap_sync_constraints IPC 全量推到 Rust state。
+pub mod snap;
 pub mod window_state;
 
 // #6 系统托盘 + 窗口动作 helper（M1 W2 主态可达交付物）。

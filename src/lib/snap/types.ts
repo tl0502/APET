@@ -39,6 +39,19 @@ export interface WindowRegistration {
   id: string
   rect: Rect
   visible: boolean
+  /** #30 follow-up F：OS 窗 rect 内"视觉可见层"的内缩量（logical px）。
+   *  用例：chat 用 12px window-root padding 留 box-shadow 显示空间 →
+   *    OS rect 含这 12px 但视觉上窗体边缘在 inset 之内。
+   *  - 缺省 / 全 0：OS rect 即视觉 rect（pet / pomodoro / settings 等无 padding 窗）
+   *  - 提供时：candidates / occupancy / commit 都用"visual rect"做贴边运算，
+   *    避免相邻吸附窗之间出现 padding 大小的视觉间隙
+   *  注：仅磁吸几何层用此 inset；OS setPosition 时仍按 OS rect 推算。 */
+  visualInset?: {
+    top: number
+    right: number
+    bottom: number
+    left: number
+  }
 }
 
 /** 候选 snap：drag 期间 candidates.ts 计算的一个潜在吸附点。 */

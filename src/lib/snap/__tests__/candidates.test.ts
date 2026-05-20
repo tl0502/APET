@@ -347,6 +347,113 @@ describe('findCandidates — velocity bias (Phase C #31 follow-up C)', () => {
   })
 })
 
+// #30 follow-up F：边段占用 + 错位磁吸。
+//
+// 场景：A 是大 anchor (300×500)；B 已吸到 A.right 上半段 [0, 250)。
+// C 拖近 A.right：
+//   - C 想吸到 A.right [0, 250)（与 B 重叠）→ 占用拒绝；尝试滑入下半 [250, 500)
+//   - 若 C 投影长度 > 250（剩余空段）→ 拒绝整个 edge pair
+describe('findCandidates — 边段占用 + 错位磁吸 (#30 follow-up F)', () => {
+  it('A.right 完全空 → C 按原 offset 吸附', () => {
+    const A = reg('A', r(0, 0, 300, 500)) // A.right 长 500
+    const C = r(305, 100, 100, 100) // C.left 距 A.right 5；投影 [100, 200]
+    const cands = findCandidates('C', C, [A])
+    expect(cands).toHaveLength(1)
+    expect(cands[0]?.offset).toBe(100) // 不滑动，原 offset
+    expect(cands[0]?.targetId).toBe('A')
+    expect(cands[0]?.targetEdge).toBe('right')
+  })
+
+  it('A.right 上半被 B 占 [0, 250]，C 投影 [100, 200] 完全在 occupied → 自动滑到下半 free [250, 500]', () => {
+    const A = reg('A', r(0, 0, 300, 500))
+    const B = reg('B', r(300, 0, 100, 250)) // B.left=300 紧贴 A.right；投影 [0, 250]
+    constraintStore.set({
+      sourceId: 'B',
+      targetId: 'A',
+      sourceEdge: 'left',
+      targetEdge: 'right',
+      offset: 0,
+      enabled: true,
+      createdAt: 0,
+    })
+    // C 想吸 A.right 上半，投影 [100, 200] 完全在 B 占用内
+    const C = r(305, 100, 100, 100)
+    const cands = findCandidates('C', C, [A, B])
+    expect(cands).toHaveLength(1)
+    // findFreePlacement 策略 3：projCenter 150 在 occupied，最近 free 段 [250, 500]
+    // projCenter(150) ≤ 段中心(375) → 贴段 start = 250；offset = 250
+    expect(cands[0]?.offset).toBe(250)
+    expect(cands[0]?.targetId).toBe('A')
+  })
+
+  it('占用太满，剩余 free 段 < source 投影长度 → 拒绝整个 edge pair', () => {
+    const A = reg('A', r(0, 0, 300, 200)) // A.right 长 200
+    const B = reg('B', r(300, 0, 100, 180)) // B 占 [0, 180]，剩 free [180, 200] 仅 20px
+    constraintStore.set({
+      sourceId: 'B',
+      targetId: 'A',
+      sourceEdge: 'left',
+      targetEdge: 'right',
+      offset: 0,
+      enabled: true,
+      createdAt: 0,
+    })
+    // C 投影长 100，剩余空段 20 装不下 → 拒
+    const C = r(305, 50, 100, 100)
+    const cands = findCandidates('C', C, [A, B])
+    expect(cands).toHaveLength(0)
+  })
+
+  it('source 自己已吸到该边 → 评估时排除自己（refresh 路径，否则一定冲突）', () => {
+    const A = reg('A', r(0, 0, 300, 500))
+    const B = reg('B', r(300, 100, 100, 100)) // B 已吸到 A.right offset=100
+    constraintStore.set({
+      sourceId: 'B',
+      targetId: 'A',
+      sourceEdge: 'left',
+      targetEdge: 'right',
+      offset: 100,
+      enabled: true,
+      createdAt: 0,
+    })
+    // B 自己重新评估（dockedTargetId='A'）→ 应排除自己的旧占用，否则 100% conflict
+    const cands = findCandidates('B', B.rect, [A, B], { dockedTargetId: 'A' })
+    expect(cands.length).toBeGreaterThan(0)
+    expect(cands[0]?.offset).toBe(100) // 不滑动
+  })
+
+  it('部分越界：C 投影部分在 occupied → 推到 free 段贴边', () => {
+    const A = reg('A', r(0, 0, 300, 500))
+    const B = reg('B', r(300, 0, 100, 200)) // B 占 [0, 200]
+    constraintStore.set({
+      sourceId: 'B',
+      targetId: 'A',
+      sourceEdge: 'left',
+      targetEdge: 'right',
+      offset: 0,
+      enabled: true,
+      createdAt: 0,
+    })
+    // C 投影 [150, 250]，左侧落在 occupied，右侧落在 free
+    // 中心 200 在 free [200, 500] 的 start 上 → 策略 2 推到段 start = 200
+    const C = r(305, 150, 100, 100)
+    const cands = findCandidates('C', C, [A, B])
+    expect(cands).toHaveLength(1)
+    expect(cands[0]?.offset).toBe(200)
+  })
+
+  it('两 candidate 都合格但占用情况不同 → 评分独立（占用不影响 score 只影响 offset/reject）', () => {
+    // A 空 / D 也空，两窗等距等大 → C 应被两窗都接受
+    const A = reg('A', r(0, 0, 300, 500))
+    const D = reg('D', r(0, 800, 300, 500))
+    const C = r(305, 200, 100, 100)
+    const cands = findCandidates('C', C, [A, D])
+    // C 在 A 旁；C.right ↔ D.left 距远（不命中 D），只剩 C↔A 一个 candidate
+    expect(cands).toHaveLength(1)
+    expect(cands[0]?.targetId).toBe('A')
+  })
+})
+
 describe('DetachHistory', () => {
   it('recordDetach + isRecent 路径', () => {
     const h = new DetachHistory()
