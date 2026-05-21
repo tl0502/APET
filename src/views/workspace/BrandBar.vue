@@ -88,7 +88,7 @@ function handleHelp() {
       </li>
     </ul>
 
-    <div class="brand-bar__spacer" />
+    <div class="brand-bar__spacer" data-tauri-drag-region />
 
     <!-- 底部：辅助 -->
     <ul class="brand-bar__list brand-bar__list--bottom">
@@ -117,7 +117,10 @@ function handleHelp() {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  padding: var(--aipet-space-2) 0 var(--aipet-space-3);
+  /* 顶部 32px 让位给 invisible drag-bar，避免与 pet 头像点击冲突 */
+  padding: calc(32px + var(--aipet-space-2)) 0 var(--aipet-space-3);
+  position: relative;
+  z-index: 2;
 }
 
 .brand-bar__top {
@@ -128,6 +131,8 @@ function handleHelp() {
 
 .brand-bar__avatar {
   position: relative;
+  /* spec §3.2 z-index 协议：brand-bar 按钮(6) > drag-bar(5)，避免被顶部 32px invisible drag-bar 拦截点击 */
+  z-index: 6;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -186,6 +191,8 @@ function handleHelp() {
 
 .brand-bar__btn {
   position: relative;
+  /* spec §3.2 z-index 协议：brand-bar 按钮(6) > drag-bar(5) */
+  z-index: 6;
   width: 44px;
   height: 44px;
   display: flex;
