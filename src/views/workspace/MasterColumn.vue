@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// MasterColumn (#33 phase B-redo)：中间 master 列（240px 默认，可 sash 调宽）。
+// MasterColumn (#33 phase B-redo / phase D 接入)：中间 master 列（240px 默认，可 sash 调宽）。
 //
 // 路由：
-// - chat 类别 → 渲染 ConversationListPane（phase D 接入；phase B-redo 占位 placeholder）
+// - chat 类别 → 渲染 ConversationListPane（共享 ConversationStore，与磁吸窗同源）
 // - 其他类别 → 渲染 MasterList（含 task / creation / config items）
 //
 // header：当前类别名 + 类别 icon（视觉锚定）
@@ -11,6 +11,7 @@ import { computed } from 'vue'
 import { ElIcon } from 'element-plus'
 
 import MasterList from './MasterList.vue'
+import ConversationListPane from '@/components/chat/ConversationListPane.vue'
 import { useWorkspaceLayoutStore } from '@/stores/workspaceLayout'
 
 const layout = useWorkspaceLayoutStore()
@@ -34,10 +35,11 @@ function onSelect(itemId: string) {
     </header>
 
     <div class="master-col__body">
-      <!-- chat 类别：phase D 替换为 <ConversationListPane /> -->
-      <div v-if="layout.currentCategory === 'chat'" class="master-col__placeholder">
-        <p>对话列表（Phase D 接入 ConversationListPane）</p>
-      </div>
+      <!-- chat 类别：用 ConversationListPane（共享 store）；其余用 MasterList -->
+      <ConversationListPane
+        v-if="layout.currentCategory === 'chat'"
+        :collapsed="false"
+      />
       <MasterList
         v-else
         :items="layout.currentMasterItems"
@@ -86,11 +88,7 @@ function onSelect(itemId: string) {
   flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
-}
-
-.master-col__placeholder {
-  padding: var(--aipet-space-4);
-  color: var(--aipet-color-text-3);
-  font-size: var(--aipet-font-size-sm);
+  display: flex;
+  flex-direction: column;
 }
 </style>
