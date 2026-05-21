@@ -1,18 +1,39 @@
 <script setup lang="ts">
-// Persona tab：M1 占位（issue #9） + #21 接入「显示当前 active 而非硬编码 momo」+
-// 监听 persona:activated 事件跨窗口刷新（onboarding 窗 / 设置面板自身切换都会触发）。
-// 工坊按钮灰显，等 M2 启用（H.2/H.3 列表 / 编辑 / 切换 UI）。
+// Persona panel（#33 phase B 从 src/views/settings/panels/PersonaPanel.vue 迁入）。
+//
+// 改动 vs 原 PersonaPanel.vue：
+// - 接 `PanelContext` props（dockview-vue 6.x 嵌套 props 模式；MVP 不消费 params）
+// - 新增 isPanelActive ref + `subscribeContextKeys(['activePanel'])` 监听 workspace activePanel
+//   → 传给 `<VrmAvatarExporter :is-active />` 让 VRM RAF 在切走时 pause（替代 inject('settings-active-tab')）
+// - settings 独立窗 fallback：useWorkspaceManagerOptional 返 null 时 isPanelActive 永远 true
+//   （独立窗内此 panel 即 active；Phase E 删独立窗后可改 useWorkspaceManager 严格版）
+//
+// 业务逻辑（getActivePersona + listen persona:activated）零改。
+
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElButton, ElDescriptions, ElDescriptionsItem, ElTag } from 'element-plus'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getActivePersona } from '@/services/persona'
 import type { PersonaSummary } from '@/types/persona'
 import VrmAvatarExporter from '@/components/settings/VrmAvatarExporter.vue'
+import { useWorkspaceManagerOptional } from '@/composables/useWorkspaceManager'
+import type { PanelContext } from '@/lib/workspace/types'
+
+// dockview 嵌套 props：PanelContext<MyParams>（本 panel 无业务 params）
+// settings 独立窗 mount 时 params 不存在；用 ? 守护
+defineProps<{ params?: PanelContext }>()
+
+const mgr = useWorkspaceManagerOptional()
 
 const persona = ref<PersonaSummary | null>(null)
 const errorMsg = ref<string | null>(null)
 const loading = ref(true)
 let unlistenActivated: UnlistenFn | null = null
+
+// === panel active 监控 ===
+// mgr 为 null = settings 独立窗内，永远视为 active（panel 唯一可见）
+const isPanelActive = ref(mgr === null ? true : mgr.getActivePanel() === 'SettingsPersona')
+let unsubActive: (() => void) | null = null
 
 async function refresh() {
   try {
@@ -26,22 +47,26 @@ async function refresh() {
 onMounted(async () => {
   await refresh()
   loading.value = false
-  // 跨窗口监听：onboarding 窗 / 后续工坊 UI 切人格后,本面板自动刷新。
-  // ElTabPane 是 v-show（不销毁），首次 mount 后用户切到其他 tab 再回来不会重 onMounted；
-  // 没有 listener 的话 active 显示会停在首次拉取的值。
   try {
     unlistenActivated = await listen('persona:activated', () => {
       void refresh()
     })
   } catch (e) {
-    // dev 浏览器模式下 listen 抛错；不阻断面板基本渲染。
-    console.warn('[PersonaPanel] listen persona:activated failed:', e)
+    console.warn('[SettingsPersonaPanel] listen persona:activated failed:', e)
+  }
+
+  if (mgr) {
+    unsubActive = mgr.subscribeContextKeys(['activePanel'], () => {
+      isPanelActive.value = mgr.getActivePanel() === 'SettingsPersona'
+    })
   }
 })
 
 onBeforeUnmount(() => {
   unlistenActivated?.()
   unlistenActivated = null
+  unsubActive?.()
+  unsubActive = null
 })
 </script>
 
@@ -75,8 +100,8 @@ onBeforeUnmount(() => {
       <span class="panel__hint">工坊将在 M2 上线</span>
     </div>
 
-    <!-- #26 VRM 头像导出：放在 persona 信息下方，share persona 维度的语义归属 -->
-    <VrmAvatarExporter :persona-id="persona?.id ?? null" />
+    <!-- #26 VRM 头像导出：is-active 由 workspace activePanel contextKey 驱动（替代 inject 链） -->
+    <VrmAvatarExporter :persona-id="persona?.id ?? null" :is-active="isPanelActive" />
   </section>
 </template>
 

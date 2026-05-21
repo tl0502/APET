@@ -22,3 +22,14 @@ export function useWorkspaceManager(): WorkspaceManager {
   }
   return mgr
 }
+
+/**
+ * 可选注入版本：未挂 workspace 时返 null（不抛错）。
+ *
+ * 用例：业务 panel SFC（SettingsPersonaPanel 等）同时被 settings 独立窗（无 workspace）
+ * 和 workspace（有 workspace）使用。Phase E 删独立窗后此 API 可去掉，让 panel 一律走
+ * useWorkspaceManager 严格版。
+ */
+export function useWorkspaceManagerOptional(): WorkspaceManager | null {
+  return inject(WORKSPACE_MANAGER_KEY, null)
+}

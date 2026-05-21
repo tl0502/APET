@@ -10,11 +10,12 @@ import { ElIcon, ElTabPane, ElTabs } from 'element-plus'
 import { Brush, Connection, EditPen, InfoFilled, User } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
 import { hideSettings } from '@/services/window'
-import ThemePanel from './panels/ThemePanel.vue'
-import ProviderPanel from './panels/ProviderPanel.vue'
-import PersonaPanel from './panels/PersonaPanel.vue'
-import NicknamePanel from './panels/NicknamePanel.vue'
-import AboutPanel from './panels/AboutPanel.vue'
+// #33 phase B：panel 已迁入 @/panels/settings/（与 workspace 共用源）；独立窗 SettingsApp 继续承载到 Phase E 删除
+import ThemePanel from '@/panels/settings/SettingsThemePanel.vue'
+import ProviderPanel from '@/panels/settings/SettingsProviderPanel.vue'
+import PersonaPanel from '@/panels/settings/SettingsPersonaPanel.vue'
+import NicknamePanel from '@/panels/settings/SettingsNicknamePanel.vue'
+import AboutPanel from '@/panels/settings/SettingsAboutPanel.vue'
 
 const activeTab = ref<'theme' | 'provider' | 'persona' | 'nickname' | 'about'>('theme')
 

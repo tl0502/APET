@@ -15,13 +15,26 @@
 import { onBeforeUnmount, onMounted, provide, ref } from 'vue'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { listen } from '@tauri-apps/api/event'
-import { ChatLineRound, Files, Setting } from '@element-plus/icons-vue'
+import {
+  Brush,
+  ChatLineRound,
+  Connection,
+  EditPen,
+  InfoFilled,
+  User,
+} from '@element-plus/icons-vue'
 
 import AppShell from '@/components/layouts/AppShell.vue'
 import WorkspaceShell from './WorkspaceShell.vue'
 import ActivityBar from './ActivityBar.vue'
 import CommandPalette from './CommandPalette.vue'
 import PlaceholderPanel from './panels/PlaceholderPanel.vue'
+// #33 phase B：5 settings panel 迁入
+import SettingsThemePanel from '@/panels/settings/SettingsThemePanel.vue'
+import SettingsProviderPanel from '@/panels/settings/SettingsProviderPanel.vue'
+import SettingsPersonaPanel from '@/panels/settings/SettingsPersonaPanel.vue'
+import SettingsNicknamePanel from '@/panels/settings/SettingsNicknamePanel.vue'
+import SettingsAboutPanel from '@/panels/settings/SettingsAboutPanel.vue'
 
 import { WORKSPACE_MANAGER_KEY } from '@/composables/useWorkspaceManager'
 import { WorkspaceManager } from '@/lib/workspace/manager'
@@ -42,34 +55,62 @@ provide(WORKSPACE_MANAGER_KEY, mgr)
 const ready = ref(false)
 const unlistenFns: UnlistenFn[] = []
 
-// === Panel descriptors（M2 阶段 3 个占位；P2 #33 替换为真业务 panel）===
+// === Panel descriptors（#33 phase B：3 占位 → 1 chat 占位 + 5 settings 真业务 panel）===
+// Chat 占位等 phase D 替换为 ChatHubPanel；Library 占位先删；Settings 5 panel 已迁入 @/panels/settings/。
 const PANELS: PanelDescriptor[] = [
   {
     id: 'WorkspaceChat',
     title: '对话',
     component: PlaceholderPanel,
     category: 'chat',
-    mountStrategy: 'always', // 对话场景保 form state；spike #32 验证 dockview 'always' renderer = 内置 keep-alive
+    mountStrategy: 'always',
     defaultLocation: 'main',
     icon: ChatLineRound,
   },
   {
-    id: 'WorkspaceLibrary',
-    title: '资源库',
-    component: PlaceholderPanel,
-    category: 'creation',
-    mountStrategy: 'lazy',
-    defaultLocation: 'main.right',
-    icon: Files,
-  },
-  {
-    id: 'WorkspaceSettings',
-    title: '设置',
-    component: PlaceholderPanel,
+    id: 'SettingsTheme',
+    title: '外观',
+    component: SettingsThemePanel,
     category: 'config',
     mountStrategy: 'lazy',
     defaultLocation: 'main.right',
-    icon: Setting,
+    icon: Brush,
+  },
+  {
+    id: 'SettingsProvider',
+    title: 'LLM Provider',
+    component: SettingsProviderPanel,
+    category: 'config',
+    mountStrategy: 'lazy',
+    defaultLocation: 'main.right',
+    icon: Connection,
+  },
+  {
+    id: 'SettingsPersona',
+    title: '人格',
+    component: SettingsPersonaPanel,
+    category: 'creation',
+    mountStrategy: 'always', // VRM RAF 切走 pauseLoop 而非 unmount/重 init WebGL
+    defaultLocation: 'main.right',
+    icon: User,
+  },
+  {
+    id: 'SettingsNickname',
+    title: '昵称',
+    component: SettingsNicknamePanel,
+    category: 'config',
+    mountStrategy: 'lazy',
+    defaultLocation: 'main.right',
+    icon: EditPen,
+  },
+  {
+    id: 'SettingsAbout',
+    title: '关于',
+    component: SettingsAboutPanel,
+    category: 'config',
+    mountStrategy: 'lazy',
+    defaultLocation: 'main.right',
+    icon: InfoFilled,
   },
 ]
 
@@ -81,18 +122,18 @@ function registerDefaults() {
       console.warn('[WorkspaceApp] registerPanel failed:', desc.id, e)
     }
   }
-  // 5 命令（Phase D 命令面板会消费这些；Phase C 阶段 ActivityBar 也已能 revealPanel 复用同样语义）
-  for (const id of ['WorkspaceChat', 'WorkspaceLibrary', 'WorkspaceSettings']) {
+  // panel.reveal.* 命令：每个 PANELS 项一条，命令面板 fuzzy 匹配可达
+  for (const desc of PANELS) {
     try {
       mgr.registerCommand({
-        id: `panel.reveal.${id}`,
-        title: `打开 ${PANELS.find((p) => p.id === id)?.title ?? id}`,
+        id: `panel.reveal.${desc.id}`,
+        title: `打开 ${typeof desc.title === 'string' ? desc.title : desc.id}`,
         handler: () => {
-          mgr.revealPanel(id)
+          mgr.revealPanel(desc.id)
         },
       })
     } catch (e) {
-      console.warn('[WorkspaceApp] registerCommand failed:', id, e)
+      console.warn('[WorkspaceApp] registerCommand failed:', desc.id, e)
     }
   }
   try {
@@ -134,11 +175,10 @@ async function restoreLayout() {
   // 成功还原过任意 panel（无论 id 是否在当前 PANELS 列表里），跳过 default 即可。
   const restored = mgr.listOpenPanels().length > 0
   if (!restored) {
-    // default：开 3 个 panel；defaultLocation 决定位置（main / main.right / main.right）
+    // default：开 chat 占位 + Theme 作为右侧首屏（其它 settings panel 走 ActivityBar / 命令面板按需）
     try {
       mgr.openPanel('WorkspaceChat', { tone: 'chat' })
-      mgr.openPanel('WorkspaceLibrary', { tone: 'library' })
-      mgr.openPanel('WorkspaceSettings', { tone: 'settings' })
+      mgr.openPanel('SettingsTheme')
     } catch (e) {
       console.warn('[WorkspaceApp] default openPanel failed:', e)
     }

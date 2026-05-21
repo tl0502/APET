@@ -8,20 +8,11 @@
 // - 截图按钮：复用 captureSnapshot（保留当前 expression / 镜头状态）
 // - VRM 加载在 onMounted 自动起；持续到 unmount 才 destroy（便利于多次调参导出）
 //
-// B1 修复：settings 是 hide-not-close + ElTabPane v-show → exporter 一旦 mount 永远跑 RAF。
-// 通过 inject 父级 activeTab + document.visibilityState 联合判断：tab 切走 / 窗口隐藏时
-// pauseLoop，回来时 resumeLoop。VRM 资源保留不重 load（切换体验流畅）。
-//
-// 设计取舍：
-// - 表情用 VRM 标准 emotion 6 选 1（VRM 1.0 spec）；模型未烘焙某些表情时 setValue 静默
-//   no-op，UI 不报错（用户切换试用；首次启动 console 列出可用 expression 名方便排查）
-// - zoom 滑块 0.5-2.0：覆盖头部特写到半身全景；步长 0.05 给足够精度
-// - "上下" 是 lookAt 中心垂直平移（camera + target 同时偏移）, 不是相机俯仰角；UI 文案
-//   仅"上下"避免误导（issue agent 提示：camera + target 同 delta = 平移不是 pitch）
-// - preserveDrawingBuffer:true：截图可靠（同 v1）
-// - H1 修复：renderer 有 setPixelRatio(devicePixelRatio)，setSize(512,512) 在 HiDPI 实际产生
-//   512*dpr 的 PNG（爆 5MB）。截图前临时 setPixelRatio(1)，截图后恢复
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+// B1 修复（#33 phase B 重构）：tab 切走 / 窗口隐藏时停 RAF。
+// 改造前：inject 父级 activeTab ref，fallback 给 'persona' default 防独立 mount 时崩。
+// 改造后：父组件用 props.isActive 透传（dockview activePanel 驱动 / settings 独立窗永远 true）。
+// 默认 `?? true` 让组件独立测试 mount 时 RAF 仍正常跑。
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ElButton,
   ElIcon,
@@ -36,8 +27,12 @@ import { VRMRuntime } from '@/services/vrm'
 
 interface Props {
   personaId: string | null
+  /** 父容器是否激活（workspace activePanel === 'SettingsPersona' 或独立窗内 true）。
+   *  默认 true：让组件独立测试 mount 时 RAF 正常跑。
+   *  false → pauseLoop（保留 VRM 资源不卸载）；true → resumeLoop。 */
+  isActive?: boolean
 }
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { isActive: true })
 
 const toast = useToast()
 
@@ -66,15 +61,13 @@ const emotion = ref<EmotionName>('neutral')
 const zoom = ref(1) // 0.5 拉近 ~ 2 拉远
 const panY = ref(0) // -0.3 下移 ~ 0.3 上移（lookAt 中心垂直平移）
 
-// B1 修复：tab 切走 / 窗口隐藏时停 RAF
-// inject 拿父级 activeTab；fallback 给 default 防独立测试 mount 时崩
-const activeTabRef = inject<Ref<string>>('settings-active-tab', ref('persona'))
-const isTabActive = computed(() => activeTabRef.value === 'persona')
+// B1（#33 phase B）：父组件用 props.isActive 控制 RAF pause/resume；
+// document.visibilityState 仍内部监听（窗口最小化时也 pause）。
 const isPageVisible = ref(!document.hidden)
 function onVisChange() {
   isPageVisible.value = !document.hidden
 }
-const shouldRun = computed(() => isTabActive.value && isPageVisible.value)
+const shouldRun = computed(() => (props.isActive ?? true) && isPageVisible.value)
 
 let runtime: VRMRuntime | null = null
 
