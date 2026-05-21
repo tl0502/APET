@@ -1,0 +1,51 @@
+/* AIPET 项目 chrome 按钮通用样式（#36 chrome 适配 抽取）。
+   消费方：WorkspaceApp.vue 三按钮 + ChatThreadPane content-header__close
+   引入方：workspace/main.ts + chat/main.ts + 未来需要自绘 chrome 的窗
+
+   .aipet-chrome-btn  - Win11 风格按钮基础（46×32 / Segoe Fluent Icons font）
+   .aipet-chrome-btn--min / --max - 普通 hover 浅灰
+   .aipet-chrome-btn--close      - hover 红（#c42b1c / Win11 标准）
+*/
+
+.aipet-chrome-btn {
+  width: 46px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--aipet-color-text-2);
+  font-size: 13px;
+  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', system-ui, sans-serif;
+  cursor: pointer;
+  padding: 0;
+  user-select: none;
+  transition:
+    background-color var(--aipet-duration-fast) var(--aipet-ease-standard),
+    color var(--aipet-duration-fast) var(--aipet-ease-standard);
+}
+
+.aipet-chrome-btn:hover {
+  background: color-mix(in srgb, var(--aipet-color-text-1) 8%, transparent);
+  color: var(--aipet-color-text-1);
+}
+
+.aipet-chrome-btn:active {
+  background: color-mix(in srgb, var(--aipet-color-text-1) 14%, transparent);
+}
+
+.aipet-chrome-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--aipet-ring-focus);
+}
+
+.aipet-chrome-btn--close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.aipet-chrome-btn--close:active {
+  background: #a01e15;
+  color: #ffffff;
+}

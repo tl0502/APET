@@ -1,0 +1,67 @@
+/* AIPET 项目 panel 通用样式（#36 chrome 适配 抽取）。
+   消费方：src/panels/settings/*.vue + src/panels/tasks/*.vue（共 8 个 panel）
+   引入方：src/views/workspace/main.ts（panel 仅在 workspace 内渲染）
+
+   各 panel SFC scoped css 删 .panel / .panel__title / .panel__subtitle /
+   .panel__hint / .panel__section / .panel__error / .panel__actions；
+   保留 panel-specific 类（如 .panel__dev、.panel__provider-row）。
+
+   .panel__title 用 sticky + backdrop blur 实现"列顶部固定标题"，与
+   chat content-header 同语言（blur(12) saturate(180)）。
+   margin 负值把 sticky title 拉出 detail-col__panel 16px 24px 内边距。
+*/
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipet-space-4);
+}
+
+.panel__title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: calc(-1 * var(--aipet-space-5)) calc(-1 * var(--aipet-space-6)) 0;
+  padding: var(--aipet-space-3) var(--aipet-space-6);
+  background: var(--aipet-color-surface-blur);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border-bottom: 1px solid var(--aipet-color-border-faint);
+  font-size: var(--aipet-font-size-lg);
+  font-weight: 600;
+  color: var(--aipet-color-text-1);
+  line-height: 1.4;
+  user-select: none;
+}
+
+.panel__subtitle {
+  margin: 0;
+  font-size: var(--aipet-font-size-base);
+  font-weight: 600;
+  color: var(--aipet-color-text-2);
+}
+
+.panel__hint {
+  margin: 0;
+  color: var(--aipet-color-text-3);
+  font-size: var(--aipet-font-size-sm);
+  line-height: var(--aipet-line-height-base);
+}
+
+.panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipet-space-3);
+}
+
+.panel__error {
+  color: var(--aipet-color-danger);
+  font-size: var(--aipet-font-size-sm);
+}
+
+.panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--aipet-space-3);
+  margin-top: var(--aipet-space-2);
+}

@@ -17,6 +17,8 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import '@/styles/tokens.css'
 import '@/styles/element-overrides.css'
 import '@/styles/components.css'
+import '@/styles/panel.css'
+import '@/styles/buttons.css'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 
 import WorkspaceApp from './WorkspaceApp.vue'
