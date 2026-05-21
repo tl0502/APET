@@ -27,22 +27,6 @@
         "center": true
       },
       {
-        "label": "settings",
-        "title": "设置 — AI 桌宠",
-        "url": "settings.html",
-        "width": 800,
-        "height": 600,
-        "minWidth": 640,
-        "minHeight": 480,
-        "transparent": false,
-        "decorations": false,
-        "alwaysOnTop": false,
-        "skipTaskbar": false,
-        "resizable": true,
-        "visible": false,
-        "center": true
-      },
-      {
         "label": "chat",
         "title": "对话 — AI 桌宠",
         "url": "chat.html",
@@ -72,22 +56,6 @@
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "resizable": false,
-        "visible": false,
-        "center": true
-      },
-      {
-        "label": "tasks",
-        "title": "任务 — AI 桌宠",
-        "url": "tasks.html",
-        "width": 800,
-        "height": 600,
-        "minWidth": 640,
-        "minHeight": 480,
-        "transparent": false,
-        "decorations": false,
-        "alwaysOnTop": false,
-        "skipTaskbar": false,
-        "resizable": true,
         "visible": false,
         "center": true
       },

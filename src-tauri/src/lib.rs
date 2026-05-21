@@ -8,7 +8,7 @@ mod services;
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
     emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL,
-    POMODORO_WINDOW_LABEL, SETTINGS_WINDOW_LABEL, TASKS_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
+    POMODORO_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
 };
 use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer};
 use tauri::Manager;
@@ -19,12 +19,11 @@ const DB_URL: &str = "sqlite:aipet.db";
 
 /// CloseRequested 时仅 hide 不退出的窗口集合（review P1 修复 F-5.2-be：从 `||` 链改 slice
 /// 集中维护，新增窗口只需在此添加一项，避免漏改条件分支）。
+/// #33 phase E：删 SETTINGS_WINDOW_LABEL / TASKS_WINDOW_LABEL（独立窗已删，迁入 workspace）。
 /// pomodoro 不在此列：它有独立 hide + OS 通知 + KV 标记的复合逻辑（见 CloseRequested 分支）。
 const HIDE_ON_CLOSE_LABELS: &[&str] = &[
     PET_WINDOW_LABEL,
-    SETTINGS_WINDOW_LABEL,
     CHAT_WINDOW_LABEL,
-    TASKS_WINDOW_LABEL,
     WORKSPACE_WINDOW_LABEL,
 ];
 
@@ -300,8 +299,9 @@ pub fn run() {
         // 唯一退出路径 = 托盘"退出"菜单。理由：桌宠是常驻应用，误触关闭就杀进程会损害预期。
         // tauri.conf.json 已 decorations:false，故无标题栏 X 按钮；只走 Alt+F4 / 系统命令路径。
         //
-        // #9 settings 窗口同款语义：关闭仅 hide，保留 webview 与 tab 状态供下次唤起；
-        // 重新打开走托盘菜单 → settings_show 走 show + set_focus（window_actions::show_settings）。
+        // #14/#28/#35 chat / pomodoro / workspace 窗口同款语义：关闭仅 hide，保留 webview
+        // 与状态供下次唤起；重新打开走托盘菜单 / 全局快捷键 / brand bar 导航（#33 phase E：
+        // settings/tasks 独立窗已删，5+3 panel 迁入 workspace）。
         //
         // #10 pet 窗口 Moved 事件：高频触发（每像素一次），通过 SaveDebouncer 200ms 节流
         // 防抖落 DB；不消费 pointerup（startDragging 系统级拖动 OS 接管 mouse，pointerup
@@ -439,9 +439,7 @@ pub fn run() {
             // #30 follow-up I：Rust 端磁吸 solver 同步入口（前端 commit / detach / persistence load
             // 后 invoke 一次全量推 constraints + insets，Moved 事件由 Rust 端独立驱动 BFS solver）
             services::snap::snap_sync_constraints,
-            // #9 window 控制（settings show/hide）+ #10 pet 位置 get/save + #14 chat show/hide/toggle
-            commands::window::settings_show,
-            commands::window::settings_hide,
+            // #10 pet 位置 get/save + #14 chat show/hide/toggle（#33 phase E: 删 settings_show/hide）
             commands::window::get_pet_position,
             commands::window::save_pet_position,
             // #24 视角档位（半身/全身）get/set
@@ -506,10 +504,7 @@ pub fn run() {
             commands::reminder::reminder_delete,
             commands::reminder::reminder_snooze,
             commands::reminder::reminder_complete,
-            // #22 Tasks 独立窗口 show/hide/toggle（与 settings 同款"关 = hide"）
-            commands::window::tasks_show,
-            commands::window::tasks_hide,
-            commands::window::tasks_toggle,
+            // #33 phase E：删 tasks 独立窗 show/hide/toggle（迁入 workspace）
             // #28 follow-up 番茄独立窗 show/hide/toggle（紧凑 Pomotroid 型；phase-driven AOT
             // 由前端 PomodoroApp.vue listen pomodoro:state_changed 调 setAlwaysOnTop）
             commands::window::pomodoro_show,

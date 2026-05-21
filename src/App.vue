@@ -23,7 +23,7 @@ import {
   PET_VIEW_CHANGED_EVENT,
   PET_VIEW_SIZES,
   getPetViewPreset,
-  showSettings,
+  showWorkspace,
   toggleChat,
   toggleWorkspace,
 } from '@/services/window'
@@ -135,8 +135,8 @@ onMounted(async () => {
   }
 
   // #21 收尾 #2：检查启动期 chat 快捷键注册是否失败。失败时给一个 10s warn toast
-  // + "去设置改键" 行动按钮（用户点 → 打开 settings 面板；未来 #14 设置面板上线时
-  // 自动跳到"快捷键"tab，M1 阶段先打开 settings 窗，让用户手动定位即可）。
+  // + "打开工作台" 行动按钮（#33 phase E：settings 独立窗已删，迁入 workspace brand bar
+  // 导航；用户点 → 打开 workspace 自行切到设置类别 → 快捷键面板 M3+ 实装时直接定位）。
   try {
     const failed = await getChatRegisterStatus()
     if (failed) {
@@ -145,9 +145,9 @@ onMounted(async () => {
         {
           duration: 10000,
           action: {
-            text: '打开设置',
+            text: '打开工作台',
             handler: () => {
-              void showSettings()
+              void showWorkspace()
             },
           },
         },

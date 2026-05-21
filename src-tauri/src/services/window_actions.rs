@@ -17,23 +17,20 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::services::consent_gate::ConsentGate;
 
 pub const PET_WINDOW_LABEL: &str = "pet";
-/// 设置窗口 label（与 tauri.conf.json 静态注册一致；issue #9）。
-pub const SETTINGS_WINDOW_LABEL: &str = "settings";
 /// 对话窗口 label（与 tauri.conf.json 静态注册一致；issue #14）。
 pub const CHAT_WINDOW_LABEL: &str = "chat";
 /// 灵魂宣誓窗口 label（与 tauri.conf.json 静态注册一致；issue #16）。
 /// 启动期 visible:false；setup hook 调 consent::check_version 后决定是否 show。
 pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
-/// 任务三件套窗口 label（与 tauri.conf.json 静态注册一致；issue #22）。
-/// 启动期 visible:false；由托盘菜单"任务"/IPC tasks_show 唤起；与 settings 同款"关 = hide"。
-pub const TASKS_WINDOW_LABEL: &str = "tasks";
 /// 番茄独立窗口 label（与 tauri.conf.json 静态注册一致；#28 follow-up）。
-/// 启动期 visible:false；由托盘菜单"番茄..."/tasks tab 按钮 / pomodoro_start 自动唤起。
+/// 启动期 visible:false；由托盘菜单"番茄..."/ TasksPomodoroPanel "独立窗口 ↗" 按钮唤起。
+/// #33 phase E：删 pomodoro_start 自动 show，浮窗仅手动入口。
 /// alwaysOnTop 由前端 PomodoroApp.vue 按 phase 动态切换（FOCUS/PAUSED_F 置顶；其余不置顶）。
 pub const POMODORO_WINDOW_LABEL: &str = "pomodoro";
 /// Workspace 主窗 label（与 tauri.conf.json 静态注册一致；#35 ADR-021 P1）。
-/// 启动期 visible:false；由托盘菜单"工作台..."/ 左键双击 / 全局快捷键 Ctrl+Alt+W 三路唤起。
-/// 关闭语义同 settings/tasks/chat：拦截 CloseRequested → hide（保留 webview + layout）。
+/// 启动期 visible:false；由托盘菜单"工作台..." / 左键双击 / 全局快捷键 Ctrl+Alt+W 三路唤起。
+/// 关闭语义同 chat：拦截 CloseRequested → hide（保留 webview + 三栏布局 + master 宽度）。
+/// #33 phase E：settings/tasks 独立窗已删（panel 迁入 workspace），剩 pet/chat/workspace/pomodoro 四窗。
 pub const WORKSPACE_WINDOW_LABEL: &str = "workspace";
 
 /// #30 follow-up G：跨 webview 广播窗口 visibility 变化的事件名。
@@ -99,27 +96,6 @@ pub(crate) fn toggle_pet(app: &AppHandle) {
     }
 }
 
-/// 显示设置窗口（issue #9）。窗口启动期 `visible:false` 静态注册，由托盘菜单 / IPC 唤起。
-pub(crate) fn show_settings(app: &AppHandle) {
-    if !is_gate_open(app) {
-        show_onboarding(app);
-        return;
-    }
-    if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
-        let _ = window.show();
-        let _ = window.set_focus();
-        emit_visibility_changed(app, SETTINGS_WINDOW_LABEL, true);
-    }
-}
-
-/// 隐藏设置窗口（不销毁，保留 tab 状态供下次唤起；issue #9 验收）。
-pub(crate) fn hide_settings(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
-        let _ = window.hide();
-        emit_visibility_changed(app, SETTINGS_WINDOW_LABEL, false);
-    }
-}
-
 /// 显示对话窗口（issue #14）。窗口启动期 `visible:false` 静态注册，由全局快捷键 / IPC 唤起。
 pub(crate) fn show_chat(app: &AppHandle) {
     if !is_gate_open(app) {
@@ -180,48 +156,6 @@ pub(crate) fn hide_onboarding(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
         let _ = window.hide();
         emit_visibility_changed(app, ONBOARDING_WINDOW_LABEL, false);
-    }
-}
-
-/// 显示任务窗口（#22 TaskService）。`visible:false` 静态注册，由托盘"任务"/IPC tasks_show 唤起。
-pub(crate) fn show_tasks(app: &AppHandle) {
-    if !is_gate_open(app) {
-        show_onboarding(app);
-        return;
-    }
-    if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
-        let _ = window.show();
-        let _ = window.set_focus();
-        emit_visibility_changed(app, TASKS_WINDOW_LABEL, true);
-    }
-}
-
-/// 隐藏任务窗口（不销毁，保留 tab/列表状态供下次唤起，同 settings 模式）。
-pub(crate) fn hide_tasks(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
-        let _ = window.hide();
-        emit_visibility_changed(app, TASKS_WINDOW_LABEL, false);
-    }
-}
-
-/// 切换任务窗口可见性（托盘菜单一键开/关；与 chat_toggle 同款）。
-pub(crate) fn toggle_tasks(app: &AppHandle) {
-    if !is_gate_open(app) {
-        show_onboarding(app);
-        return;
-    }
-    if let Some(window) = app.get_webview_window(TASKS_WINDOW_LABEL) {
-        match window.is_visible() {
-            Ok(true) => {
-                let _ = window.hide();
-                emit_visibility_changed(app, TASKS_WINDOW_LABEL, false);
-            }
-            _ => {
-                let _ = window.show();
-                let _ = window.set_focus();
-                emit_visibility_changed(app, TASKS_WINDOW_LABEL, true);
-            }
-        }
     }
 }
 

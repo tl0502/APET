@@ -1,16 +1,13 @@
-// WindowService IPC（#9 settings + #10 pet 位置 + #14 chat 显隐）。M1 阶段前端不主动调
-// get/save_pet_position（后端 Moved 自动管）；wrapper 给未来 M3 设置面板"重置位置 / 看
-// 当前位置"复用。
+// WindowService IPC（#10 pet 位置 + #14 chat 显隐 + #28 pomodoro + #35 workspace）。
+//
+// #33 ADR-021 P2 phase E：settings/tasks 独立窗口已删除（5+3 panel 迁入 workspace
+// brand bar 导航），对应 showSettings/hideSettings/showTasks/hideTasks/toggleTasks
+// wrapper 一并移除 — 调用方应改为 toggleWorkspace + workspaceLayout.setCategory()。
+//
+// M1 阶段前端不主动调 get/save_pet_position（后端 Moved 自动管）；wrapper 给未来
+// M3 设置面板"重置位置 / 看当前位置"复用。
 import { invoke } from './ipc'
 import type { LastPosition } from '@/types/window'
-
-export function showSettings(): Promise<void> {
-  return invoke<void>('settings_show')
-}
-
-export function hideSettings(): Promise<void> {
-  return invoke<void>('settings_hide')
-}
 
 export function getPetPosition(): Promise<LastPosition | null> {
   return invoke<LastPosition | null>('get_pet_position')
@@ -35,24 +32,12 @@ export function toggleChat(): Promise<void> {
   return invoke<void>('chat_toggle')
 }
 
-/** #22 任务窗口（提醒/番茄/待办）show/hide/toggle。与 settings 同款"关 = hide"。 */
-export function showTasks(): Promise<void> {
-  return invoke<void>('tasks_show')
-}
-
-export function hideTasks(): Promise<void> {
-  return invoke<void>('tasks_hide')
-}
-
-export function toggleTasks(): Promise<void> {
-  return invoke<void>('tasks_toggle')
-}
-
 /**
  * #28 follow-up 番茄独立窗口（Pomotroid 型，紧凑 360×480）。
- * 与 tasks 同款"关 = hide"（首次关闭时后端 emit `pomodoro:hide_hint` 提示用户后台仍在计时）。
+ * 与 chat 同款"关 = hide"（首次关闭时后端 emit `pomodoro:hide_hint` 提示用户后台仍在计时）。
  *
- * 入口：托盘菜单「番茄...」/ tasks tab「在独立窗口打开 ↗」按钮 / pomodoro_start 后端自动 show。
+ * 入口：托盘菜单「番茄...」/ TasksPomodoroPanel "在独立窗口打开 ↗" 按钮（#33 phase E：
+ * pomodoro_start 后端不再自动 show 浮窗，浮窗仅手动入口）。
  * 位置记忆：setup 阶段还原到 KV `window:pomodoro:last_position`（visible:false 下 set_position 防闪动）。
  * alwaysOnTop：tauri.conf.json 默认 false；PomodoroApp.vue listen pomodoro:state_changed 按 phase 切换。
  */

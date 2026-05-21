@@ -1,32 +1,24 @@
 // 窗口控制 IPC commands
 //
-// 当前窗口语义：
-// - settings show/hide（#9）
+// 当前窗口语义（#33 ADR-021 P2 phase E 精简后）：
 // - pet 位置 get/save（#10；与后端 Moved 自动保存路径独立，前端可主动覆写）
+// - pet view preset get/set（#24）
 // - chat show/hide/toggle（#14；接 #11 全局快捷键 + 关闭按钮 / ESC）
+// - pomodoro show/hide/toggle（#28 follow-up；浮窗仅手动入口）
+// - workspace show/hide/toggle（#35 ADR-021 P1；settings/tasks 已并入 workspace）
 // - onboarding_complete（#16；"我懂了"路径切窗 + emit step-done 给 #17 状态机用）
+//
+// settings/tasks 独立窗 IPC 已删除（#33 phase E）：5 panel + 3 panel 迁入 workspace
+// brand bar 导航；如有遗留前端调用，typecheck 应在 services/window.ts 端先报错。
 
 use crate::services::consent_gate::ConsentGate;
 use crate::services::onboarding;
 use crate::services::window_actions::{
-    hide_chat, hide_onboarding, hide_pomodoro, hide_settings, hide_tasks, hide_workspace,
-    show_chat, show_pet, show_pomodoro, show_settings, show_tasks, show_workspace, toggle_chat,
-    toggle_pomodoro, toggle_tasks, toggle_workspace,
+    hide_chat, hide_onboarding, hide_pomodoro, hide_workspace, show_chat, show_pet, show_pomodoro,
+    show_workspace, toggle_chat, toggle_pomodoro, toggle_workspace,
 };
 use crate::services::window_state::{self, LastPosition};
 use tauri::{AppHandle, Emitter, Manager};
-
-#[tauri::command]
-pub async fn settings_show(app: AppHandle) -> Result<(), String> {
-    show_settings(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn settings_hide(app: AppHandle) -> Result<(), String> {
-    hide_settings(&app);
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn get_pet_position(app: AppHandle) -> Result<Option<LastPosition>, String> {
@@ -77,25 +69,6 @@ pub async fn chat_toggle(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// #22 任务窗口（提醒/番茄/待办三件套）show/hide/toggle。与 settings 同款"关 = hide"。
-#[tauri::command]
-pub async fn tasks_show(app: AppHandle) -> Result<(), String> {
-    show_tasks(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn tasks_hide(app: AppHandle) -> Result<(), String> {
-    hide_tasks(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn tasks_toggle(app: AppHandle) -> Result<(), String> {
-    toggle_tasks(&app);
-    Ok(())
-}
-
 /// #28 follow-up 番茄独立窗口 show/hide/toggle（紧凑 Pomotroid 型，phase-driven AOT）。
 /// AOT 切换不在此处——前端 PomodoroApp.vue listen pomodoro:state_changed 调 setAlwaysOnTop。
 #[tauri::command]
@@ -116,7 +89,7 @@ pub async fn pomodoro_toggle(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// #35 ADR-021 P1 workspace 主窗 show/hide/toggle。同 settings/tasks "关 = hide"。
+/// #35 ADR-021 P1 workspace 主窗 show/hide/toggle。同 chat / pomodoro "关 = hide"。
 /// 由托盘菜单"工作台..."/ 左键双击 / 全局快捷键 Ctrl+Alt+W 三路唤起；前端
 /// `services/window.ts` wrapper 调用同名 wrapper。
 #[tauri::command]
@@ -147,7 +120,7 @@ pub async fn workspace_toggle(app: AppHandle) -> Result<(), String> {
 /// 后端做切窗而不让前端自行切的理由：
 /// - 切窗涉及两个不同窗口（onboarding hide + pet show），前端跨窗口编排需要绕一圈
 ///   getAll() / find by label；后端 AppHandle 直接拿 webview window 更简洁
-/// - 与 settings_show / chat_show 等同款风格（窗口可见性统一从 Rust 侧管控）
+/// - 与 chat_show / workspace_show 等同款风格（窗口可见性统一从 Rust 侧管控）
 /// - 事件 emit 也需要 AppHandle.emit；前端在 onboarding webview 里 emit 只能发到本窗，
 ///   pet webview 收不到——后端 emit 是全局广播，所有 webview 都能监听
 #[tauri::command]
