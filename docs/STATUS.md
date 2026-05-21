@@ -19,11 +19,11 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（6/7 落地；待办 + 物理交互待办）
-- **当前 session 在做**：[#35](https://github.com/tl0502/APET/issues/35) ADR-021 P1 Workspace Shell + phase F 深度审查 12 项 P0/P1 修复 `795769a`（60 vitest pass / manager.ts 100% 覆盖 / typecheck / lint / build / cargo check 全绿）
-- **下一步**：#35 关闭 → [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
+- **当前 milestone**：M2 W3 进行中（7/7 落地；待办 + 物理交互待办）
+- **当前 session 在做**：[#33](https://github.com/tl0502/APET/issues/33) ADR-021 P2 Workspace 三栏 Desktop App Shell 重做 + 5+3 panel 迁入 + chat 主床/磁吸双形态 — A→F 共 8 commit `543213d→b88641e`（288 vitest pass / typecheck / lint / build / cargo check 全绿）
+- **下一步**：#33 关闭 → workspace chrome 层精修单开 issue（brand-bar padding / sash 可见性 / header 固定 / 底部死区，0.5-1d）→ [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
 - **阻塞**：无
-- **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 主壳已就位
+- **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + 5+3 panel 内嵌 + chat 主床/磁吸双形态全套就位
 
 ---
 
@@ -47,6 +47,13 @@ related:
 - ✅ [#35](https://github.com/tl0502/APET/issues/35) ADR-021 P1: Workspace 主壳 + dockview-vue 6.3.0 集成 + Workspace 域层 + 三入口（Ctrl+Alt+W / 托盘菜单 / 托盘双击）+ onboarding 引导气泡
   - ↳ ✅ phase A-E `959408c→9dee869`：后端窗注册 / WorkspaceManager 域层 + 60 单测 / dockview 集成 + 4 实操坑落地 / 命令面板 / 入口三件套
   - ↳ ✅ phase F audit `795769a`：深度工程审查 49 项 (5 P0+22 P1+18 P2+4 P3) 中 P0+P1 全套落地（状态/race 集群 / 事件回灌 / params 透传 / 并发护栏 / kind 字段 / const slice）
+- ✅ [#33](https://github.com/tl0502/APET/issues/33) ADR-021 P2: 三栏 Desktop App Shell 重做（认知偏差 mid-task pivot）+ 5+3 panel 迁入 workspace + chat 主床/磁吸双形态共享 ConversationStore + 删 dockview 节约 ~378KB
+  - ↳ ✅ phase A `543213d`：ConversationStore + ChatBody 抽离 + 15 case
+  - ↳ ✅ phase B/B-redo `62bb732→6c96112`：5 settings panel git mv + VrmAvatarExporter props.isActive；推倒 dockview 改 60+240+余 三栏（BrandBar / MasterColumn / SashHandle / DetailColumn / workspaceLayout store + 9 case）
+  - ↳ ✅ phase C/D `c5c54df→f2fd7da`：tasks 3 panel 迁入 + DetailColumn map / chat 主床（拆 ChatThreadPane + ConversationListPane，ChatBody 化为薄 wrapper）
+  - ↳ ✅ phase E `b929721`：删 settings/tasks 独立窗 + 托盘菜单精简（5 项）+ pomodoro_start 不弹浮窗（17 文件 +56/-762）
+  - ↳ ✅ phase E review / phase F chat `154cc98→b88641e`：lint :is 顺序 + dockview 残注释 + ADR-021 Updated；chat 表面视觉收敛（浮卡 composer + 卡片化 sidebar + 中性化气泡）
+  - ⏳ workspace chrome 层精修（brand-bar padding / sash 可见性 / header 固定 / 底部死区）单开 issue 处理
 - ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
