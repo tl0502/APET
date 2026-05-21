@@ -11,9 +11,10 @@ import { ElIcon, ElTabPane, ElTabs } from 'element-plus'
 import { AlarmClock, Calendar, Timer } from '@element-plus/icons-vue'
 import AppShell from '@/components/layouts/AppShell.vue'
 import { hideTasks } from '@/services/window'
-import ReminderPanel from './panels/ReminderPanel.vue'
-import PomodoroPanel from './panels/PomodoroPanel.vue'
-import PlaceholderPanel from './panels/PlaceholderPanel.vue'
+// #33 phase C：panel 已迁入 @/panels/tasks/（与 workspace 共用源）；独立窗 TasksApp 继续承载到 Phase E 删除
+import ReminderPanel from '@/panels/tasks/TasksReminderPanel.vue'
+import PomodoroPanel from '@/panels/tasks/TasksPomodoroPanel.vue'
+import PlaceholderPanel from '@/panels/tasks/TasksTodoPanel.vue'
 
 type TaskTab = 'reminder' | 'pomodoro' | 'todo'
 const activeTab = ref<TaskTab>('reminder')

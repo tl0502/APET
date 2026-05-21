@@ -15,6 +15,9 @@ import SettingsProviderPanel from '@/panels/settings/SettingsProviderPanel.vue'
 import SettingsPersonaPanel from '@/panels/settings/SettingsPersonaPanel.vue'
 import SettingsNicknamePanel from '@/panels/settings/SettingsNicknamePanel.vue'
 import SettingsAboutPanel from '@/panels/settings/SettingsAboutPanel.vue'
+import TasksReminderPanel from '@/panels/tasks/TasksReminderPanel.vue'
+import TasksPomodoroPanel from '@/panels/tasks/TasksPomodoroPanel.vue'
+import TasksTodoPanel from '@/panels/tasks/TasksTodoPanel.vue'
 
 import { useWorkspaceLayoutStore } from '@/stores/workspaceLayout'
 
@@ -57,15 +60,21 @@ const isPersonaActive = computed(
         v-show="layout.currentItem === 'SettingsAbout'"
         class="detail-col__panel"
       />
-      <!-- Phase C 接入：TasksReminder / TasksPomodoro / TasksTodo -->
-      <div
-        v-show="
-          layout.currentCategory === 'task' && layout.currentItem !== null
-        "
-        class="detail-col__placeholder"
-      >
-        <p>任务面板（Phase C 接入：{{ layout.currentItem }}）</p>
-      </div>
+      <!-- Phase C：tasks 3 panel；v-show 永远 mount 保 listener / scheduler 在线 -->
+      <TasksReminderPanel
+        v-show="layout.currentItem === 'TasksReminder'"
+        class="detail-col__panel"
+      />
+      <TasksPomodoroPanel
+        v-show="layout.currentItem === 'TasksPomodoro'"
+        class="detail-col__panel"
+      />
+      <TasksTodoPanel
+        v-show="layout.currentItem === 'TasksTodo'"
+        class="detail-col__panel"
+        title="待办"
+        issue="#29"
+      />
     </template>
   </main>
 </template>
