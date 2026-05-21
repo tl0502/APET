@@ -18,6 +18,7 @@ import { getConfig, setConfig } from '@/services/config'
 import { showWorkspace } from '@/services/window'
 
 const KV_SEEN = 'onboarding:workspace_intro_seen'
+const KV_ONBOARDING_STEP = 'onboarding:current_step'
 const AUTO_DISMISS_MS = 6000
 
 const visible = ref(false)
@@ -64,6 +65,8 @@ function onMouseLeave() {
 }
 
 async function maybeShow() {
+  // 已 visible 不重复弹（startAutoDismiss 内已 reset timer，重弹无意义）
+  if (visible.value) return
   // KV 已写 = 看过了，不再弹
   try {
     const seen = await getConfig(KV_SEEN)
@@ -72,12 +75,22 @@ async function maybeShow() {
     console.warn('[onboarding-bubble] read seen failed, conservative skip:', e)
     return
   }
+  // review P0 修复（F-3.1）：必须 onboarding 已完成才弹（ADR-019：current_step 不存在 = 已完成）。
+  // 启动期 pet 窗 webview 在 setup 阶段已 mount，onMounted 早于 onboarding_complete emit；
+  // 加这层 check 避免 onboarding 期间 pet 窗虽 hidden 但内部 maybeShow 被错误调用弹气泡。
+  try {
+    const currentStep = await getConfig(KV_ONBOARDING_STEP)
+    if (currentStep) return // 仍在 onboarding 流程中
+  } catch (e) {
+    console.warn('[onboarding-bubble] read onboarding step failed, conservative skip:', e)
+    return
+  }
   visible.value = true
   startAutoDismiss()
 }
 
 onMounted(async () => {
-  // listen 来自 commands::onboarding_complete 的引导事件
+  // listen 来自 commands::onboarding_complete 的引导事件（用户当下完成 onboarding 路径）
   try {
     const un = await listen('onboarding:workspace-intro', () => {
       void maybeShow()
@@ -106,6 +119,13 @@ onMounted(async () => {
   } catch (e) {
     console.warn('[onboarding-bubble] listen visibility-changed failed:', e)
   }
+
+  // review P0 修复（F-3.1）：启动期主动 check KV — 兜底 emit 丢失场景。
+  // 假设：用户上次 onboarding 完成时 emit `onboarding:workspace-intro`，但 listener 没挂
+  // （或某次 Tauri 升级让 webview lazy mount 后启动期 emit 丢失）→ KV `workspace_intro_seen`
+  // 仍是空 → 下次启动 onMounted 跑到这里 → maybeShow 看到 seen=空 + onboarding 已完成 → 弹气泡。
+  // KV 是权威源，事件只是"当下完成时立即弹"的体验优化。
+  void maybeShow()
 })
 
 onBeforeUnmount(() => {

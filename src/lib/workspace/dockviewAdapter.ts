@@ -22,14 +22,24 @@ import type {
   PanelLocation,
   PanelMountStrategy,
   WorkspaceAdapter,
+  WorkspaceAdapterEvents,
 } from './types'
 
+/** dockview Event<T> 订阅返回的 disposable（subscribeEvents 内收集，dispose 时清理） */
+interface DockviewDisposable {
+  dispose(): void
+}
+
 export class DockviewAdapter implements WorkspaceAdapter {
+  private readonly eventDisposables: DockviewDisposable[] = []
+
   constructor(private readonly api: DockviewApi) {}
 
   mountPanel(descriptor: PanelDescriptor, params?: unknown): void {
     if (this.api.getPanel(descriptor.id)) {
-      // 幂等：已存在 = no-op（manager.openPanel 已确保此分支不会触发，但桥层多一层兜底）
+      // 幂等：dockview 端已存在 = no-op。可能来自 manager.openPanel 重复调用 / 也可能来自
+      // deserialize 后 manager 主动 openPanel 但 fromJSON 已 mount 同 id（adapter 事件回灌让
+      // manager 知道，再调 openPanel 时 manager 内部短路；本兜底防御调用方误判）。
       return
     }
     const title =
@@ -71,10 +81,36 @@ export class DockviewAdapter implements WorkspaceAdapter {
     this.api.fromJSON(JSON.parse(json) as Parameters<DockviewApi['fromJSON']>[0])
   }
 
+  /**
+   * review P0 修复（F-2.1/2.2/2.3/1.1）：订阅 dockview 真实状态变化回灌 manager。
+   *
+   * dockview Event<T> 是 fn-like 接口 `(listener) => IDisposable`；subscribe 返
+   * disposable 存 eventDisposables 数组，dispose() 时统一清理避免内存泄漏。
+   *
+   * onDidAddPanel 由 addPanel / fromJSON 内部同步 fire（见 dockviewComponent.js line 2353）；
+   * onDidRemovePanel 同步 fire（用户点 tab ✕ / removePanel / clear 都触发）；
+   * onDidActivePanelChange 用户点 tab 时同步 fire，参数 panel | undefined。
+   */
+  subscribeEvents(events: WorkspaceAdapterEvents): void {
+    this.eventDisposables.push(
+      this.api.onDidAddPanel((panel) => events.onPanelMounted(panel.id)),
+      this.api.onDidRemovePanel((panel) => events.onPanelRemoved(panel.id)),
+      this.api.onDidActivePanelChange((panel) => events.onActivePanelChanged(panel?.id ?? null)),
+    )
+  }
+
   dispose(): void {
     // dockview-vue 6.x: <DockviewVue> 组件 unmount 时自动 dispose dockview 实例
     // 本类持有的 api 引用会随 SFC unmount 失效；外层 ResizeObserver 由调用方
     // (WorkspaceShell.vue) 在 onBeforeUnmount 时 disconnect
+    for (const d of this.eventDisposables) {
+      try {
+        d.dispose()
+      } catch (e) {
+        console.warn('[DockviewAdapter] event disposable dispose failed (non-fatal):', e)
+      }
+    }
+    this.eventDisposables.length = 0
     this.api.clear()
   }
 }

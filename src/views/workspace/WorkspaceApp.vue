@@ -28,7 +28,7 @@ import { WorkspaceManager } from '@/lib/workspace/manager'
 import { KvWorkspacePersistence } from '@/lib/workspace/persistence'
 import type { PanelDescriptor } from '@/lib/workspace/types'
 import { getConfig, setConfig } from '@/services/config'
-import { hideWorkspace, toggleWorkspace } from '@/services/window'
+import { hideWorkspace } from '@/services/window'
 
 // === 单实例 WorkspaceManager（全窗生命周期）===
 const mgr = new WorkspaceManager({
@@ -128,9 +128,11 @@ async function restoreLayout() {
   } catch (e) {
     console.warn('[WorkspaceApp] loadLayoutFromKv failed:', e)
   }
-  // 判定是否还原成功：还原后 isPanelOpen 至少一个为 true（KV 损坏 self-heal 后 KV 为空，
-  // openPanels = ∅）
-  const restored = PANELS.some((p) => mgr.isPanelOpen(p.id))
+  // review P0 修复（F-1.1）：判定基于 manager.listOpenPanels()（adapter 事件已回灌真实状态）
+  // 而不是 PANELS.some(p => mgr.isPanelOpen(p.id))。后者在 KV 存了旧版本 panel id 时永远 false
+  // 走 default → 与 dockview 已部分 mount 的状态冲突。listOpenPanels.length>0 说明 deserialize
+  // 成功还原过任意 panel（无论 id 是否在当前 PANELS 列表里），跳过 default 即可。
+  const restored = mgr.listOpenPanels().length > 0
   if (!restored) {
     // default：开 3 个 panel；defaultLocation 决定位置（main / main.right / main.right）
     try {
@@ -182,8 +184,14 @@ async function onClose() {
 function onGlobalKeydown(e: KeyboardEvent) {
   // Ctrl+P (Cmd+P) → 命令面板（仅 workspace 窗内生效；与浏览器"打印"冲突由 preventDefault 处理）
   // 不挂 Ctrl+Shift+P：MVP 阶段单触发够用，避免与系统/IDE 撞
+  //
+  // review P1 修复 (F-6.1-fe)：已开时 noop —— togglePalette 命令是 toggle 语义（已开→关），
+  // 用户连按 Ctrl+P 的常见预期是"reset + 重新聚焦"而非"关闭"。已开时 noop 让 Esc 成为关闭的
+  // 唯一路径（CommandPalette 已绑 Esc），语义对齐 VSCode（其 Ctrl+P 在已开时让 input focus + select-all，
+  // MVP 阶段 ElInput 已是 autofocus 不需要额外处理 → 这里 return 即可）。
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
     e.preventDefault()
+    if (mgr.getContextKey('paletteVisible') === true) return
     try {
       void mgr.executeCommand('workspace.togglePalette')
     } catch (err) {
@@ -221,22 +229,9 @@ onMounted(async () => {
     console.warn('[WorkspaceApp] listen visibility-changed failed:', e)
   }
 
-  // #35 Phase E：listen 全局快捷键 Ctrl+Alt+W → toggleWorkspace（与 ChatApp listen
-  // shortcut:chat 同款模式）。Rust 端 register_workspace_on_startup 启动期注册，handler
-  // emit 'shortcut:workspace'；workspace 窗内监听后立即调 toggleWorkspace IPC（自我隐藏）。
-  // 注：workspace 已 visible 时 toggle = hide；hidden 时 = show + focus。两路径均期望。
-  try {
-    const un = await listen('shortcut:workspace', async () => {
-      try {
-        await toggleWorkspace()
-      } catch (err) {
-        console.error('[WorkspaceApp] toggleWorkspace failed:', err)
-      }
-    })
-    unlistenFns.push(un)
-  } catch (e) {
-    console.warn('[WorkspaceApp] listen shortcut:workspace failed:', e)
-  }
+  // review P0 修复（F-3.2 后端）：shortcut:workspace 事件不再 emit；Rust handler 直接调
+  // toggle_workspace。原来的 listen + toggleWorkspace IPC 回环已删除，消除 listener 未挂
+  // 时按键事件丢失的 race（详 shortcuts.rs handle_workspace_shortcut_pressed 注释）。
 })
 
 onBeforeUnmount(() => {

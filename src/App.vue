@@ -25,6 +25,7 @@ import {
   getPetViewPreset,
   showSettings,
   toggleChat,
+  toggleWorkspace,
 } from '@/services/window'
 import type { PetViewPreset } from '@/services/window'
 import type { ShortcutChatPayload } from '@/types/shortcut'
@@ -32,6 +33,7 @@ import type { AvatarView } from '@/services/vrm'
 
 const toast = useToast()
 let unlistenChat: UnlistenFn | null = null
+let unlistenWorkspace: UnlistenFn | null = null
 let unlistenViewChanged: UnlistenFn | null = null
 let unlistenAot: UnlistenFn | null = null
 
@@ -116,6 +118,22 @@ onMounted(async () => {
     }
   })
 
+  // #35 ADR-021 P1 Phase E + review P0 修复（F-3.2 后端）：
+  // pet 窗代理 shortcut:workspace listener。原设计 workspace 窗自己监听，但 workspace
+  // 窗 visible:false 启动期 listener 挂载晚于首次按键的 race → 事件丢。pet 窗永远 mount +
+  // listener 永挂，可靠。Rust handler emit shortcut:workspace，pet 收到调 toggleWorkspace IPC。
+  try {
+    unlistenWorkspace = await listen('shortcut:workspace', async () => {
+      try {
+        await toggleWorkspace()
+      } catch (err) {
+        console.error('[App] toggleWorkspace failed:', err)
+      }
+    })
+  } catch (e) {
+    console.warn('[App] listen shortcut:workspace failed:', e)
+  }
+
   // #21 收尾 #2：检查启动期 chat 快捷键注册是否失败。失败时给一个 10s warn toast
   // + "去设置改键" 行动按钮（用户点 → 打开 settings 面板；未来 #14 设置面板上线时
   // 自动跳到"快捷键"tab，M1 阶段先打开 settings 窗，让用户手动定位即可）。
@@ -142,6 +160,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   unlistenChat?.()
+  unlistenWorkspace?.()
   unlistenViewChanged?.()
   unlistenAot?.()
 })

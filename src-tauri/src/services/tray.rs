@@ -164,15 +164,17 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                     let app = tray.app_handle();
                     refresh_label(app, &show_hide_for_tray);
                 }
-                // #35 Phase E：左键双击 → toggle workspace（与 chat 全局快捷键 / 托盘菜单
-                // 并列的第三入口；VSCode-style "双击图标主面板"惯例）。
+                // review P1 修复（F-6.1）：左键双击 → **show**（与菜单"工作台..."一致），不 toggle。
+                // 原设计是 toggle，但与菜单点击（show）语义不一致——用户用两路径会感知行为不同；
+                // 且 toggle 会让"连击三次"第二次双击意外隐藏窗口。语义统一为"图标 = 打开 / 切到前台"，
+                // 隐藏走 Ctrl+Alt+W 或 ✕ 关闭按钮。
                 // 保持 show_menu_on_left_click(false)：单击仍无操作，仅双击触发，避免误触。
                 TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
                 } => {
                     let app = tray.app_handle();
-                    window_actions::toggle_workspace(app);
+                    window_actions::show_workspace(app);
                 }
                 _ => {}
             }

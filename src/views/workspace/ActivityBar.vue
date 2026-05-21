@@ -19,12 +19,21 @@ const mgr = useWorkspaceManager()
 
 const activePanelId = ref<string | null>(mgr.getActivePanel())
 
-const panels = computed(() =>
-  mgr.registry.list().filter((p) => p.icon !== undefined && mgr.isWhenSatisfied(p.when)),
-)
+/**
+ * panelsVersion：单调 bump 触发 `panels` computed 重跑 registry.list()。
+ * review P1 修复 (F-5.6 / F-4.5)：registry.list() 不是 reactive，registerPanel 后必须
+ * 显式通知 UI 重渲染。manager.onPanelsChanged 在 register/unregister 时触发，bump 计数。
+ */
+const panelsVersion = ref(0)
+
+const panels = computed(() => {
+  void panelsVersion.value // 显式依赖 → registry 变化时重跑
+  return mgr.registry.list().filter((p) => p.icon !== undefined && mgr.isWhenSatisfied(p.when))
+})
 
 let unsubActivated: (() => void) | null = null
 let unsubDeactivated: (() => void) | null = null
+let unsubPanelsChanged: (() => void) | null = null
 
 onMounted(() => {
   unsubActivated = mgr.onPanelActivated((id) => {
@@ -33,11 +42,15 @@ onMounted(() => {
   unsubDeactivated = mgr.onPanelDeactivated(() => {
     activePanelId.value = mgr.getActivePanel()
   })
+  unsubPanelsChanged = mgr.onPanelsChanged(() => {
+    panelsVersion.value++
+  })
 })
 
 onBeforeUnmount(() => {
   unsubActivated?.()
   unsubDeactivated?.()
+  unsubPanelsChanged?.()
 })
 
 function handleClick(id: string) {

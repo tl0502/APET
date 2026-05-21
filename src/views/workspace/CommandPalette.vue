@@ -13,7 +13,7 @@
 // - 不做最近使用历史（MVP 命令量小没必要）
 // - 高亮匹配字符跳过（MVP 简化；P2 优化时用 matchResult.indices 渲染）
 
-import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { ElDialog, ElInput } from 'element-plus'
 
 import { fuzzyFilter } from '@/lib/workspace/fuzzyMatch'
@@ -34,9 +34,30 @@ const query = ref('')
 const activeIdx = ref(0)
 const inputRef = useTemplateRef<InstanceType<typeof ElInput>>('inputRef')
 
+/**
+ * commandsVersion：单调 bump 触发 `filtered` computed 重跑 listCommands。
+ * review P1 修复 (F-3.4)：动态 registerCommand/unregisterCommand 时，已打开的 palette
+ * 必须能反映新增/删除。listCommands 返回数组快照不 reactive，所以走 onCommandsChanged 订阅
+ * + version bump 的标准模式（同 ActivityBar 的 panelsVersion）。
+ */
+const commandsVersion = ref(0)
+
 const filtered = computed(() => {
+  void commandsVersion.value // 显式依赖 → commands 变化时重跑
   const all = mgr.listCommands(true) // when=false 的命令过滤掉
   return fuzzyFilter(query.value, all, (c) => c.title)
+})
+
+let unsubCommandsChanged: (() => void) | null = null
+
+onMounted(() => {
+  unsubCommandsChanged = mgr.onCommandsChanged(() => {
+    commandsVersion.value++
+  })
+})
+
+onBeforeUnmount(() => {
+  unsubCommandsChanged?.()
 })
 
 // 选中行索引自适应：filtered 收窄到 activeIdx 之外时回到 0

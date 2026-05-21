@@ -21,9 +21,22 @@ interface AddPanelOpts {
   position?: { referencePanel: string; direction: 'right' }
 }
 
-// 极简 DockviewApi spy（仅覆盖 adapter 用到的 6 方法 + 1 property）
+// 极简 DockviewApi spy（adapter 用到的 6 方法 + 1 property + 3 event；review P0 修复后加 event）
 function makeApiSpy() {
   const panels: Array<{ id: string; api: { setActive: ReturnType<typeof vi.fn> } }> = []
+  const addListeners: Array<(p: { id: string }) => void> = []
+  const removeListeners: Array<(p: { id: string }) => void> = []
+  const activeListeners: Array<(p: { id: string } | undefined) => void> = []
+  const makeEvent = <T>(list: Array<(p: T) => void>) =>
+    vi.fn((cb: (p: T) => void) => {
+      list.push(cb)
+      return {
+        dispose: vi.fn(() => {
+          const idx = list.indexOf(cb)
+          if (idx >= 0) list.splice(idx, 1)
+        }),
+      }
+    })
   return {
     addPanel: vi.fn<(opts: AddPanelOpts) => void>().mockImplementation((opts: AddPanelOpts) => {
       panels.push({ id: opts.id, api: { setActive: vi.fn() } })
@@ -38,9 +51,17 @@ function makeApiSpy() {
     clear: vi.fn(() => {
       panels.length = 0
     }),
+    onDidAddPanel: makeEvent<{ id: string }>(addListeners),
+    onDidRemovePanel: makeEvent<{ id: string }>(removeListeners),
+    onDidActivePanelChange: makeEvent<{ id: string } | undefined>(activeListeners),
     get panels() {
       return panels
     },
+    // 测试入口：手动 fire 事件验证 adapter 转发
+    __fireAdd: (id: string) => addListeners.forEach((cb) => cb({ id })),
+    __fireRemove: (id: string) => removeListeners.forEach((cb) => cb({ id })),
+    __fireActive: (id: string | null) =>
+      activeListeners.forEach((cb) => cb(id === null ? undefined : { id })),
   }
 }
 
@@ -130,5 +151,31 @@ describe('DockviewAdapter', () => {
     expect(api.clear).toHaveBeenCalled()
     // dispose 后 panel 清空
     expect(adapter.isPanelOpen('A')).toBe(false)
+  })
+
+  it('subscribeEvents 转发 dockview 3 事件到 callback（review P0 修复 F-2.1/2.2/2.3）', () => {
+    const onMounted = vi.fn()
+    const onRemoved = vi.fn()
+    const onActive = vi.fn()
+    adapter.subscribeEvents({
+      onPanelMounted: onMounted,
+      onPanelRemoved: onRemoved,
+      onActivePanelChanged: onActive,
+    })
+    // dockview 端 fire 事件 → adapter 转发到 callback
+    api.__fireAdd('Foo')
+    expect(onMounted).toHaveBeenCalledWith('Foo')
+    api.__fireRemove('Foo')
+    expect(onRemoved).toHaveBeenCalledWith('Foo')
+    api.__fireActive('Bar')
+    expect(onActive).toHaveBeenCalledWith('Bar')
+    api.__fireActive(null)
+    expect(onActive).toHaveBeenCalledWith(null)
+
+    // dispose 后事件不再转发（disposable.dispose 被调）
+    adapter.dispose()
+    onMounted.mockClear()
+    api.__fireAdd('Baz')
+    expect(onMounted).not.toHaveBeenCalled()
   })
 })

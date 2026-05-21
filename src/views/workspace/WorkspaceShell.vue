@@ -50,13 +50,17 @@ function onReady(event: DockviewReadyEvent) {
     return
   }
 
-  const triggerLayout = () => {
+  const triggerLayout = (fireReady = false) => {
     if (pendingLayoutFrame !== null) return
     pendingLayoutFrame = requestAnimationFrame(() => {
       pendingLayoutFrame = null
       const rect = host.getBoundingClientRect()
       // dockview-core 内部 layout 期望整数像素；rect width/height 在高 DPI 有小数尾巴
       api.layout(Math.round(rect.width), Math.round(rect.height))
+      // review P0 修复（F-3.2 前端）：emit('ready') 必须等首次 layout 真生效后才发，
+      // 否则 WorkspaceApp 收到 ready 立刻 loadLayoutFromKv → fromJSON 在错的尺寸下
+      // 还原 → split 比例错乱 / 0 宽 panel 被 hide。fireReady=true 标记本次是首次同步。
+      if (fireReady) emit('ready')
     })
   }
 
@@ -73,13 +77,13 @@ function onReady(event: DockviewReadyEvent) {
 
   // 首次同步：onMounted dockview 已调一次 api.layout 但用的是 mount-time 尺寸，
   // 此刻容器尺寸可能已变（如 sidebar/devtools 已展开）；再调一次保险。
-  triggerLayout()
+  // fireReady=true → rAF 内 layout 之后才 emit ready，确保 WorkspaceApp restoreLayout
+  // 拿到的是已正确 layout 过的 dockview（修 F-3.2 前端 race）。
+  triggerLayout(true)
 
   // 兜底 #2：极少数情况下 webview 内 RO 不触发（spike 已知低概率），监听 window resize 作 fallback。
   windowResizeHandler = scheduleLayout
   window.addEventListener('resize', scheduleLayout)
-
-  emit('ready')
 }
 
 onBeforeUnmount(() => {

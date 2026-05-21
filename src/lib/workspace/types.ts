@@ -147,11 +147,37 @@ export interface WorkspacePersistence {
 }
 
 /**
+ * adapter → manager 回灌事件（review F-2.1/2.2/2.3/1.1 P0 修复）。
+ *
+ * manager.bindAdapter 时把 manager 的内部 sync 方法包成本接口传给 adapter，
+ * adapter 在 dockview 真实状态变化时（addPanel / removePanel / 用户点 tab 切 active /
+ * 用户点 tab ✕ 关 panel）回调，让 manager 的 openPanels / activePanelId / contextKey
+ * 与 dockview 真值保持同步。
+ *
+ * 修复以下日常路径双轨漂移问题：
+ * - deserialize 后 dockview 已 mount 但 manager.openPanels 空
+ * - 用户在 dockview UI 点 tab 切换 → manager.activePanelId 不变
+ * - 用户点 dockview tab ✕ → manager.openPanels 不删除
+ *
+ * 设计：adapter 不持有 manager 引用（保持分层），通过 callback 接口传递事件。
+ */
+export interface WorkspaceAdapterEvents {
+  /** dockview 端 mount 一个 panel（addPanel / fromJSON 还原）；可能因 manager.openPanel 主动调用 */
+  onPanelMounted: (id: string) => void
+  /** dockview 端 remove 一个 panel（用户点 tab ✕ / manager.unmountPanel / clear）；幂等 */
+  onPanelRemoved: (id: string) => void
+  /** dockview 端 active panel 切换（用户点 tab / setActive / removePanel 后兜底）；null = 无 active */
+  onActivePanelChanged: (id: string | null) => void
+}
+
+/**
  * DockviewAdapter 接口（manager 与 dockview 解耦的桥）。
  * 实现方：DockviewAdapter（生产）或测试 spy（manager.test.ts mock）。
  *
  * spike #32 坑 1：实现方必须自带外层 ResizeObserver 喂 dockview api.layout（dockview-vue 6.x
  * 不内置）。spike 坑 2：mountPanel 内调 app.component(id, comp) 注册 Vue component。
+ *
+ * review P0 修复：subscribeEvents 让 manager 拿到 dockview 真实状态变化回灌。
  */
 export interface WorkspaceAdapter {
   /** Panel mount：用 PanelDescriptor + params 触发 dockview addPanel */
@@ -166,6 +192,8 @@ export interface WorkspaceAdapter {
   serialize(): string
   /** 从 JSON string 还原 dockview layout；失败抛 */
   deserialize(json: string): void
+  /** 订阅 dockview 真实状态变化（mount/remove/active）；bindAdapter 时调用一次 */
+  subscribeEvents(events: WorkspaceAdapterEvents): void
   /** 析构：disconnect ResizeObserver + dispose dockview */
   dispose(): void
 }

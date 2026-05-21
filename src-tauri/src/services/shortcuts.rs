@@ -28,6 +28,11 @@ pub const SHORTCUT_REGISTER_FAILED_EVENT: &str = "shortcut:register-failed";
 
 /// #35 ADR-021 P1 workspace 主窗快捷键（Phase E）。
 /// MVP 阶段只暴露启动期注册 + 失败留痕查询；用户改键 UI 留 M2 follow-up（plan 风险 5 决策）。
+///
+/// review P0 修复（F-3.2 后端）：handler emit `shortcut:workspace`，**pet 窗** App.vue 监听
+/// 后调 toggle IPC。原设计是 workspace 窗自己监听，但 workspace 窗 visible:false 启动期 webview
+/// 虽 mount 但 onMounted 内 await listen 可能晚于首次按键 → 第一次 Ctrl+Alt+W 事件丢。
+/// pet 窗永远 mount + listener 永挂（与 shortcut:chat 同款代理模式），消除 race。
 pub const CONFIG_KEY_SHORTCUT_WORKSPACE: &str = "shortcut:workspace";
 pub const DEFAULT_SHORTCUT_WORKSPACE: &str = "Ctrl+Alt+W";
 pub const SHORTCUT_WORKSPACE_EVENT: &str = "shortcut:workspace";
@@ -40,6 +45,10 @@ pub struct ShortcutChatPayload {
 
 #[derive(Serialize, Clone)]
 pub struct ShortcutRegisterFailedPayload {
+    /// review P1 修复（F-9.2）：kind 字段让前端 listener 按"chat" / "workspace"分发，
+    /// 不依赖 payload.shortcut 字符串字面比对（M2 改键 UI 后用户键改了字符串会变）。
+    /// M1 阶段加 5 行，M2 settings UI 上线时不破契约。
+    pub kind: &'static str,
     pub shortcut: String,
     pub error: String,
 }
@@ -87,6 +96,7 @@ pub fn register_chat_on_startup<R: Runtime>(app: &AppHandle<R>) {
         Err(e) => {
             eprintln!("[shortcut] register failed for '{shortcut_str}': {e}");
             let payload = ShortcutRegisterFailedPayload {
+                kind: "chat",
                 shortcut: shortcut_str,
                 error: e,
             };
@@ -293,6 +303,7 @@ pub fn register_workspace_on_startup<R: Runtime>(app: &AppHandle<R>) {
         Err(e) => {
             eprintln!("[shortcut] register workspace failed for '{shortcut_str}': {e}");
             let payload = ShortcutRegisterFailedPayload {
+                kind: "workspace",
                 shortcut: shortcut_str,
                 error: e,
             };
@@ -375,7 +386,7 @@ pub fn handle_workspace_shortcut_pressed<R: Runtime>(
         event.state()
     );
     if event.state() == GsState::Pressed {
-        // 同 chat：onboarding 未完成时静默不 emit
+        // 同 chat：onboarding 未完成时静默不 emit（gate=false）
         let gate_open = app
             .try_state::<ConsentGate>()
             .map(|g| g.is_open())
@@ -384,7 +395,8 @@ pub fn handle_workspace_shortcut_pressed<R: Runtime>(
             eprintln!("[shortcut] workspace suppressed (onboarding not complete)");
             return;
         }
-        // workspace 不需要 source/timestamp（toggle 是幂等动作），payload 为空对象
+        // review P0 修复（F-3.2 后端）：emit 给 **pet 窗** 监听（pet 永远 mount + listener 永挂）。
+        // 详 const 注释。payload 空对象（toggle 是幂等动作，不需要 source/timestamp）。
         if let Err(e) = app.emit(SHORTCUT_WORKSPACE_EVENT, serde_json::json!({})) {
             eprintln!("[shortcut] emit workspace failed: {e}");
         }

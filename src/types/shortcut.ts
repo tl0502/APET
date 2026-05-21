@@ -6,8 +6,11 @@ export interface ShortcutChatPayload {
   timestamp_ms: number
 }
 
-/** `shortcut:register-failed` event payload。启动期注册失败 / 改快捷键失败时 emit。 */
+/** `shortcut:register-failed` event payload。启动期注册失败 / 改快捷键失败时 emit。
+ *  `kind` 让前端按业务分发（chat / workspace），不依赖 `shortcut` 字面比对
+ *  （M2 改键 UI 上线后，字符串会变；kind 是稳定语义标签）。 */
 export interface ShortcutRegisterFailedPayload {
+  kind: 'chat' | 'workspace'
   shortcut: string
   error: string
 }

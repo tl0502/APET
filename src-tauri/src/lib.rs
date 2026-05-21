@@ -17,6 +17,17 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DB_URL: &str = "sqlite:aipet.db";
 
+/// CloseRequested 时仅 hide 不退出的窗口集合（review P1 修复 F-5.2-be：从 `||` 链改 slice
+/// 集中维护，新增窗口只需在此添加一项，避免漏改条件分支）。
+/// pomodoro 不在此列：它有独立 hide + OS 通知 + KV 标记的复合逻辑（见 CloseRequested 分支）。
+const HIDE_ON_CLOSE_LABELS: &[&str] = &[
+    PET_WINDOW_LABEL,
+    SETTINGS_WINDOW_LABEL,
+    CHAT_WINDOW_LABEL,
+    TASKS_WINDOW_LABEL,
+    WORKSPACE_WINDOW_LABEL,
+];
+
 /// SQLite migrations。
 ///
 /// 每次新加 migration 必须：
@@ -307,12 +318,7 @@ pub fn run() {
                         // prevent_close 先拦住默认走 hide 的路径，再统一 exit。
                         api.prevent_close();
                         window.app_handle().exit(0);
-                    } else if label == PET_WINDOW_LABEL
-                        || label == SETTINGS_WINDOW_LABEL
-                        || label == CHAT_WINDOW_LABEL
-                        || label == TASKS_WINDOW_LABEL
-                        || label == WORKSPACE_WINDOW_LABEL
-                    {
+                    } else if HIDE_ON_CLOSE_LABELS.contains(&label) {
                         api.prevent_close();
                         let _ = window.hide();
                         // #30 follow-up G：WebView2 不会在 window.hide() 时触发 DOM

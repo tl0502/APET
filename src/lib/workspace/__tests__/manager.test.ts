@@ -36,10 +36,14 @@ function makeSpyAdapter(): WorkspaceAdapter & {
     serialize: ReturnType<typeof vi.fn>
     deserialize: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
+    subscribeEvents: ReturnType<typeof vi.fn>
   }
   state: { serializedJson: string }
+  /** review P0 修复：暴露 events 让测试可以模拟 dockview 事件回灌 manager */
+  events: { current: import('../types').WorkspaceAdapterEvents | null }
 } {
   const state = { serializedJson: '{"grid":"empty"}' }
+  const events: { current: import('../types').WorkspaceAdapterEvents | null } = { current: null }
   const spies = {
     mountPanel: vi.fn(),
     unmountPanel: vi.fn(),
@@ -47,16 +51,21 @@ function makeSpyAdapter(): WorkspaceAdapter & {
     serialize: vi.fn(() => state.serializedJson),
     deserialize: vi.fn(),
     dispose: vi.fn(),
+    subscribeEvents: vi.fn((e: import('../types').WorkspaceAdapterEvents) => {
+      events.current = e
+    }),
   }
   return {
     spies,
     state,
+    events,
     mountPanel: spies.mountPanel as WorkspaceAdapter['mountPanel'],
     unmountPanel: spies.unmountPanel as WorkspaceAdapter['unmountPanel'],
     revealPanel: spies.revealPanel as WorkspaceAdapter['revealPanel'],
     isPanelOpen: () => false,
     serialize: spies.serialize as WorkspaceAdapter['serialize'],
     deserialize: spies.deserialize as WorkspaceAdapter['deserialize'],
+    subscribeEvents: spies.subscribeEvents as WorkspaceAdapter['subscribeEvents'],
     dispose: spies.dispose as WorkspaceAdapter['dispose'],
   }
 }
@@ -397,5 +406,155 @@ describe('WorkspaceManager — contextKey & persistence（验收路径 6）', ()
     await mgr2.loadLayoutFromKv()
     expect(persistence.spies.loadLayout).toHaveBeenCalled()
     expect(adapter2.spies.deserialize).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspaceManager — adapter 事件回灌（review P0 F-2.1/2.2/2.3/1.1 修复）', () => {
+  it('19. bindAdapter 触发 subscribeEvents；adapter mount 事件回灌 openPanels + contextKey + activated', () => {
+    expect(adapter.spies.subscribeEvents).toHaveBeenCalledTimes(1)
+    const events = adapter.events.current!
+    expect(events).toBeTruthy()
+
+    // 模拟 deserialize 后 dockview 端 mount 一个未通过 manager.openPanel 的 panel
+    mgr.registerPanel(makeDescriptor('Restored'))
+    const activatedCb = vi.fn()
+    mgr.onPanelActivated(activatedCb)
+
+    events.onPanelMounted('Restored')
+    expect(mgr.isPanelOpen('Restored')).toBe(true)
+    expect(mgr.getContextKey('panel.Restored.visible')).toBe(true)
+    // mount 事件不主动切 active（active 是 onActivePanelChanged 单独触发）
+    expect(mgr.getActivePanel()).toBeNull()
+    expect(activatedCb).not.toHaveBeenCalled()
+
+    // 幂等：再次回灌相同 id 不重复
+    events.onPanelMounted('Restored')
+    expect(mgr.listOpenPanels()).toEqual(['Restored'])
+  })
+
+  it('20. adapter 用户点 tab 切 active 事件回灌 activePanelId + activated 触发', () => {
+    const events = adapter.events.current!
+    mgr.registerPanel(makeDescriptor('A'))
+    mgr.registerPanel(makeDescriptor('B'))
+    events.onPanelMounted('A')
+    events.onPanelMounted('B')
+
+    const activatedCb = vi.fn()
+    mgr.onPanelActivated(activatedCb)
+
+    events.onActivePanelChanged('A')
+    expect(mgr.getActivePanel()).toBe('A')
+    expect(mgr.getContextKey('activePanel')).toBe('A')
+    expect(activatedCb).toHaveBeenCalledWith('A')
+
+    events.onActivePanelChanged('B')
+    expect(mgr.getActivePanel()).toBe('B')
+    expect(activatedCb).toHaveBeenCalledWith('B')
+
+    // 幂等：active 已是 B，再回灌 B 不重复触发
+    activatedCb.mockClear()
+    events.onActivePanelChanged('B')
+    expect(activatedCb).not.toHaveBeenCalled()
+
+    // null = 无 active（最后一个 panel 被关）
+    events.onActivePanelChanged(null)
+    expect(mgr.getActivePanel()).toBeNull()
+    expect(mgr.getContextKey('activePanel')).toBeNull()
+  })
+
+  it('21. adapter 用户点 tab ✕ 关 panel 事件回灌 openPanels 删除 + visible=false + deactivated 触发', () => {
+    const events = adapter.events.current!
+    mgr.registerPanel(makeDescriptor('A'))
+    events.onPanelMounted('A')
+    events.onActivePanelChanged('A')
+
+    const deactivatedCb = vi.fn()
+    mgr.onPanelDeactivated(deactivatedCb)
+
+    events.onPanelRemoved('A')
+    expect(mgr.isPanelOpen('A')).toBe(false)
+    expect(mgr.getContextKey('panel.A.visible')).toBe(false)
+    // active 是 'A' → 自动清空 active
+    expect(mgr.getActivePanel()).toBeNull()
+    expect(mgr.getContextKey('activePanel')).toBeNull()
+    expect(deactivatedCb).toHaveBeenCalledWith('A')
+
+    // 幂等：再次 remove 同 id 不重复触发
+    deactivatedCb.mockClear()
+    events.onPanelRemoved('A')
+    expect(deactivatedCb).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspaceManager — review P1 修复（params 透传 / 变更事件 / 并发护栏）', () => {
+  it('22. revealPanel(id, params) 未打开走 openPanel → adapter.mountPanel 收到 params (F-1.2)', () => {
+    const desc = makeDescriptor('ChatHub')
+    mgr.registerPanel(desc)
+    mgr.revealPanel('ChatHub', { greeting: 'reveal-with-params' })
+    expect(adapter.spies.mountPanel).toHaveBeenCalledWith(desc, {
+      greeting: 'reveal-with-params',
+    })
+    // 已打开路径下 revealPanel 不再透传 params 给 adapter.mountPanel（只触发 revealPanel）
+    mgr.registerPanel(makeDescriptor('Other'))
+    mgr.openPanel('Other') // 切走 active，让下次 revealPanel('ChatHub') 走 already-open 路径
+    adapter.spies.mountPanel.mockClear() // 清掉 openPanel('Other') 的调用
+    mgr.revealPanel('ChatHub', { ignored: true })
+    expect(adapter.spies.mountPanel).not.toHaveBeenCalled()
+    expect(adapter.spies.revealPanel).toHaveBeenCalledWith('ChatHub')
+  })
+
+  it('23. onPanelsChanged / onCommandsChanged 注册时触发；unsubscribe 后不触发 (F-5.6/4.5/3.4)', () => {
+    const panelsCb = vi.fn()
+    const commandsCb = vi.fn()
+    const unsubP = mgr.onPanelsChanged(panelsCb)
+    const unsubC = mgr.onCommandsChanged(commandsCb)
+
+    mgr.registerPanel(makeDescriptor('A'))
+    expect(panelsCb).toHaveBeenCalledTimes(1)
+    mgr.unregisterPanel('A')
+    expect(panelsCb).toHaveBeenCalledTimes(2)
+
+    mgr.registerCommand({ id: 'cmd.x', title: 'X', handler: vi.fn() })
+    expect(commandsCb).toHaveBeenCalledTimes(1)
+    mgr.unregisterCommand('cmd.x')
+    expect(commandsCb).toHaveBeenCalledTimes(2)
+    // 不存在的命令 unregister 不应再 emit
+    mgr.unregisterCommand('cmd.missing')
+    expect(commandsCb).toHaveBeenCalledTimes(2)
+
+    unsubP()
+    unsubC()
+    mgr.registerPanel(makeDescriptor('B'))
+    mgr.registerCommand({ id: 'cmd.y', title: 'Y', handler: vi.fn() })
+    expect(panelsCb).toHaveBeenCalledTimes(2) // 未变
+    expect(commandsCb).toHaveBeenCalledTimes(2) // 未变
+  })
+
+  it('24. closePanel 并发护栏：beforeClose await 期间二次 close → 直接返 false，hook 不重复触发 (F-8.1)', async () => {
+    let resolveBeforeClose: (v: boolean) => void = () => {}
+    const beforeClose = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveBeforeClose = resolve
+        }),
+    )
+    mgr.registerPanel(makeDescriptor('Editor', { beforeClose }))
+    mgr.openPanel('Editor')
+
+    // 第 1 次 close：进 beforeClose 阻塞中
+    const p1 = mgr.closePanel('Editor')
+    // beforeClose 已被调用 1 次但未 resolve
+    expect(beforeClose).toHaveBeenCalledTimes(1)
+    // 第 2 次 close：被并发护栏挡，立即返 false，不再调 beforeClose
+    const r2 = await mgr.closePanel('Editor')
+    expect(r2).toBe(false)
+    expect(beforeClose).toHaveBeenCalledTimes(1)
+
+    // 现在 resolve 第 1 次的 beforeClose=true → 第 1 次走完 unmount
+    resolveBeforeClose(true)
+    const r1 = await p1
+    expect(r1).toBe(true)
+    expect(adapter.spies.unmountPanel).toHaveBeenCalledWith('Editor')
+    expect(mgr.isPanelOpen('Editor')).toBe(false)
   })
 })
