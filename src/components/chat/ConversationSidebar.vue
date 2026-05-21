@@ -287,9 +287,10 @@ function onDeleteRequest(id: string) {
 
 .conv-sidebar__new {
   width: 100%;
-  /* Vercel 风:中等圆角,加粗字 */
+  /* 品牌色实心按钮：sidebar 内唯一品牌色出现点（active 项已改"白色浮起卡片"不带紫）。
+     字重 500（介于 normal 400 与原 600 之间，跟新的 active label 500 一致，避免抢戏）。 */
   border-radius: var(--aipet-radius-lg);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .conv-sidebar__list {
@@ -325,35 +326,29 @@ function onDeleteRequest(id: string) {
   display: flex;
   align-items: center;
   gap: var(--aipet-space-1);
-  padding: var(--aipet-space-2) var(--aipet-space-2) var(--aipet-space-2) var(--aipet-space-3);
-  border-radius: var(--aipet-radius-lg);
+  padding: var(--aipet-space-2) var(--aipet-space-3);
+  border-radius: var(--aipet-radius-card);
   cursor: pointer;
-  transition: background var(--aipet-duration-fast) var(--aipet-ease-standard);
+  transition: background var(--aipet-duration-fast) var(--aipet-ease-standard),
+    box-shadow var(--aipet-duration-fast) var(--aipet-ease-standard);
 }
 
+/* hover：极淡紫 tint。primary 6% alpha 是品牌色"出场但克制"的边界点；
+   纯灰浮起会让 sidebar 失去交互温度，纯白浮起又会跟 active 状态撞。 */
 .conv-item:hover {
-  /* hover 用 surface(亮色=#ffffff 从 sidebar #f5f5f5 浮起,暗色=#262626 从 sidebar #1c1c1c 浮起) */
-  background: var(--aipet-color-surface);
+  background: color-mix(in srgb, var(--aipet-color-primary) 6%, transparent);
 }
 
-/* active:在 surface 层基础上加 2px 紫色左条(品牌色保留,降饱和 30%) */
+/* active 改"浮起白色卡片" —— 删紫色左条 + 删紫字。
+   原 ::before 左条是品牌色高频出场点，去掉后 sidebar 几乎无紫色，符合 90% 中性 + 10% 品牌。
+   bg=surface-raised(#ffffff 亮 / #2e2e2e 暗) + shadow-card-active 形成 sidebar 内浮起。 */
 .conv-item--active {
-  background: var(--aipet-color-surface);
-}
-
-.conv-item--active::before {
-  content: '';
-  position: absolute;
-  left: 3px;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--aipet-color-active-bar) 70%, transparent);
+  background: var(--aipet-color-surface-raised);
+  box-shadow: var(--aipet-shadow-card-active);
 }
 
 .conv-item--active:hover {
-  background: var(--aipet-color-surface);
+  background: var(--aipet-color-surface-raised);
 }
 
 .conv-item--disabled {
@@ -402,8 +397,8 @@ function onDeleteRequest(id: string) {
 }
 
 .conv-item--active .conv-item__label {
-  color: var(--aipet-color-primary);
-  font-weight: 600;
+  color: var(--aipet-color-text-1);
+  font-weight: 500;
 }
 
 .conv-item__sub {

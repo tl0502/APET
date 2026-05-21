@@ -106,7 +106,7 @@ function onClickAction() {
     <ElInput
       :model-value="modelValue"
       type="textarea"
-      :rows="3"
+      :autosize="{ minRows: 1, maxRows: 6 }"
       :disabled="inputDisabled"
       placeholder="说点什么(Enter 发送,Shift+Enter 换行)"
       resize="none"
@@ -137,24 +137,27 @@ function onClickAction() {
 <style scoped>
 .chat-input {
   position: relative;
-  /* Phase C floating composer：surface-raised 浮卡 + 14px 大圆角 + 上向阴影
-     （--aipet-shadow-composer = hairline border + 弥散光，Telegram/Discord 浮卡风）。
-     从 message-scroll 视觉上"浮起"一档，与之前贴底大 textarea 拉开层次。 */
-  padding: var(--aipet-space-2) 56px var(--aipet-space-2) var(--aipet-space-3);
+  /* 2026-05-20 浮动 AI 输入胶囊（ChatGPT/Linear 风）：
+     - radius-input 20px：比 card 14 大、比 full 999 克制，桌面短窗口最佳折中
+     - border-faint：1px 几乎看不见的边
+     - shadow-composer-soft：0 8px 30px 0.04 alpha + 1px hairline ring，离屏 4-6mm 浮卡感
+     - min-height 64：单行时紧凑，autosize maxRows=6 让长输入自然撑开
+     - padding 左右对称（10/16），配合大圆角避免按钮"贴墙" */
+  padding: 10px 56px 10px 16px;
   background: var(--aipet-color-surface-raised);
-  border: 1px solid var(--aipet-color-border);
-  border-radius: 14px;
-  box-shadow: var(--aipet-shadow-composer);
-  min-height: 96px; /* 防 textarea 行数突变导致整 input 区域上下抖动 */
+  border: 1px solid var(--aipet-color-border-faint);
+  border-radius: var(--aipet-radius-input);
+  box-shadow: var(--aipet-shadow-composer-soft);
+  min-height: 64px;
   box-sizing: border-box;
   transition: border-color var(--aipet-duration-fast) var(--aipet-ease-standard),
     box-shadow var(--aipet-duration-fast) var(--aipet-ease-standard);
 }
 
 .chat-input:focus-within {
-  border-color: var(--aipet-color-primary);
-  /* focus 时叠加 ring + 保留 composer 上向阴影，浮卡感不丢 */
-  box-shadow: var(--aipet-ring-focus), var(--aipet-shadow-composer);
+  /* primary 50% mix border-strong：紫但不刺眼；ring + 浮卡阴影同时保留 */
+  border-color: color-mix(in srgb, var(--aipet-color-primary) 50%, var(--aipet-color-border-strong));
+  box-shadow: var(--aipet-ring-focus), var(--aipet-shadow-composer-soft);
 }
 
 /* 内嵌 EP textarea:抹掉默认 border / 内 padding / 背景,纯文本气质 */
@@ -171,6 +174,7 @@ function onClickAction() {
 
 .chat-input__textarea :deep(.el-textarea__inner)::placeholder {
   color: var(--aipet-color-text-3);
+  opacity: 0.7;
 }
 
 .chat-input__textarea :deep(.el-textarea__inner):focus {
@@ -181,8 +185,8 @@ function onClickAction() {
 /* 圆形发送按钮:右下绝对定位 32×32(Vercel 略小);保留 circle 因为 icon 按钮形态最克制 */
 .chat-input__action {
   position: absolute;
-  right: var(--aipet-space-2);
-  bottom: var(--aipet-space-2);
+  right: 10px;
+  bottom: 10px;
   width: 32px;
   height: 32px;
   padding: 0;

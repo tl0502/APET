@@ -262,14 +262,19 @@ watch(
   flex: 1 1 auto;
   /* 唯一滚动容器：父级 .message-scroll-surface 已改为 flex column 不滚，本元素 overflow-y 才真正生效。
      min-height: 0 是 flex column 嵌套常坑——不设的话 flex:1 1 auto 在内容超出时不会收缩，
-     scrollHeight === clientHeight，scrollTop 设置无效。 */
+     scrollHeight === clientHeight，scrollTop 设置无效。
+     2026-05-20：早先尝试用 max-width:720 + margin:0 auto 实现宽窗居中，但在 flex-column 父
+     容器里与 .msg-group--user 的 align-self:flex-end + flex-direction:row-reverse 相互作用，
+     导致窄窗下用户头像被剪裁出右边。改用 padding-inline + max() 的"幽灵 padding"方案：
+     窄窗（≤720）走 var(--aipet-space-5) 常规 padding；宽窗自动用更大 padding 把内容居中，
+     不动 width / margin / max-width，对 flex-end 对齐零影响。 */
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--aipet-space-4);
-  margin: 0;
-  /* 底部多 8px 让最后一条消息不贴 floating-composer 顶边，留呼吸空间 */
-  padding: var(--aipet-space-5) var(--aipet-space-5) var(--aipet-space-3);
+  gap: var(--aipet-space-5);
+  /* 上 / 下 padding 走 token；左右 padding 用 max() 实现"窄窗 20px / 宽窗居中 720" */
+  padding-block: var(--aipet-space-5) var(--aipet-space-3);
+  padding-inline: max(var(--aipet-space-5), calc((100% - 720px) / 2));
   overflow-y: auto;
   overflow-x: hidden;
   list-style: none;
@@ -296,7 +301,11 @@ watch(
 .msg-group {
   display: flex;
   gap: var(--aipet-space-2);
-  max-width: 78%;
+  /* 2026-05-20：max-width 78% → 绝对 680px；窄窗口下被 padding-inline 后的父级宽度封顶不溢出。
+     min-width: 0 保护 row-reverse + align-self:flex-end 场景下 main 内 bubble 的 flex-shrink 能正常工作，
+     避免长 bubble 把 avatar 顶出右边界（早先撤回 chat-messages max-width/margin 时同步加） */
+  max-width: 680px;
+  min-width: 0;
   list-style: none;
 }
 
@@ -321,7 +330,7 @@ watch(
   border-radius: 50%;
   overflow: hidden;
   background: var(--aipet-color-surface-soft);
-  border: 1px solid var(--aipet-color-border);
+  border: 1px solid var(--aipet-color-border-faint);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -398,7 +407,7 @@ watch(
   height: 72px;
   border-radius: 50%;
   background: var(--aipet-color-surface-soft);
-  border: 1px solid var(--aipet-color-border);
+  border: 1px solid var(--aipet-color-border-faint);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -420,7 +429,7 @@ watch(
   margin: 0;
   font-size: var(--aipet-font-size-xl);
   font-weight: 600;
-  color: var(--aipet-color-text-1);
+  color: var(--aipet-color-text-2);
   line-height: var(--aipet-line-height-display);
 }
 

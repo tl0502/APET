@@ -58,10 +58,12 @@ const isCancelled = computed(() => props.message.mode === 'cancelled')
 
 .msg__bubble {
   position: relative;
-  padding: 10px var(--aipet-space-3);
+  /* 2026-05-20：padding 10/12 → 12/16 让中文文本更舒展；line-height 1.5 → 1.7 中文阅读节奏更松；
+     radius-bubble token 已升到 18px（tokens.css 同步） */
+  padding: 12px 16px;
   border-radius: var(--aipet-radius-bubble);
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.7;
   word-break: break-word;
   white-space: pre-wrap;
   max-width: 100%;
@@ -70,13 +72,17 @@ const isCancelled = computed(() => props.message.mode === 'cancelled')
 .msg--user .msg__bubble {
   background: var(--aipet-color-bubble-user);
   color: #fff;
-  border: 1px solid var(--aipet-color-bubble-user);
+  /* 删除同色 border（占盒高度但无视觉）；改用极淡紫色投影给"重量"感 */
+  border: 0;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--aipet-color-primary) 15%, transparent);
 }
 
 .msg--assistant .msg__bubble {
   background: var(--aipet-color-bubble-assistant);
   color: var(--aipet-color-text-1);
-  border: 1px solid var(--aipet-color-border);
+  /* border-faint 1px 几乎看不见但定形；shadow-sm 给气泡一点柔和层次 */
+  border: 1px solid var(--aipet-color-border-faint);
+  box-shadow: var(--aipet-shadow-sm);
 }
 
 .msg--system .msg__bubble {

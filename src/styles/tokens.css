@@ -16,9 +16,13 @@
  */
 
 :root {
-  /* === 品牌色 === */
-  --aipet-color-primary: #7c5cff;
-  --aipet-color-primary-hover: #6b4df2;
+  /* === 品牌色 ===
+   * 2026-05-20 视觉收敛：从 #7c5cff 下调到 #8b7cff（柔和方向）。
+   * 出场频次太高的体感（"30% 品牌色而不是 10%"）部分靠降饱和缓解；
+   * 同步收掉了 chat sidebar 的 active 左色条与 active label 紫字。
+   */
+  --aipet-color-primary: #8b7cff;
+  --aipet-color-primary-hover: #7a6cf2;
 
   /* === 灰阶 elevation(亮色) === */
   --aipet-color-bg: #ffffff; /* chat 主区 / 全窗背景 */
@@ -34,6 +38,14 @@
   /* === 边框(细灰边) === */
   --aipet-color-border: #e5e5e5; /* neutral-200 */
   --aipet-color-border-strong: #d4d4d4; /* neutral-300,active/focus 卡片用 */
+  /* faint：用于 composer 浮卡 / assistant 气泡 / header hairline —— "几乎看不见但有形" */
+  --aipet-color-border-faint: rgba(0, 0, 0, 0.06);
+
+  /* === 毛玻璃专用 surface ===
+   * content-header 半透明 + backdrop-filter blur 用；
+   * 半透是为了让背后 dot-grid / 消息能透出来形成 frosted 效果。
+   */
+  --aipet-color-surface-blur: rgba(255, 255, 255, 0.75);
 
   /* === 状态色 === */
   --aipet-color-success: #16a34a;
@@ -44,11 +56,11 @@
   --aipet-color-error-surface: #fef2f2;
 
   /* === 气泡 === */
-  --aipet-color-bubble-user: #7c5cff; /* user 气泡纯色,无渐变 */
+  --aipet-color-bubble-user: #8b7cff; /* user 气泡纯色,无渐变；与 primary 同步 */
   --aipet-color-bubble-assistant: #fafafa; /* neutral-50,比 surface-soft 略亮 */
 
-  /* === 会话栏 active 左色条(品牌色保留) === */
-  --aipet-color-active-bar: #7c5cff;
+  /* === 会话栏 active 左色条（已弃用——sidebar 改用浮起卡片 + shadow-card-active，留 token 避免破其他窗口）=== */
+  --aipet-color-active-bar: #8b7cff;
   /* 在线状态点 */
   --aipet-color-online: #16a34a;
 
@@ -63,8 +75,14 @@
   --aipet-space-12: 48px;
   --aipet-space-16: 64px;
 
-  /* === 字体 === */
-  --aipet-font-family-base: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* === 字体 ===
+   * fallback 链尾部补 PingFang / HarmonyOS / YaHei：
+   * Windows 上实际走 Segoe UI → Microsoft YaHei；
+   * Mac 走 -apple-system → PingFang SC；
+   * 鸿蒙设备走 HarmonyOS Sans SC。
+   * 不引入 web font，启动 0 延迟。
+   */
+  --aipet-font-family-base: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
   --aipet-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
   --aipet-font-size-xs: 10px;
   --aipet-font-size-sm: 12px;
@@ -78,11 +96,16 @@
   --aipet-line-height-loose: 1.6;
   --aipet-line-height-display: 1.15; /* 2xl/3xl 标题专用,字间收紧 */
 
-  /* === 圆角(Apple 风偏柔但克制) === */
+  /* === 圆角(Apple 风偏柔但克制) ===
+   * 语义层级（小→大）：sm 控件局部 / base 默认 / lg 按钮/小卡 / card 会话项 / bubble 气泡 / input composer 浮卡 / window app-surface / full 圆点。
+   */
   --aipet-radius-sm: 4px;
   --aipet-radius-base: 6px;
   --aipet-radius-lg: 8px;
-  --aipet-radius-bubble: 12px; /* 气泡 10 → 12,Apple/Bear 更"柔"一点 */
+  --aipet-radius-card: 14px; /* 会话项 / 通用浮卡 */
+  --aipet-radius-bubble: 18px; /* 气泡 2026-05-20 12 → 18，AI 桌面客户端通行尺寸 */
+  --aipet-radius-input: 20px; /* composer 浮动输入胶囊；24 偏圆，20 折中桌面短窗口 */
+  --aipet-radius-window: 14px; /* app-surface 圆窗 */
   --aipet-radius-full: 999px;
 
   /* === 阴影(0.04-0.1 alpha 极淡;PetCanvas/OnboardingApp/EP 弹层 fallback 在用) === */
@@ -94,6 +117,12 @@
   --aipet-shadow-composer:
     0 -1px 0 var(--aipet-color-border),
     0 -4px 16px rgba(0, 0, 0, 0.06);
+  /* composer-soft：ChatGPT/Linear 风浮卡阴影；替换 shadow-composer 让浮卡更"轻"、不绑定上向 hairline */
+  --aipet-shadow-composer-soft:
+    0 8px 30px rgba(0, 0, 0, 0.04),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+  /* 会话项 active 浮起阴影（替换原品牌色左条） */
+  --aipet-shadow-card-active: 0 4px 12px rgba(0, 0, 0, 0.05);
 
   /* === 动效 === */
   --aipet-duration-fast: 120ms;
@@ -119,8 +148,8 @@
    * bg = #171717 (neutral-900),非纯黑;Apple/Bear app 暗色同款
    * 4 层 elevation:bg → surface-soft → surface → surface-raised
    */
-  --aipet-color-primary: #9a86ff;
-  --aipet-color-primary-hover: #b0a1ff;
+  --aipet-color-primary: #a99cff;
+  --aipet-color-primary-hover: #b8aeff;
 
   --aipet-color-bg: #171717; /* L0:主区 / 全窗背景(neutral-900) */
   --aipet-color-surface-soft: #1c1c1c; /* L1:sidebar / 二级面板 */
@@ -133,6 +162,9 @@
 
   --aipet-color-border: #333333; /* 提到 #333,与 surface #262626 拉开一档(原 #262626 与 surface 同色,border 不可见) */
   --aipet-color-border-strong: #3f3f3f; /* active/focus 卡片 */
+  --aipet-color-border-faint: rgba(255, 255, 255, 0.06);
+
+  --aipet-color-surface-blur: rgba(38, 38, 38, 0.75);
 
   --aipet-color-success: #22c55e;
   --aipet-color-warning: #f59e0b;
@@ -141,10 +173,10 @@
   --aipet-color-code-bg: #262626;
   --aipet-color-error-surface: #2a1a1d;
 
-  --aipet-color-bubble-user: #9a86ff;
+  --aipet-color-bubble-user: #a99cff;
   --aipet-color-bubble-assistant: #262626; /* L2 浮层,在 bg #171717 上是"卡片"感 */
 
-  --aipet-color-active-bar: #9a86ff;
+  --aipet-color-active-bar: #a99cff;
   --aipet-color-online: #22c55e;
 
   --aipet-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -154,6 +186,10 @@
   --aipet-shadow-composer:
     0 -1px 0 var(--aipet-color-border),
     0 -4px 16px rgba(0, 0, 0, 0.5);
+  --aipet-shadow-composer-soft:
+    0 8px 30px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  --aipet-shadow-card-active: 0 4px 12px rgba(0, 0, 0, 0.45);
 
   /* 暗色 focus ring 提到 30% alpha:暗底 primary 视感偏弱 */
   --aipet-ring-focus: 0 0 0 2px color-mix(in srgb, var(--aipet-color-primary) 30%, transparent);
