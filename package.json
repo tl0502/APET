@@ -25,7 +25,6 @@
     "@tauri-apps/api": "^2.1.0",
     "@tauri-apps/plugin-dialog": "^2.1.0",
     "cropperjs": "^1.6.2",
-    "dockview-vue": "^6.3.0",
     "element-plus": "^2.13.7",
     "marked": "^14.1.4",
     "pinia": "^2.2.0",

@@ -1,14 +1,8 @@
 <script setup lang="ts">
-// Persona panel（#33 phase B 从 src/views/settings/panels/PersonaPanel.vue 迁入）。
-//
-// 改动 vs 原 PersonaPanel.vue：
-// - 接 `PanelContext` props（dockview-vue 6.x 嵌套 props 模式；MVP 不消费 params）
-// - 新增 isPanelActive ref + `subscribeContextKeys(['activePanel'])` 监听 workspace activePanel
-//   → 传给 `<VrmAvatarExporter :is-active />` 让 VRM RAF 在切走时 pause（替代 inject('settings-active-tab')）
-// - settings 独立窗 fallback：useWorkspaceManagerOptional 返 null 时 isPanelActive 永远 true
-//   （独立窗内此 panel 即 active；Phase E 删独立窗后可改 useWorkspaceManager 严格版）
-//
-// 业务逻辑（getActivePersona + listen persona:activated）零改。
+// Persona panel（#33 phase B-redo 简化）：
+// - 删 PanelContext / useWorkspaceManagerOptional / subscribeContextKeys
+// - 直接接 props.isActive，由父级 DetailColumn 透传（workspaceLayout.currentItem === 'SettingsPersona'）
+// - settings 独立窗 mount 时 props 缺失 → 默认 true（独立窗内此 panel 唯一可见）
 
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElButton, ElDescriptions, ElDescriptionsItem, ElTag } from 'element-plus'
@@ -16,24 +10,13 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getActivePersona } from '@/services/persona'
 import type { PersonaSummary } from '@/types/persona'
 import VrmAvatarExporter from '@/components/settings/VrmAvatarExporter.vue'
-import { useWorkspaceManagerOptional } from '@/composables/useWorkspaceManager'
-import type { PanelContext } from '@/lib/workspace/types'
 
-// dockview 嵌套 props：PanelContext<MyParams>（本 panel 无业务 params）
-// settings 独立窗 mount 时 params 不存在；用 ? 守护
-defineProps<{ params?: PanelContext }>()
-
-const mgr = useWorkspaceManagerOptional()
+const props = withDefaults(defineProps<{ isActive?: boolean }>(), { isActive: true })
 
 const persona = ref<PersonaSummary | null>(null)
 const errorMsg = ref<string | null>(null)
 const loading = ref(true)
 let unlistenActivated: UnlistenFn | null = null
-
-// === panel active 监控 ===
-// mgr 为 null = settings 独立窗内，永远视为 active（panel 唯一可见）
-const isPanelActive = ref(mgr === null ? true : mgr.getActivePanel() === 'SettingsPersona')
-let unsubActive: (() => void) | null = null
 
 async function refresh() {
   try {
@@ -54,19 +37,11 @@ onMounted(async () => {
   } catch (e) {
     console.warn('[SettingsPersonaPanel] listen persona:activated failed:', e)
   }
-
-  if (mgr) {
-    unsubActive = mgr.subscribeContextKeys(['activePanel'], () => {
-      isPanelActive.value = mgr.getActivePanel() === 'SettingsPersona'
-    })
-  }
 })
 
 onBeforeUnmount(() => {
   unlistenActivated?.()
   unlistenActivated = null
-  unsubActive?.()
-  unsubActive = null
 })
 </script>
 
@@ -100,8 +75,8 @@ onBeforeUnmount(() => {
       <span class="panel__hint">工坊将在 M2 上线</span>
     </div>
 
-    <!-- #26 VRM 头像导出：is-active 由 workspace activePanel contextKey 驱动（替代 inject 链） -->
-    <VrmAvatarExporter :persona-id="persona?.id ?? null" :is-active="isPanelActive" />
+    <!-- #26 VRM 头像导出：is-active 由 workspaceLayout.currentItem === 'SettingsPersona' 驱动 -->
+    <VrmAvatarExporter :persona-id="persona?.id ?? null" :is-active="props.isActive" />
   </section>
 </template>
 

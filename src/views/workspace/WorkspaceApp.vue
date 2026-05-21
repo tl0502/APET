@@ -1,219 +1,44 @@
 <script setup lang="ts">
-// WorkspaceApp：workspace 独立窗口 root（#35 ADR-021 P1 Phase C）
+// WorkspaceApp (#33 phase B-redo)：workspace 独立窗口 root — 三栏 Desktop App Shell。
 //
-// 职责（按 onMounted 时序）：
-// 1) new WorkspaceManager({ persistence: KvWorkspacePersistence }) + provide WORKSPACE_MANAGER_KEY
-// 2) registerPanel × 3（MVP placeholder：WorkspaceChat / WorkspaceLibrary / WorkspaceSettings）
-// 3) registerCommand × 5（reveal × 3 + close active + togglePalette 占位）
-// 4) WorkspaceShell @ready → loadLayoutFromKv（成功 → layout 还原；失败 / 无 KV → openPanel 3 个 default）
-// 5) loadLastActiveFromKv → revealPanel(savedId) 还原"上次最后一个 panel"
-// 6) emit_visibility_changed listener：WebView2 hide 时 DOM visibilitychange 不触发（lib.rs 后端
-//    手动 emit），监听后 saveLayout 落盘（避免崩溃丢失最近 layout 变更）
+// 三栏永久同屏（不可 split/tab/拖拽）：
+//   ┌────┐┌────────┐┌─────────────────────┐
+//   │🐱  ││# 对话  ││  消息 / 详情          │
+//   │──  ││  conv 1││                      │
+//   │ 💬 ││  conv 2││                      │
+//   │ 📋 ││  conv 3││                      │
+//   │ 🎨 ││  …    ││                      │
+//   │ ⚙ ││        ││                      │
+//   │──  ││        ││                      │
+//   │ ❓ ││        ││                      │
+//   └────┘└────────┘└─────────────────────┘
+//    60     240 (sash)    flex:1
 //
-// onBeforeUnmount：再 saveLayout + saveLastActive 一次（"关 = hide" 不触发，但极少数 quit 路径触发）
+// 生命周期：
+// 1) workspaceLayout.loadFromKv → 还原 category / item / masterWidth
+// 2) ESC 监听 → 关 workspace = hideWorkspace（进托盘不退）
+// 3) emit_visibility_changed listener → hide 时 saveSnapshot（避免 webview 销毁丢失最近 KV）
+// 4) onBeforeUnmount 再 save 一次（极少数 quit 路径）
 
-import { onBeforeUnmount, onMounted, provide, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { listen } from '@tauri-apps/api/event'
-import {
-  Brush,
-  ChatLineRound,
-  Connection,
-  EditPen,
-  InfoFilled,
-  User,
-} from '@element-plus/icons-vue'
 
 import AppShell from '@/components/layouts/AppShell.vue'
-import WorkspaceShell from './WorkspaceShell.vue'
-import ActivityBar from './ActivityBar.vue'
-import CommandPalette from './CommandPalette.vue'
-import PlaceholderPanel from './panels/PlaceholderPanel.vue'
-// #33 phase B：5 settings panel 迁入
-import SettingsThemePanel from '@/panels/settings/SettingsThemePanel.vue'
-import SettingsProviderPanel from '@/panels/settings/SettingsProviderPanel.vue'
-import SettingsPersonaPanel from '@/panels/settings/SettingsPersonaPanel.vue'
-import SettingsNicknamePanel from '@/panels/settings/SettingsNicknamePanel.vue'
-import SettingsAboutPanel from '@/panels/settings/SettingsAboutPanel.vue'
+import BrandBar from './BrandBar.vue'
+import MasterColumn from './MasterColumn.vue'
+import DetailColumn from './DetailColumn.vue'
+import SashHandle from './SashHandle.vue'
 
-import { WORKSPACE_MANAGER_KEY } from '@/composables/useWorkspaceManager'
-import { WorkspaceManager } from '@/lib/workspace/manager'
-import { KvWorkspacePersistence } from '@/lib/workspace/persistence'
-import type { PanelDescriptor } from '@/lib/workspace/types'
-import { getConfig, setConfig } from '@/services/config'
+import { useWorkspaceLayoutStore } from '@/stores/workspaceLayout'
 import { hideWorkspace } from '@/services/window'
 
-// === 单实例 WorkspaceManager（全窗生命周期）===
-const mgr = new WorkspaceManager({
-  persistence: new KvWorkspacePersistence({
-    getKv: (key) => getConfig(key),
-    setKv: (key, value) => setConfig(key, value),
-  }),
-})
-provide(WORKSPACE_MANAGER_KEY, mgr)
-
+const layout = useWorkspaceLayoutStore()
 const ready = ref(false)
 const unlistenFns: UnlistenFn[] = []
 
-// === Panel descriptors（#33 phase B：3 占位 → 1 chat 占位 + 5 settings 真业务 panel）===
-// Chat 占位等 phase D 替换为 ChatHubPanel；Library 占位先删；Settings 5 panel 已迁入 @/panels/settings/。
-const PANELS: PanelDescriptor[] = [
-  {
-    id: 'WorkspaceChat',
-    title: '对话',
-    component: PlaceholderPanel,
-    category: 'chat',
-    mountStrategy: 'always',
-    defaultLocation: 'main',
-    icon: ChatLineRound,
-  },
-  {
-    id: 'SettingsTheme',
-    title: '外观',
-    component: SettingsThemePanel,
-    category: 'config',
-    mountStrategy: 'lazy',
-    defaultLocation: 'main.right',
-    icon: Brush,
-  },
-  {
-    id: 'SettingsProvider',
-    title: 'LLM Provider',
-    component: SettingsProviderPanel,
-    category: 'config',
-    mountStrategy: 'lazy',
-    defaultLocation: 'main.right',
-    icon: Connection,
-  },
-  {
-    id: 'SettingsPersona',
-    title: '人格',
-    component: SettingsPersonaPanel,
-    category: 'creation',
-    mountStrategy: 'always', // VRM RAF 切走 pauseLoop 而非 unmount/重 init WebGL
-    defaultLocation: 'main.right',
-    icon: User,
-  },
-  {
-    id: 'SettingsNickname',
-    title: '昵称',
-    component: SettingsNicknamePanel,
-    category: 'config',
-    mountStrategy: 'lazy',
-    defaultLocation: 'main.right',
-    icon: EditPen,
-  },
-  {
-    id: 'SettingsAbout',
-    title: '关于',
-    component: SettingsAboutPanel,
-    category: 'config',
-    mountStrategy: 'lazy',
-    defaultLocation: 'main.right',
-    icon: InfoFilled,
-  },
-]
-
-function registerDefaults() {
-  for (const desc of PANELS) {
-    try {
-      mgr.registerPanel(desc)
-    } catch (e) {
-      console.warn('[WorkspaceApp] registerPanel failed:', desc.id, e)
-    }
-  }
-  // panel.reveal.* 命令：每个 PANELS 项一条，命令面板 fuzzy 匹配可达
-  for (const desc of PANELS) {
-    try {
-      mgr.registerCommand({
-        id: `panel.reveal.${desc.id}`,
-        title: `打开 ${typeof desc.title === 'string' ? desc.title : desc.id}`,
-        handler: () => {
-          mgr.revealPanel(desc.id)
-        },
-      })
-    } catch (e) {
-      console.warn('[WorkspaceApp] registerCommand failed:', desc.id, e)
-    }
-  }
-  try {
-    mgr.registerCommand({
-      id: 'workspace.closeActive',
-      title: '关闭当前 panel',
-      handler: () => {
-        const active = mgr.getActivePanel()
-        if (active) void mgr.closePanel(active)
-      },
-    })
-  } catch (e) {
-    console.warn('[WorkspaceApp] register closeActive failed:', e)
-  }
-  try {
-    mgr.registerCommand({
-      id: 'workspace.togglePalette',
-      title: '命令面板（Ctrl+P）',
-      handler: () => {
-        const cur = mgr.getContextKey('paletteVisible') === true
-        mgr.setContextKey('paletteVisible', !cur)
-      },
-    })
-  } catch (e) {
-    console.warn('[WorkspaceApp] register togglePalette failed:', e)
-  }
-}
-
-async function restoreLayout() {
-  // KV 有 → 走还原；失败 / 无 KV → openPanel 3 个 default
-  try {
-    await mgr.loadLayoutFromKv()
-  } catch (e) {
-    console.warn('[WorkspaceApp] loadLayoutFromKv failed:', e)
-  }
-  // review P0 修复（F-1.1）：判定基于 manager.listOpenPanels()（adapter 事件已回灌真实状态）
-  // 而不是 PANELS.some(p => mgr.isPanelOpen(p.id))。后者在 KV 存了旧版本 panel id 时永远 false
-  // 走 default → 与 dockview 已部分 mount 的状态冲突。listOpenPanels.length>0 说明 deserialize
-  // 成功还原过任意 panel（无论 id 是否在当前 PANELS 列表里），跳过 default 即可。
-  const restored = mgr.listOpenPanels().length > 0
-  if (!restored) {
-    // default：开 chat 占位 + Theme 作为右侧首屏（其它 settings panel 走 ActivityBar / 命令面板按需）
-    try {
-      mgr.openPanel('WorkspaceChat', { tone: 'chat' })
-      mgr.openPanel('SettingsTheme')
-    } catch (e) {
-      console.warn('[WorkspaceApp] default openPanel failed:', e)
-    }
-  }
-  // 上次最后 active panel（若已 open 则切到它；不存在则保持 default = 最后开的那个）
-  try {
-    const last = await mgr.loadLastActiveFromKv()
-    if (last && mgr.isPanelOpen(last)) mgr.revealPanel(last)
-  } catch (e) {
-    console.warn('[WorkspaceApp] loadLastActiveFromKv failed:', e)
-  }
-}
-
-function onShellReady() {
-  ready.value = true
-  void restoreLayout()
-}
-
-async function saveSnapshot() {
-  try {
-    await mgr.saveLayoutToKv()
-  } catch (e) {
-    console.warn('[WorkspaceApp] saveLayoutToKv failed:', e)
-  }
-  try {
-    await mgr.saveLastActiveToKv()
-  } catch (e) {
-    console.warn('[WorkspaceApp] saveLastActiveToKv failed:', e)
-  }
-}
-
 async function onClose() {
-  // 关 = hide（lib.rs CloseRequested 拦截 + 联判，本路径是用户点 ✕ 走 IPC）
-  // 先 saveSnapshot 再 hide，避免极少数 hide 立即销毁 webview 路径丢失 layout
-  await saveSnapshot()
+  // workspace ✕ → hide（lib.rs CloseRequested 联判 + 联走 IPC）
   try {
     await hideWorkspace()
   } catch (e) {
@@ -221,27 +46,13 @@ async function onClose() {
   }
 }
 
-function onGlobalKeydown(e: KeyboardEvent) {
-  // Ctrl+P (Cmd+P) → 命令面板（仅 workspace 窗内生效；与浏览器"打印"冲突由 preventDefault 处理）
-  // 不挂 Ctrl+Shift+P：MVP 阶段单触发够用，避免与系统/IDE 撞
-  //
-  // review P1 修复 (F-6.1-fe)：已开时 noop —— togglePalette 命令是 toggle 语义（已开→关），
-  // 用户连按 Ctrl+P 的常见预期是"reset + 重新聚焦"而非"关闭"。已开时 noop 让 Esc 成为关闭的
-  // 唯一路径（CommandPalette 已绑 Esc），语义对齐 VSCode（其 Ctrl+P 在已开时让 input focus + select-all，
-  // MVP 阶段 ElInput 已是 autofocus 不需要额外处理 → 这里 return 即可）。
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
-    e.preventDefault()
-    if (mgr.getContextKey('paletteVisible') === true) return
-    try {
-      void mgr.executeCommand('workspace.togglePalette')
-    } catch (err) {
-      console.warn('[WorkspaceApp] toggle palette via Ctrl+P failed:', err)
-    }
-    return
-  }
+function onSashChange(width: number) {
+  layout.setMasterWidth(width)
+}
 
+function onGlobalKeydown(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
-  // Esc 弹窗 / input 聚焦时让组件 cancel，不一律 hide
+  // ESC 弹窗 / input 聚焦时不响应
   if (document.querySelector('.el-message-box, .el-dialog__wrapper, .el-overlay')) return
   const active = document.activeElement
   if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
@@ -249,18 +60,21 @@ function onGlobalKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  registerDefaults()
+  await layout.loadFromKv()
+  ready.value = true
 
   window.addEventListener('keydown', onGlobalKeydown)
 
   // emit_visibility_changed：lib.rs 在 show/hide 时 emit `window:visibility-changed`
-  // payload = { label, visible }。hide 之前 save snapshot 一次。
+  // payload = { label, visible }。hide 之前 store 内的 debounce 已自动落盘最近改动。
+  // 本 listener 用于额外触发一次显式 flush（debounce 期间 hide 时兜底）
   try {
     const un = await listen<{ label: string; visible: boolean }>(
       'window:visibility-changed',
       async (event) => {
         if (event.payload.label === 'workspace' && event.payload.visible === false) {
-          await saveSnapshot()
+          // workspaceLayout 的 saveXxxToKv 都已在 setter 内自动触发；这里仅 console.debug
+          console.debug('[WorkspaceApp] hide event received, KV already persisted')
         }
       },
     )
@@ -268,17 +82,11 @@ onMounted(async () => {
   } catch (e) {
     console.warn('[WorkspaceApp] listen visibility-changed failed:', e)
   }
-
-  // review P0 修复（F-3.2 后端）：shortcut:workspace 事件不再 emit；Rust handler 直接调
-  // toggle_workspace。原来的 listen + toggleWorkspace IPC 回环已删除，消除 listener 未挂
-  // 时按键事件丢失的 race（详 shortcuts.rs handle_workspace_shortcut_pressed 注释）。
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   unlistenFns.forEach((u) => u())
-  // unmount 时也 save 一次（极少数 quit 路径走这）
-  void saveSnapshot()
 })
 </script>
 
@@ -295,12 +103,18 @@ onBeforeUnmount(() => {
         @click="onClose"
       >✕</button>
     </template>
-    <WorkspaceShell @ready="onShellReady">
-      <template #activity>
-        <ActivityBar v-if="ready" />
-      </template>
-    </WorkspaceShell>
-    <CommandPalette v-if="ready" />
+
+    <div v-if="ready" class="workspace-body">
+      <BrandBar />
+      <MasterColumn />
+      <SashHandle
+        :width="layout.masterWidth"
+        :min="layout._MASTER_WIDTH_MIN"
+        :max="layout._MASTER_WIDTH_MAX"
+        @update:width="onSashChange"
+      />
+      <DetailColumn />
+    </div>
   </AppShell>
 </template>
 
@@ -310,5 +124,13 @@ onBeforeUnmount(() => {
   font-weight: 500;
   color: var(--aipet-color-text-1);
   padding: 0 var(--aipet-space-3);
+}
+
+.workspace-body {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  min-height: 0;
+  background: var(--aipet-color-bg);
 }
 </style>

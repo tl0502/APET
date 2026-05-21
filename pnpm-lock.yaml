@@ -23,9 +23,6 @@ importers:
       cropperjs:
         specifier: ^1.6.2
         version: 1.6.2
-      dockview-vue:
-        specifier: ^6.3.0
-        version: 6.3.0(vue@3.5.34(typescript@5.9.3))
       element-plus:
         specifier: ^2.13.7
         version: 2.13.7(typescript@5.9.3)(vue@3.5.34(typescript@5.9.3))
@@ -1082,14 +1079,6 @@ packages:
 
   deep-is@0.1.4:
     resolution: {integrity: sha512-oIPzksmTg4/MriiaYGO+okXDT7ztn/w3Eptv/+gSIdMdKsJo0u4CfYNFJPy+4SKMuCqGw2wxnA+URMg3t8a/bQ==}
-
-  dockview-core@6.3.0:
-    resolution: {integrity: sha512-KY4goMIcVrMh+LDtU+bwANkwK8FRxRUS6EKD/QH1OPNcj8wq0MjGKes5PojM4N0/1NxAsI4Bem/TFV4jiiOKGg==}
-
-  dockview-vue@6.3.0:
-    resolution: {integrity: sha512-voK7aLQgXcovNFishC538rHM/PeywjwQ1rgRB3vDKylJIyd7eJ6LRsgtwbp9P7wDp4eg6kmZ6aaxdfOL1Q9Q1A==}
-    peerDependencies:
-      vue: ^3.4.0
 
   eastasianwidth@0.2.0:
     resolution: {integrity: sha512-I88TYZWc9XiYHRQ4/3c5rjjfgkjhLyW2luGIheGERbNQ6OY7yTybanSpDXZa8y7VUP9YmDcYa+eyq4ca7iLqWA==}
@@ -2744,13 +2733,6 @@ snapshots:
   decimal.js@10.6.0: {}
 
   deep-is@0.1.4: {}
-
-  dockview-core@6.3.0: {}
-
-  dockview-vue@6.3.0(vue@3.5.34(typescript@5.9.3)):
-    dependencies:
-      dockview-core: 6.3.0
-      vue: 3.5.34(typescript@5.9.3)
 
   eastasianwidth@0.2.0: {}
 
