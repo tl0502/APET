@@ -218,8 +218,8 @@ pub(crate) fn show_workspace(app: &AppHandle) {
     }
 }
 
-/// 隐藏 workspace 主窗（不销毁，保留 dockview layout + panel 实例；
-/// 同 settings/tasks 模式；KV `workspace:layout` 在前端 onBeforeUnmount 持久化）。
+/// 隐藏 workspace 主窗（不销毁，保留 workspaceLayout state + panel SFC v-show mount；
+/// KV `workspace:layout` 在前端 onBeforeUnmount 持久化）。
 pub(crate) fn hide_workspace(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(WORKSPACE_WINDOW_LABEL) {
         let _ = window.hide();

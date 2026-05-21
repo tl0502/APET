@@ -29,7 +29,7 @@ function onSelect(itemId: string) {
   <aside class="master-col" :style="{ width: layout.masterWidth + 'px' }" aria-label="master 列">
     <header class="master-col__header">
       <ElIcon :size="16" class="master-col__header-icon">
-        <component v-if="currentCategoryMeta" :is="currentCategoryMeta.icon" />
+        <component :is="currentCategoryMeta.icon" v-if="currentCategoryMeta" />
       </ElIcon>
       <span class="master-col__header-title">{{ currentCategoryMeta?.title ?? '' }}</span>
     </header>
