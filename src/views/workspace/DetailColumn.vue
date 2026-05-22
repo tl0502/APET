@@ -78,8 +78,7 @@ const isPersonaActive = computed(
 
 <style scoped>
 .detail-col {
-  flex: 1 1 auto;
-  height: 100%;
+  /* 宽度由父 grid 列 1fr 控制；高度由 grid 行 1fr 控制（#37 P3） */
   background: var(--aipet-color-bg);
   display: flex;
   flex-direction: column;

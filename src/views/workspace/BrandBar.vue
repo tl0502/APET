@@ -92,8 +92,8 @@ onMounted(async () => {
 
 <style scoped>
 .brand-bar {
+  /* 高度由父 grid 行 1fr 控制（#37 P3：grid item 默认 stretch） */
   width: 60px;
-  height: 100%;
   background: var(--aipet-color-surface-soft);
   border-right: 1px solid var(--aipet-color-border-faint);
   display: flex;
@@ -102,6 +102,7 @@ onMounted(async () => {
   padding: var(--aipet-space-2) 0 var(--aipet-space-3);
   position: relative;
   z-index: 2;
+  min-height: 0;
 }
 
 .brand-bar__list {

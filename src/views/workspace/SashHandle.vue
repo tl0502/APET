@@ -86,9 +86,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .sash {
+  /* 宽度 3px 由 flex/grid 自身控制；高度由父 grid 行 1fr 控制（#37 P3） */
   flex: 0 0 3px;
   width: 3px;
-  height: 100%;
   cursor: col-resize;
   position: relative;
   background: transparent;
