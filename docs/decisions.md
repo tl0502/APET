@@ -204,11 +204,50 @@ related:
 
 - **Supersedes**：[desktop-ui-principles.md §1](design/desktop-ui-principles.md) "多窗 ≠ 单页路由"隐含的"工具型窗都独立化"默认（改写见该文档 *Updated 2026-05-20*）；[tray.rs:5](../src-tauri/src/services/tray.rs#L5) "左键单击/双击托盘图标 → 无操作"决策（双击改为 workspace toggle）；原 SettingsApp.vue / TasksApp.vue 中 ~70 行 ElTabs 左排自绘 ✕ 复制粘贴模板（P2 后两文件删除）。
 - **Updated 2026-05-21（#33 phase B-redo 砍 dockview）**：P2 实施中决定砍掉 dockview-vue + DockviewAdapter + WorkspaceManager + PanelRegistry + when DSL + fuzzyMatch + persistence 7 src 文件 + 6 单测（~6800 LOC 净删）。改为手写三栏 Desktop App Shell（[BrandBar.vue](../src/views/workspace/BrandBar.vue) + [MasterColumn.vue](../src/views/workspace/MasterColumn.vue) + [DetailColumn.vue](../src/views/workspace/DetailColumn.vue) + [SashHandle.vue](../src/views/workspace/SashHandle.vue)）+ [workspaceLayout.ts](../src/stores/workspaceLayout.ts) pinia store（4 category × N item KV）+ DetailColumn `v-show` 全挂载 switch（保 VRM RAF / Tauri listeners / scroll / 表单状态）。**为什么砍**：本 ADR 验收是"8 panel 行为等价旧独立窗"——旧独立窗本来就没 panel drag-drop / tab tear-off / persistent layout，dockview 提供的是超规格能力；panel 数 8，DetailColumn switch 比 13 字段 schema 诚实。**M4 重引信号**：若 personas.workshop multi-instance / wardrobe.studio / hub-chat 真需要 panel tear-off 或 drag-drop，再评估 dockview 或自封 layout 引擎（panel SFC 本身零改动可回独立窗或 dock 容器，workspaceLayout state 可丢弃）。**保留生效**：Activity Bar ≤ 7 项硬约束（现 BrandBar 4 category + 底栏 2）、双入口共享 service（pomodoro / chat）、chat.hub singleton:true、Onboarding 完成引导、tray 左键双击唤起 workspace。**P0 spike #32 9✅+1❌结论仍有效**（spike 确认了 dockview 能力上限，是判断"本 milestone 不需要它"的依据；[REPORT.md](spikes/workspace-spike/REPORT.md) 归档保留）。
+- **Updated 2026-05-22（P3 落地 #37）**：workspace 顶栏从「不可见 32px drag-bar + 飘三按钮」改为实色 48px L 型框 chrome — topbar + sidebar + master 共享 `--aipet-color-surface-soft`，detail 保 `--aipet-color-bg` 主舞台（spec §3.2）。同步引入 in-workspace 用户 popup（880×580 overlay，非独立 Tauri 窗，state 与 workspace 共享）— SettingsNickname / SettingsAbout 搬入 popup（[UserProfilePanel](../src/panels/user/UserProfilePanel.vue) / [UserAboutPanel](../src/panels/user/UserAboutPanel.vue)）+ Help / About 实做 + Account / Privacy / Notifications 灰显占位（M3+ 接入）。workspace `设置` 类别简化为 外观 + LLM Provider 两项。新增 panel 容器公约 `.panel--form` (max-width 720) / `.panel--chat` (880) / `.panel--list` (fluid)，[SettingsThemePanel](../src/panels/settings/SettingsThemePanel.vue) 套用作 Phase 1 示范，其余 6 panel 留 Phase 2。**关键技术决策**：① 整层 `data-tauri-drag-region` + 按钮 `data-tauri-drag-region="false"` 豁免（替代 0 宽空 drag div 失败方案）；② Profile vs Account 严格分离（profile = 展示信息 / account = 认证系统 M3+，避免新用户误以为账户系统就绪）；③ in-workspace popup 而非独立 Tauri 窗（state 共享 + 关闭 hide vs destroy + 实测桌宠场景下足够，避免 webview 第二份内存）；④ panel__title 用 sticky + 实色 `--aipet-color-bg`（非半透明 blur，治滚动叠加重影；详见 [ADR-023](#adr-023-styles-panel-title-css-sticky-margin-conflict)）。**关联**：[#37](https://github.com/tl0502/APET/issues/37) 24 commit `dbf03e0→76dedd7`；spec [docs/superpowers/specs/2026-05-21-workspace-redesign/design.md](superpowers/specs/2026-05-21-workspace-redesign/design.md)；plan [docs/superpowers/plans/2026-05-21-workspace-redesign-phase-1.md](superpowers/plans/2026-05-21-workspace-redesign-phase-1.md)。**Phase 2 follow-up**：[#38](https://github.com/tl0502/APET/issues/38) dark mode token 改造（阶梯不协调 + border 不可见）+ 剩余 6 panel 套容器公约。
+
+---
+
+### ADR-022 in-workspace popup sidebar nav 规范（flat + 3 状态）
+
+- **选了什么**：**flat sidebar nav**（无 accordion / collapse，最多 6 项一屏看尽）+ **3 状态机**（Active 选中态 / Normal 默认 / Disabled 占位灰显 + badge "M3+ 上线"）+ **identity card + search filter 头部**（[PopupSidebar.vue](../src/components/popup/PopupSidebar.vue)）。nav 分 3 组：个人（profile / account）/ 应用（privacy / notifications）/ 支持（help / about）。
+
+- **为什么**：① 桌宠场景 nav 项数已知上限 6（profile/account/privacy/notifications/help/about），无 accordion 必要——accordion 在 > 8 项才有收益，6 项 flat 一屏更快定位；② 3 状态机让"未来要做"明示给用户（disabled + badge），避免做一半的 UI 含混不清；③ identity card 顶置等于"你是谁"自我确认 + 搜索 filter 是高级用户 power feature，对单人桌宠项目低成本（filter 是 client-side string match）。④ Activity Bar ≤ 7 项硬约束（ADR-021）只约束 workspace sidebar，**user popup 是独立 namespace** — popup 的 nav 数与 workspace Activity Bar 无关，但 popup 自身仍守 ≤ 8 项软上限以保持一屏感。
+
+- **代价**：① accordion 在 M5+ 加 plugins / debug 等高阶项时若 popup nav 涨到 > 8，需重评估折叠；② disabled + badge 视觉污染初期 5 个 placeholder 类用例显得"半成品" — 与"明示未来"取舍后选明示。
+
+- **关联**：[#37](https://github.com/tl0502/APET/issues/37) `4397fa0` PopupSidebar 实现；spec §5 / §6.3。
+
+---
+
+### ADR-023 styles panel-title CSS sticky margin conflict
+
+> 教训型 ADR — 记录 CSS sticky + margin negative 组合的算术冲突陷阱，避免未来 panel 系统重蹈覆辙。
+
+- **触发**：[#37](https://github.com/tl0502/APET/issues/37) Fix-4a `c0ab678` 修复 panel__title 滚动叠加遮挡 panel__content 的根因诊断。
+
+- **现象**：`.panel__title { position: sticky; top: 0; margin: -20px -24px 0; padding: 12px 24px; ... }`（原 [#36](https://github.com/tl0502/APET/issues/36) phase 1 抽 panel.css 时的设计：用 negative margin 把 title 拉出 detail-col__panel padding edge，达到"通栏到容器边缘"视觉）。Detail panel 滚动时 title 浮起遮挡下方 panel__content，越滚越严重。
+
+- **根因**：sticky 的 `top: 0` 约束与 `margin-top: -20px` 算术互相打架。
+  - **Layout 阶段**：title 的 box-top 因 margin-top 负值在 padding-top edge 上方 20px → layout 给后续 sibling 留位置时按 title 占 29px (49-20) 算 → panel__content 起点在 padding-top edge + 29 + 16(flex gap) = +45 处。
+  - **Paint 阶段**：sticky `top: 0` 强制 box-top **不允许超过 padding-top edge** → paint 时 title 强行下推到 padding-top: 0 ~ +49 区域显示。
+  - **错位差 ≈ 20px**：title 实际显示位置比 layout 给后续 sibling 留的位置低 20px。滚动越多 panel__content 越往上爬，错位差越大叠加越严重（CSS spec：sticky 不调整 layout，只调整 paint）。
+
+- **结论**：**sticky 元素禁止使用 `margin-top: negative`**，否则 layout 与 paint 会不一致。若需要 title 通栏到容器边缘，改用以下任一方案：
+  1. 容器自身 padding-left/right 通栏，title 与正文同 padding；
+  2. title `padding-left/right` 自补 + 容器 `padding-left/right: 0`；
+  3. 放弃通栏，title 与正文同左右对齐（接容器 padding） — **本 ADR 选项**。
+
+- **影响范围**：`.panel__title` 全局规则（消费方：SettingsThemePanel / SettingsProviderPanel / SettingsPersonaPanel / TasksReminderPanel / NicknameForm 5 处）。修后 title 与 panel__content 同左右内嵌，损失"贴边通栏感"，换正确性。
+
+- **教训外推**：scoped CSS 不会自动 reset 全局规则未覆盖的属性（NicknameForm scoped 只覆 margin/font，全局 sticky/padding/background 仍生效 → popup 内嵌时仍 sticky 黏顶遮挡，本 issue Fix-4b 才完整治）。若组件被搬到新容器（如 popup），原作用域规则可能跨容器穿透 → 检查全局规则的 selector 特异性 + 组件实际渲染位置。
+
+- **关联**：[#37](https://github.com/tl0502/APET/issues/37) `c0ab678` / `76dedd7`；panel.css 文件头注释同步记录算术陷阱。
 
 ---
 
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-022**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-024**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。
