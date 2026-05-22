@@ -14,8 +14,6 @@ import { computed } from 'vue'
 import SettingsThemePanel from '@/panels/settings/SettingsThemePanel.vue'
 import SettingsProviderPanel from '@/panels/settings/SettingsProviderPanel.vue'
 import SettingsPersonaPanel from '@/panels/settings/SettingsPersonaPanel.vue'
-import SettingsNicknamePanel from '@/panels/settings/SettingsNicknamePanel.vue'
-import SettingsAboutPanel from '@/panels/settings/SettingsAboutPanel.vue'
 import TasksReminderPanel from '@/panels/tasks/TasksReminderPanel.vue'
 import TasksPomodoroPanel from '@/panels/tasks/TasksPomodoroPanel.vue'
 import TasksTodoPanel from '@/panels/tasks/TasksTodoPanel.vue'
@@ -45,7 +43,7 @@ const isPersonaActive = computed(
       :show-sidebar-toggle="false"
     />
 
-    <!-- settings 5 panel：v-show 永远 mount + 按 currentItem 切显示 -->
+    <!-- settings 3 panel：v-show 永远 mount + 按 currentItem 切显示 -->
     <SettingsThemePanel
       v-show="layout.currentItem === 'SettingsTheme'"
       class="detail-col__panel"
@@ -58,14 +56,6 @@ const isPersonaActive = computed(
       v-show="layout.currentItem === 'SettingsPersona'"
       class="detail-col__panel"
       :is-active="isPersonaActive"
-    />
-    <SettingsNicknamePanel
-      v-show="layout.currentItem === 'SettingsNickname'"
-      class="detail-col__panel"
-    />
-    <SettingsAboutPanel
-      v-show="layout.currentItem === 'SettingsAbout'"
-      class="detail-col__panel"
     />
 
     <!-- tasks 3 panel：v-show 永远 mount 保 listener / scheduler 在线 -->
