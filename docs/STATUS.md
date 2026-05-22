@@ -19,11 +19,11 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（7/7 落地 + chrome 适配 ✅；待办 + 物理交互待办）
-- **当前 session 在做**：[#36](https://github.com/tl0502/APET/issues/36) workspace chrome 层视觉适配 — 8 phase commit `0a7783f→5d60678`（WorkspaceApp 自绘 chrome 三按钮 + brand-bar 占整列 + panel.css/buttons.css 全局抽取 + 8 panel SFC scoped css 重构 + master 节奏对齐业界 + sash 3 状态视觉 + chat 空状态 CTA + brand-bar 微动效）— typecheck / build / cargo check 全绿
-- **下一步**：#36 关闭 → [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
+- **当前 milestone**：M2 W3 进行中（8/8 落地 ✅；待办 + 物理交互待办）
+- **当前 session 在做**：[#37](https://github.com/tl0502/APET/issues/37) workspace 重设计 P3 — 24 commit `dbf03e0→76dedd7`（chrome L 型框 + Profile popup + 容器公约 + 4 项 P0/P1 structural fix + 7 项视觉错位 fix）— 293/293 vitest pass，全绿
+- **下一步**：[#38](https://github.com/tl0502/APET/issues/38) dark mode token 改造（Phase 2 单独 session） → [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
 - **阻塞**：无
-- **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + 5+3 panel 内嵌 + chat 主床/磁吸双形态全套就位
+- **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 
 ---
 
@@ -36,7 +36,7 @@ related:
 - W2 收尾 ✅ [#21](https://github.com/tl0502/APET/issues/21) Onboarding Step 2-6 + LivingPet 自由活动 + VRM 微动作
 - 美化补丁 ✅ [#27](https://github.com/tl0502/APET/issues/27) 三窗 design system 收尾（Apple/Bear neutral + Vercel）
 
-### M2 W3-W4（任务三件套 + 物理交互 + 磁吸 + 人格工坊 + workspace 壳）— 进行中（7/7 完成 + chrome 适配 ✅）
+### M2 W3-W4（任务三件套 + 物理交互 + 磁吸 + 人格工坊 + workspace 壳）— 进行中（8/8 完成 ✅）
 
 - ✅ [#25](https://github.com/tl0502/APET/issues/25) G: 用户头像上传 v2（cropperjs 圆形裁剪）
 - ✅ [#26](https://github.com/tl0502/APET/issues/26) A: VRM 头像导出（实时预览 + 表情/镜头 + DPR 安全）
@@ -53,7 +53,11 @@ related:
   - ↳ ✅ phase C/D `c5c54df→f2fd7da`：tasks 3 panel 迁入 + DetailColumn map / chat 主床（拆 ChatThreadPane + ConversationListPane，ChatBody 化为薄 wrapper）
   - ↳ ✅ phase E `b929721`：删 settings/tasks 独立窗 + 托盘菜单精简（5 项）+ pomodoro_start 不弹浮窗（17 文件 +56/-762）
   - ↳ ✅ phase E review / phase F chat `154cc98→b88641e`：lint :is 顺序 + dockview 残注释 + ADR-021 Updated；chat 表面视觉收敛（浮卡 composer + 卡片化 sidebar + 中性化气泡）
-- ✅ [#36](https://github.com/tl0502/APET/issues/36) workspace chrome 层视觉适配：WorkspaceApp 自绘 chrome 三按钮（min/max/close）+ brand-bar 占整列 + panel.css/buttons.css 全局抽取 + 8 panel SFC scoped css 重构 + master 节奏对齐业界（14/15/18 typography + 36px item + sticky backdrop blur）+ sash 3 状态视觉 + chat 空状态 + 新对话 CTA + brand-bar 微动效（active 竖条 + persona pulse） — 8 phase commit `0a7783f→5d60678`（业界 research：Discord/Slack/VSCode/Linear + Apple Big Sur vibrancy + NN/G empty state）
+- ✅ [#36](https://github.com/tl0502/APET/issues/36) workspace chrome 层视觉适配：WorkspaceApp 自绘 chrome 三按钮（min/max/close）+ brand-bar 占整列 + panel.css/buttons.css 全局抽取 + 8 panel SFC scoped css 重构 + master 节奏对齐业界 + sash 3 状态视觉 + chat 空状态 + brand-bar 微动效 — 8 phase commit `0a7783f→5d60678`（被 #37 chrome L 型框重做覆盖）
+- ✅ [#37](https://github.com/tl0502/APET/issues/37) ADR-021 P3: workspace 重设计 — 实色 48px L 型 chrome 框 + Profile in-workspace popup（880×580 overlay + sidebar nav profile/account/privacy/notifications/help/about 6 项）+ panel.css 容器公约（panel--form 720 / panel--chat 880 / panel--list fluid）+ SettingsNickname/About 搬入 popup + workspace settings 简化为 外观+LLM Provider — 24 commit `dbf03e0→76dedd7`（spec + plan + impl + 4 P0/P1 structural fix + 7 视觉错位 fix）
+  - ↳ ✅ structural fix `339d1e6→f52e8be`：workspace.css reset / capabilities min/max / grid 列宽 CSS 变量 / 清 grid 子组件 height:100%
+  - ↳ ✅ 错位 fix `832a981→76dedd7`：popup 4 panel 删冗余 panel__title / chat master conv-sidebar 适配 / topbar 整层 drag-region / popup-main min-height:0 / panel__title 实色 bg / **panel__title 删 margin negative**（治 sticky 与 layout 算术冲突 — 关键根因）/ NicknameForm 内嵌 panel__title 改 subtitle
+- ⏳ [#38](https://github.com/tl0502/APET/issues/38) [设计系统] dark mode 阶梯不协调 + light mode token 倒序 + border 在 dark 不可见（Phase 2 单独 session）
 - ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
