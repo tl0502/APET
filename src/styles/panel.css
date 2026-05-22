@@ -7,9 +7,10 @@
    保留 panel-specific 类（如 .panel__dev、.panel__provider-row）。
 
    .panel__title 用 sticky + 实色 bg 实现"列顶部固定标题"。
-   margin 负值把 sticky title 拉出 detail-col__panel 16px 24px 内边距。
-   (实色 bg 取代原 backdrop blur：blur 半透明会在滚动时让下方文字透过形成
-   双层叠加重影；desktop app 需要明确层次分隔。)
+   与 panel__content 同左右对齐（不通栏到容器边缘）。
+   (历史曾用 margin negative 拉到容器边实现通栏感，但 sticky top: 0 会强制
+   box-top ≥ padding-top edge，与 margin-top: -N 算术矛盾，paint 与 layout
+   错位 → 滚动时 title 浮起遮挡下方内容。改用 in-flow padding 0 + 与正文对齐。)
 
    === 色区 token 映射（#37 重设计）===
    - workspace L 型框（topbar + sidebar + master）→ --aipet-color-surface-soft
@@ -31,12 +32,14 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  margin: calc(-1 * var(--aipet-space-5)) calc(-1 * var(--aipet-space-6)) 0;
-  padding: var(--aipet-space-3) var(--aipet-space-6);
-  /* 实色 bg（与 detail-col 主舞台同色）+ 1px 底线。
-     原 surface-blur 半透明 + backdrop-filter 在 sticky 滚动时会让下方 panel__content
-     文字透过模糊层显形，视觉上形成"双层叠加"重影。desktop app 标题需要明确层次，
-     改实色 + 显式 border 形成明确分隔。 */
+  /* 删 negative margin：原 -20 -24 0 试图把 title 拉到容器边缘"通栏"，但与 sticky
+     top: 0 互相打架——layout 计算把 title box-top 推到 padding-top 上方 20px，
+     而 sticky 强制 box-top ≥ padding-top edge，导致 paint 与 layout 错位，
+     panel__content 起点被 title 覆盖（滚动越多叠加越严重）。
+     现在 title 与 panel__content 左右对齐（接 detail-col__panel padding），
+     sticky 时无算术冲突，无叠加。 */
+  margin: 0;
+  padding: var(--aipet-space-3) 0;
   background: var(--aipet-color-bg);
   border-bottom: 1px solid var(--aipet-color-border-faint);
   font-size: var(--aipet-font-size-lg);
