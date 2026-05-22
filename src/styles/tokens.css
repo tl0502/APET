@@ -7,12 +7,15 @@
  *  - 无毛玻璃,无渐变;层级靠纯色阶梯 + 1px border 表达
  *  - 阴影用极淡(0.04-0.1 alpha,亮色);PetCanvas/OnboardingApp/EP 弹层 fallback 在用
  *
- * 亮色 elevation(2 档):
- *   bg(#ffffff,主区) → surface-soft(#f5f5f5 neutral-100,sidebar) → surface/raised(#ffffff 浮起)
+ * 亮色 elevation(背峰式 3+1):
+ *   bg(#ffffff,L0 主区) / surface-soft(#f5f5f5 neutral-100,L1 sidebar)
+ *     / surface(#ffffff,L2 卡片) / surface-raised(#ffffff,L3 modal)
+ *   —— L0/L2/L3 同色，靠 shadow + border 分层（Bear/Linear/MacOS Big Sur 通行）
  *
- * 暗色 elevation(4 档,Linear 风):
- *   bg(#171717 neutral-900,主区) → surface-soft(#1c1c1c,sidebar)
- *     → surface(#262626 neutral-800,卡片/hover/气泡) → surface-raised(#2e2e2e,modal/dropdown)
+ * 暗色 elevation(保守型 4 色阶,Linear/Bear 风):
+ *   bg(#171717 L0,主区) → surface-soft(#1f1f1f L1,sidebar,+8)
+ *     → surface(#2a2a2a L2,卡片/气泡,+11) → surface-raised(#333333 L3,modal,+9)
+ *   —— 每档差 ≥8 单位（人眼可分辨下限 ~6），总跨 28
  */
 
 :root {
@@ -27,7 +30,7 @@
   /* === 灰阶 elevation(亮色) === */
   --aipet-color-bg: #ffffff; /* chat 主区 / 全窗背景 */
   --aipet-color-surface-soft: #f5f5f5; /* sidebar / 二级面板(neutral-100) */
-  --aipet-color-surface: #fafafa; /* 卡片 / content area / 气泡浮起层(L2)；与 dark 主题对称四层阶梯 */
+  --aipet-color-surface: #ffffff; /* L2 卡片 — 与 L0 同色，靠 shadow + border 浮起（Bear/Linear/MacOS Big Sur 通行）*/
   --aipet-color-surface-raised: #ffffff; /* dropdown / modal / dialog 顶层 */
 
   /* === 文字三档(neutral-900/600/400) === */
@@ -39,7 +42,7 @@
   --aipet-color-border: #e5e5e5; /* neutral-200 */
   --aipet-color-border-strong: #d4d4d4; /* neutral-300,active/focus 卡片用 */
   /* faint：用于 composer 浮卡 / assistant 气泡 / header hairline —— "几乎看不见但有形" */
-  --aipet-color-border-faint: rgba(0, 0, 0, 0.06);
+  --aipet-color-border-faint: rgba(0, 0, 0, 0.08);
 
   /* === 毛玻璃专用 surface ===
    * content-header 半透明 + backdrop-filter blur 用；
@@ -152,17 +155,17 @@
   --aipet-color-primary-hover: #b8aeff;
 
   --aipet-color-bg: #171717; /* L0:主区 / 全窗背景(neutral-900) */
-  --aipet-color-surface-soft: #1c1c1c; /* L1:sidebar / 二级面板 */
-  --aipet-color-surface: #262626; /* L2:卡片 / hover / 气泡浮起(neutral-800) */
-  --aipet-color-surface-raised: #2e2e2e; /* L3:dropdown / modal / dialog 顶层 */
+  --aipet-color-surface-soft: #1f1f1f; /* L1:sidebar / 二级面板（旧 #1c1c1c，+3 拉开与 L0 至 +8） */
+  --aipet-color-surface: #2a2a2a; /* L2:卡片 / hover / 气泡浮起（旧 #262626，+4 拉开与 L1 至 +11） */
+  --aipet-color-surface-raised: #333333; /* L3:dropdown / modal / dialog 顶层（旧 #2e2e2e，+5 拉开与 L2 至 +9） */
 
   --aipet-color-text-1: #fafafa; /* neutral-50 */
   --aipet-color-text-2: #a3a3a3; /* neutral-400 */
   --aipet-color-text-3: #737373; /* neutral-500 */
 
-  --aipet-color-border: #333333; /* 提到 #333,与 surface #262626 拉开一档(原 #262626 与 surface 同色,border 不可见) */
+  --aipet-color-border: #3d3d3d; /* #38: surface-raised 升到 #333 后 border 跟到 #3d 避免在 L3 上撞色（vs L3 +10 vs border-strong -2） */
   --aipet-color-border-strong: #3f3f3f; /* active/focus 卡片 */
-  --aipet-color-border-faint: rgba(255, 255, 255, 0.06);
+  --aipet-color-border-faint: rgba(255, 255, 255, 0.10);
 
   --aipet-color-surface-blur: rgba(38, 38, 38, 0.75);
 
@@ -174,7 +177,7 @@
   --aipet-color-error-surface: #2a1a1d;
 
   --aipet-color-bubble-user: #a99cff;
-  --aipet-color-bubble-assistant: #262626; /* L2 浮层,在 bg #171717 上是"卡片"感 */
+  --aipet-color-bubble-assistant: #2a2a2a; /* 跟 L2 surface（L2 由 #262626 → #2a2a2a） */
 
   --aipet-color-active-bar: #a99cff;
   --aipet-color-online: #22c55e;
