@@ -118,8 +118,9 @@ onBeforeUnmount(() => {
     class="workspace-root"
     :style="{ '--workspace-master-width': layout.masterWidth + 'px' }"
   >
-    <!-- TOPBAR：左 桃宝 avatar / 中 capsule 占位 / 右 chrome 三按钮 -->
-    <header class="workspace-topbar">
+    <!-- TOPBAR：左 桃宝 avatar / 中 capsule 占位 / 右 chrome 三按钮
+         整个 topbar 设为可拖区，内部 button 用 data-tauri-drag-region="false" 豁免 -->
+    <header class="workspace-topbar" data-tauri-drag-region>
       <div class="workspace-topbar__avatar-wrap">
         <button
           class="workspace-topbar__avatar"
@@ -128,6 +129,7 @@ onBeforeUnmount(() => {
               layout.currentCategory === 'creation' && layout.currentItem === 'SettingsPersona',
           }"
           type="button"
+          data-tauri-drag-region="false"
           aria-label="桃宝（点击进入人格）"
           title="桃宝（点击进入人格）"
           @click="onTopbarAvatarClick"
@@ -143,18 +145,15 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div class="workspace-topbar__drag-left" data-tauri-drag-region />
-
       <div class="workspace-topbar__capsule" aria-hidden="true">
-        <!-- Phase 1 留空（spec §3.3） -->
+        <!-- Phase 1 留空（spec §3.3）；占位区允许 drag（继承 topbar 的 data-tauri-drag-region） -->
       </div>
-
-      <div class="workspace-topbar__drag-right" data-tauri-drag-region />
 
       <div class="workspace-topbar__chrome">
         <button
           class="aipet-chrome-btn"
           type="button"
+          data-tauri-drag-region="false"
           title="最小化"
           aria-label="最小化"
           @click="onMinimize"
@@ -162,6 +161,7 @@ onBeforeUnmount(() => {
         <button
           class="aipet-chrome-btn"
           type="button"
+          data-tauri-drag-region="false"
           title="最大化"
           aria-label="最大化"
           @click="onMaximize"
@@ -169,6 +169,7 @@ onBeforeUnmount(() => {
         <button
           class="aipet-chrome-btn aipet-chrome-btn--close"
           type="button"
+          data-tauri-drag-region="false"
           title="关闭（进托盘）"
           aria-label="关闭"
           @click="onClose"
@@ -209,13 +210,14 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-/* topbar：grid 顶行整跨 */
+/* topbar：grid 顶行整跨；3 列：avatar / capsule(1fr) / chrome
+   整 header data-tauri-drag-region；按钮 data-tauri-drag-region="false" 豁免 */
 .workspace-topbar {
   grid-area: topbar;
   background: var(--aipet-color-surface-soft);
   border-bottom: 1px solid var(--aipet-color-border-faint);
   display: grid;
-  grid-template-columns: auto auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   user-select: none;
   z-index: 5;
@@ -263,12 +265,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   display: block;
-}
-
-.workspace-topbar__drag-left,
-.workspace-topbar__drag-right {
-  height: 48px;
-  background: transparent;
 }
 
 .workspace-topbar__capsule {
