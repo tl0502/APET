@@ -159,6 +159,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* grid item 默认 min-height: auto 会撑开 → 内层 flex 子 overflow-y: auto 失效。
+     必须显式 min-height: 0 才能让 popup-main__content 的 overflow 生效。 */
+  min-height: 0;
 }
 
 .popup-main__header {
