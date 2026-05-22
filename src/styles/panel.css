@@ -1,6 +1,6 @@
-/* AIPET 项目 panel 通用样式（#36 chrome 适配 抽取）。
-   消费方：src/panels/settings/*.vue + src/panels/tasks/*.vue（共 8 个 panel）
-   引入方：src/views/workspace/main.ts（panel 仅在 workspace 内渲染）
+/* AIPET 项目 panel 通用样式（#36 chrome 适配 抽取 / #37 P3 重设计扩展）。
+   消费方：src/panels/settings/*.vue + src/panels/tasks/*.vue + src/panels/user/*.vue
+   引入方：src/views/workspace/main.ts（panel 仅在 workspace / popup 内渲染）
 
    各 panel SFC scoped css 删 .panel / .panel__title / .panel__subtitle /
    .panel__hint / .panel__section / .panel__error / .panel__actions；
@@ -9,6 +9,15 @@
    .panel__title 用 sticky + backdrop blur 实现"列顶部固定标题"，与
    chat content-header 同语言（blur(12) saturate(180)）。
    margin 负值把 sticky title 拉出 detail-col__panel 16px 24px 内边距。
+
+   === 色区 token 映射（#37 重设计）===
+   - workspace L 型框（topbar + sidebar + master）→ --aipet-color-surface-soft
+   - workspace detail 主舞台 → --aipet-color-bg
+   - zone 之间 1px 分隔 → --aipet-color-border-faint
+   - .panel__title sticky 浮玻璃 → --aipet-color-surface-blur + blur(12)
+   - popup backdrop → --aipet-color-overlay
+   - popup 容器 / 主区 → --aipet-color-bg（同 detail）
+   - popup sidebar 240 → --aipet-color-surface-soft（同 L 框）
 */
 
 .panel {
@@ -64,4 +73,31 @@
   align-items: center;
   gap: var(--aipet-space-3);
   margin-top: var(--aipet-space-2);
+}
+
+/* === 容器公约（#37 重设计）===
+   每个 panel SFC 在根节点加 `panel--form` / `panel--list` / `panel--chat` 修饰类，
+   .panel__content 包裹 body 文字（非 .panel__title），自动套对应 max-width。
+
+   设计取舍：
+   - title 通栏（保留 sticky breakout）+ 正文居中是 Linear/Notion/Vercel 范式
+   - form 720：单列表单读起来稳，不被宽窗拉散
+   - chat 880：长文本对话防行长过长（>100 字伤阅读）
+   - list 全宽（默认）：长列表 + 多列字段，宽度有用 */
+
+.panel__content {
+  flex: 1 1 auto;
+  /* 默认 list 行为：全宽 */
+}
+
+.panel--form .panel__content {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.panel--chat .panel__content {
+  max-width: 880px;
+  margin: 0 auto;
+  width: 100%;
 }
