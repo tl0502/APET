@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Workspace 重设计 · Mockup 01 骨架</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --surface-soft: #f5f5f5;
+        --text-1: #171717;
+        --text-2: #525252;
+        --text-3: #a3a3a3;
+        --border-faint: rgba(0, 0, 0, 0.06);
+        --border: #e5e5e5;
+        --primary: #8b7cff;
+        --font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      :root.dark {
+        --bg: #171717;
+        --surface-soft: #1c1c1c;
+        --text-1: #fafafa;
+        --text-2: #a3a3a3;
+        --text-3: #737373;
+        --border-faint: rgba(255, 255, 255, 0.06);
+        --border: #333333;
+        --primary: #a99cff;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #2a2a2a;
+        color: var(--text-1);
+        font-family: var(--font);
+        font-size: 14px;
+        min-height: 100vh;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 24px 80px;
+        gap: 28px;
+      }
+      h1 {
+        color: #fafafa;
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 4px;
+        letter-spacing: 0.01em;
+      }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        color: #d4d4d4;
+        font-size: 12px;
+      }
+      .toolbar button {
+        background: #404040;
+        color: #fafafa;
+        border: 1px solid #525252;
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .toolbar button:hover {
+        background: #525252;
+      }
+      .label {
+        color: #d4d4d4;
+        font-size: 12px;
+        max-width: 1100px;
+        text-align: center;
+        line-height: 1.5;
+      }
+
+      /* === workspace 重设计 mockup === */
+      .ws {
+        width: 1100px;
+        height: 680px;
+        background: var(--bg);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+        display: grid;
+        grid-template-rows: 48px 1fr;
+        grid-template-columns: 60px 240px 1fr;
+        grid-template-areas:
+          "topbar topbar topbar"
+          "sidebar master detail";
+        color: var(--text-1);
+      }
+
+      /* topbar */
+      .ws__topbar {
+        grid-area: topbar;
+        background: var(--surface-soft);
+        border-bottom: 1px solid var(--border-faint);
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 16px;
+        padding: 0 0 0 12px;
+      }
+      .ws__avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #8b7cff 0%, #b8aeff 100%);
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 14px;
+        font-weight: 600;
+        border: 1px solid var(--border);
+        cursor: pointer;
+        position: relative;
+      }
+      .ws__avatar::after {
+        content: "";
+        position: absolute;
+        inset: -3px;
+        border-radius: 50%;
+        border: 2px solid var(--primary);
+        opacity: 0.4;
+        animation: pulse 2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 0.2;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.5;
+          transform: scale(1.08);
+        }
+      }
+      .ws__capsule {
+        height: 28px;
+        max-width: 320px;
+        width: 100%;
+        justify-self: center;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--bg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-3);
+        font-size: 12px;
+        opacity: 0.7;
+      }
+      .ws__chrome {
+        display: flex;
+        flex: 0 0 auto;
+      }
+      .ws__chrome-btn {
+        width: 46px;
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        color: var(--text-2);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .ws__chrome-btn:hover {
+        background: rgba(0, 0, 0, 0.06);
+      }
+      .ws__chrome-btn--close:hover {
+        background: #c42b1c;
+        color: white;
+      }
+
+      /* sidebar */
+      .ws__sidebar {
+        grid-area: sidebar;
+        background: var(--surface-soft);
+        border-right: 1px solid var(--border-faint);
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        padding: 10px 0;
+      }
+      .ws__sidebar-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+      }
+      .ws__sidebar-item {
+        display: flex;
+        justify-content: center;
+        padding: 0 8px;
+      }
+      .ws__sidebar-btn {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        color: var(--text-3);
+        cursor: pointer;
+        border-radius: 8px;
+        font-size: 16px;
+      }
+      .ws__sidebar-btn:hover {
+        color: var(--text-1);
+        background: rgba(0, 0, 0, 0.06);
+      }
+      .ws__sidebar-btn--active {
+        color: var(--primary);
+        background: rgba(139, 124, 255, 0.1);
+      }
+      .ws__sidebar-btn--active::before {
+        content: "";
+        position: absolute;
+        left: -10px;
+        top: 10px;
+        bottom: 10px;
+        width: 2px;
+        border-radius: 2px;
+        background: var(--primary);
+      }
+
+      /* sidebar user avatar (bottom) */
+      .ws__sidebar-user {
+        padding: 0;
+      }
+      .ws__sidebar-user-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #b08968 0%, #d4a574 100%);
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border);
+      }
+      .ws__sidebar-user:hover .ws__sidebar-user-avatar {
+        border-color: var(--primary);
+      }
+
+      /* master */
+      .ws__master {
+        grid-area: master;
+        background: var(--surface-soft);
+        border-right: 1px solid var(--border-faint);
+        display: flex;
+        flex-direction: column;
+      }
+      .ws__master-header {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--border-faint);
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text-1);
+      }
+      .ws__master-list {
+        flex: 1;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .ws__master-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 6px;
+        min-height: 36px;
+        color: var(--text-2);
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .ws__master-item:hover {
+        background: rgba(0, 0, 0, 0.06);
+        color: var(--text-1);
+      }
+      .ws__master-item--active {
+        background: rgba(139, 124, 255, 0.12);
+        color: var(--primary);
+        font-weight: 500;
+      }
+
+      /* detail */
+      .ws__detail {
+        grid-area: detail;
+        background: var(--bg);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .ws__detail-panel {
+        padding: 24px 32px;
+        max-width: 720px;
+        margin: 0 auto;
+        width: 100%;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .ws__detail-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-1);
+        margin: 0;
+      }
+      .ws__detail-hint {
+        color: var(--text-3);
+        font-size: 12px;
+        margin: 0;
+      }
+      .ws__detail-section {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .ws__detail-subtitle {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-2);
+        margin: 0;
+      }
+      .ws__detail-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 14px;
+        color: var(--text-2);
+      }
+      .ws__detail-row input[type="radio"] {
+        accent-color: var(--primary);
+      }
+
+      /* zone labels (overlay annotations) */
+      .ws-annotated {
+        position: relative;
+      }
+      .ws-annotated::before {
+        content: attr(data-zone);
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: rgba(139, 124, 255, 0.9);
+        color: white;
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 10;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Workspace 重设计 · 骨架 mockup（L 型框 + 顶栏 48px + 三列）</h1>
+    <div class="label">
+      点开关切换亮/暗 · 上方标签是色区注释（L 型 chrome 框 = topbar + sidebar +
+      master；detail 是白色舞台）· 1100×680 是 workspace 窗口的常态尺寸近似。
+    </div>
+    <div class="toolbar">
+      <button onclick="document.documentElement.classList.toggle('dark')">
+        切换亮/暗
+      </button>
+      <button onclick="toggleAnnotations()">显示/隐藏色区标注</button>
+    </div>
+
+    <div class="ws" id="ws">
+      <div class="ws__topbar ws-annotated" data-zone="TOPBAR / surface-soft">
+        <div class="ws__avatar" title="桃宝（点击进入人格）">桃</div>
+        <div class="ws__capsule">⌘K · 占位</div>
+        <div class="ws__chrome">
+          <button class="ws__chrome-btn" title="最小化">─</button>
+          <button class="ws__chrome-btn" title="最大化">□</button>
+          <button class="ws__chrome-btn ws__chrome-btn--close" title="关闭">
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <nav class="ws__sidebar ws-annotated" data-zone="SIDEBAR / surface-soft">
+        <ul class="ws__sidebar-list">
+          <li class="ws__sidebar-item">
+            <button class="ws__sidebar-btn" title="对话">💬</button>
+          </li>
+          <li class="ws__sidebar-item">
+            <button class="ws__sidebar-btn" title="任务">⏰</button>
+          </li>
+          <li class="ws__sidebar-item">
+            <button class="ws__sidebar-btn" title="创作">✨</button>
+          </li>
+          <li class="ws__sidebar-item">
+            <button
+              class="ws__sidebar-btn ws__sidebar-btn--active"
+              title="设置"
+            >
+              ⚙
+            </button>
+          </li>
+        </ul>
+        <ul class="ws__sidebar-list" style="flex: 0">
+          <li class="ws__sidebar-item">
+            <button
+              class="ws__sidebar-btn ws__sidebar-user"
+              title="用户（点击打开账户）"
+            >
+              <span class="ws__sidebar-user-avatar">你</span>
+            </button>
+          </li>
+        </ul>
+      </nav>
+
+      <aside class="ws__master ws-annotated" data-zone="MASTER / surface-soft">
+        <header class="ws__master-header">⚙ 设置</header>
+        <div class="ws__master-list">
+          <div class="ws__master-item ws__master-item--active">🎨 外观</div>
+          <div class="ws__master-item">🔌 LLM Provider</div>
+        </div>
+      </aside>
+
+      <main class="ws__detail ws-annotated" data-zone="DETAIL / bg-white">
+        <div class="ws__detail-panel">
+          <h2 class="ws__detail-title">外观</h2>
+          <p class="ws__detail-hint">
+            切换会同步到桌宠窗口（与未来的 onboarding / hub
+            窗口）；选择持久化到本地。
+          </p>
+          <div class="ws__detail-section">
+            <h3 class="ws__detail-subtitle">主题</h3>
+            <label class="ws__detail-row">
+              <input type="radio" name="theme" /> 跟随系统（当前：暗色）
+            </label>
+            <label class="ws__detail-row">
+              <input type="radio" name="theme" checked /> 亮色
+            </label>
+            <label class="ws__detail-row">
+              <input type="radio" name="theme" /> 暗色
+            </label>
+          </div>
+          <div class="ws__detail-section">
+            <h3 class="ws__detail-subtitle">角色窗 · 视角</h3>
+            <label class="ws__detail-row">
+              <input type="radio" name="view" checked /> 半身（320×320）
+            </label>
+            <label class="ws__detail-row">
+              <input type="radio" name="view" /> 全身（320×512）
+            </label>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      function toggleAnnotations() {
+        document.querySelectorAll(".ws-annotated").forEach((el) => {
+          el.classList.toggle("ws-no-annot");
+        });
+        const style = document.getElementById("annot-style");
+        if (!style) {
+          const s = document.createElement("style");
+          s.id = "annot-style";
+          s.textContent = ".ws-no-annot::before { display: none !important; }";
+          document.head.appendChild(s);
+        }
+      }
+    </script>
+  </body>
+</html>
