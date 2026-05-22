@@ -220,7 +220,7 @@ void props.panelActive
 
       <button
         v-if="showCloseButton"
-        class="content-header__close"
+        class="aipet-chrome-btn aipet-chrome-btn--close content-header__close-sized"
         title="关闭（进托盘）"
         aria-label="关闭"
         @click="handleClose"
@@ -372,32 +372,9 @@ void props.panelActive
   50% { opacity: 1; }
 }
 
-.content-header__close {
-  flex: 0 0 auto;
-  width: 46px;
+/* chat content-header 内 close 按钮特殊尺寸（与 56px header 同高，覆盖全局 32px） */
+.content-header__close-sized {
   height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--aipet-color-text-2);
-  font-size: 13px;
-  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', system-ui, sans-serif;
-  cursor: pointer;
-  padding: 0;
-  margin: 0;
-  transition: background-color 100ms ease, color 100ms ease;
-}
-
-.content-header__close:hover {
-  background: #c42b1c;
-  color: #ffffff;
-}
-
-.content-header__close:active {
-  background: #a01e15;
-  color: #ffffff;
 }
 
 .content-header__drag-handle {
