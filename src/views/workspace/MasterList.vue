@@ -32,7 +32,7 @@ function onClick(id: string) {
         :aria-selected="activeItemId === item.id"
         @click="onClick(item.id)"
       >
-        <ElIcon :size="16" class="master-list__icon">
+        <ElIcon :size="18" class="master-list__icon">
           <component :is="item.icon" />
         </ElIcon>
         <span class="master-list__label">{{ item.title }}</span>
@@ -56,14 +56,16 @@ function onClick(id: string) {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: var(--aipet-space-2);
+  gap: 10px;
   padding: var(--aipet-space-2) var(--aipet-space-3);
   background: transparent;
   border: none;
   border-radius: 6px;
   cursor: pointer;
   color: var(--aipet-color-text-2);
-  font-size: var(--aipet-font-size-sm);
+  font-size: 14px;
+  line-height: 1.4;
+  min-height: 36px;
   text-align: left;
   transition: background-color 100ms ease, color 100ms ease;
 }

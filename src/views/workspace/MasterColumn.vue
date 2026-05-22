@@ -62,14 +62,21 @@ function onSelect(itemId: string) {
 }
 
 .master-col__header {
-  flex: 0 0 44px;
-  height: 44px;
+  flex: 0 0 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   gap: var(--aipet-space-2);
-  padding: 0 var(--aipet-space-3);
+  padding: 0 var(--aipet-space-4);
   border-bottom: 1px solid var(--aipet-color-border-faint);
   user-select: none;
+  /* 与 panel__title 同语言：sticky 浮玻璃 */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--aipet-color-surface-blur);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
 }
 
 .master-col__header-icon {
@@ -78,7 +85,7 @@ function onSelect(itemId: string) {
 }
 
 .master-col__header-title {
-  font-size: var(--aipet-font-size-base);
+  font-size: 15px;
   font-weight: 600;
   color: var(--aipet-color-text-1);
   letter-spacing: 0.01em;
