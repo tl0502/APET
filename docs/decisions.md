@@ -260,7 +260,7 @@ related:
   - light 模 4 色阶设计不再对称（L0=L2=L3=#ffffff，仅 L1 单点偏灰），mental model 不如 dark 直观；换来 light 模 desktop 软件常见做法的一致性。
   - dark 模 4 色阶总跨 28 仍略保守（vs Discord ~35-40），桌宠陪伴语境暂不进 Discord 强工具感。
   - 改 surface token 影响 45 个消费者，需要全窗口手动巡检；落地后无回归。
-- **关联**：spec [`docs/superpowers/specs/2026-05-22-dark-mode-token-stair-design.md`](superpowers/specs/2026-05-22-dark-mode-token-stair-design.md)；plan [`docs/superpowers/plans/2026-05-22-dark-mode-token-stair-implementation.md`](superpowers/plans/2026-05-22-dark-mode-token-stair-implementation.md)；实施 commit `d4dff7d`；父 issue [#37](https://github.com/tl0502/APET/issues/37)。
+- **关联**：父 issue [#37](https://github.com/tl0502/APET/issues/37)（workspace 重设计 P3 复检暴露）→ 本 issue [#38](https://github.com/tl0502/APET/issues/38) commit `d4dff7d`；spec [`2026-05-22-dark-mode-token-stair-design.md`](superpowers/specs/2026-05-22-dark-mode-token-stair-design.md)；plan [`2026-05-22-dark-mode-token-stair-implementation.md`](superpowers/plans/2026-05-22-dark-mode-token-stair-implementation.md)；与 [[ADR-023]] 同属 styles 类教训。
 - **后续扩展锚**：未来新增 elevation 档（如 L4 toast 浮层）按相同原则补 +8~12 单位差 + 同色靠 shadow（light 路线）；border 与 surface-raised 必须拉开 ≥6 单位避免撞色。
 
 ---
