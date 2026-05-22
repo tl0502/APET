@@ -55,43 +55,45 @@ function msgOf(e: unknown): string {
 </script>
 
 <template>
-  <section class="panel">
+  <section class="panel panel--form">
     <h2 class="panel__title">外观</h2>
-    <p class="panel__hint">
-      切换会同步到桌宠窗口（与未来的 onboarding / hub 窗口）；选择持久化到本地。
-    </p>
-
-    <div class="panel__section">
-      <h3 class="panel__subtitle">主题</h3>
-      <ElRadioGroup :model-value="theme.mode" @change="onThemeChange">
-        <ElRadio value="auto">跟随系统（当前：{{ theme.systemDark ? '暗色' : '亮色' }}）</ElRadio>
-        <ElRadio value="light">亮色</ElRadio>
-        <ElRadio value="dark">暗色</ElRadio>
-      </ElRadioGroup>
-    </div>
-
-    <div class="panel__section">
-      <h3 class="panel__subtitle">角色窗 · 视角</h3>
+    <div class="panel__content">
       <p class="panel__hint">
-        切换会即时改变 pet 窗口尺寸与相机取景；位置自动按新尺寸 clamp 到屏内安全边距。
+        切换会同步到桌宠窗口（与未来的 onboarding / hub 窗口）；选择持久化到本地。
       </p>
-      <ElRadioGroup
-        :model-value="viewPreset"
-        :disabled="viewSwitching"
-        @change="onViewChange"
-      >
-        <ElRadio value="half">半身（320×320，胸口以上）</ElRadio>
-        <ElRadio value="full">全身（320×512，1:1.6）</ElRadio>
-      </ElRadioGroup>
-    </div>
 
-    <div v-if="isDev" class="panel__dev">
-      <h3 class="panel__subtitle">开发工具</h3>
-      <p class="panel__hint">
-        在浏览器或新 webview 中访问
-        <code>http://localhost:1420/?view=tokens</code>
-        可查看 token 视觉对照页（仅 dev 模式可用）。
-      </p>
+      <div class="panel__section">
+        <h3 class="panel__subtitle">主题</h3>
+        <ElRadioGroup :model-value="theme.mode" @change="onThemeChange">
+          <ElRadio value="auto">跟随系统（当前：{{ theme.systemDark ? '暗色' : '亮色' }}）</ElRadio>
+          <ElRadio value="light">亮色</ElRadio>
+          <ElRadio value="dark">暗色</ElRadio>
+        </ElRadioGroup>
+      </div>
+
+      <div class="panel__section">
+        <h3 class="panel__subtitle">角色窗 · 视角</h3>
+        <p class="panel__hint">
+          切换会即时改变 pet 窗口尺寸与相机取景；位置自动按新尺寸 clamp 到屏内安全边距。
+        </p>
+        <ElRadioGroup
+          :model-value="viewPreset"
+          :disabled="viewSwitching"
+          @change="onViewChange"
+        >
+          <ElRadio value="half">半身（320×320，胸口以上）</ElRadio>
+          <ElRadio value="full">全身（320×512，1:1.6）</ElRadio>
+        </ElRadioGroup>
+      </div>
+
+      <div v-if="isDev" class="panel__dev">
+        <h3 class="panel__subtitle">开发工具</h3>
+        <p class="panel__hint">
+          在浏览器或新 webview 中访问
+          <code>http://localhost:1420/?view=tokens</code>
+          可查看 token 视觉对照页（仅 dev 模式可用）。
+        </p>
+      </div>
     </div>
   </section>
 </template>
