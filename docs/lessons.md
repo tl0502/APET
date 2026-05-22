@@ -1,6 +1,6 @@
 ---
 title: AIPET 开发踩坑笔记
-updated: 2026-05-20
+updated: 2026-05-22
 related:
   - STATUS.md
   - WORKFLOW.md
@@ -230,6 +230,26 @@ related:
 - magnetic 系统的 `visualInset` 模型用来补偿 padding 让两窗吸附后看起来贴边（不是物理 OS rect 贴边）—— 一旦 padding 删除，visualInset 必须**同步置零**，否则磁吸落位偏 12px
 
 **出处**：[#30](https://github.com/tl0502/APET/issues/30) follow-up F→I 期间 chat `.window-root` padding:12 副作用被察觉 → 删 padding + 删 `visualInset(12)`，2026-05-20
+
+---
+
+## 14. CSS sticky 元素禁止用 negative margin（layout / paint 算术冲突）
+
+**症状**：sticky title（如 `.panel__title { position: sticky; top: 0; margin: -20px -24px 0; padding: 12px 24px; ... }`）滚动时浮起遮挡下方 sibling 容器（如 `.panel__content`），越滚越严重。视觉上像 sticky title 在"叠加"内容上。
+
+**根因**：sticky 的 `top: 0` 约束与 `margin-top: -N` 在 layout 和 paint 两阶段算术不一致。
+- **Layout 阶段**：title 的 box-top 因 margin-top -20 在 padding-top edge **上方 20px** → flex/block 给后续 sibling 留位置时按"title 占净 29px (49-20)"算 → 下一个 sibling 起点在 +45 处。
+- **Paint 阶段**：sticky `top: 0` 强制 box-top **不允许超过 padding-top edge** → paint 时强行下推 title 到 padding-top: 0 ~ +49 区域。
+- **错位 ~20px**：title 实际显示位置比 layout 给后续 sibling 留的位置低 20px。滚动越多 sibling 越往上爬，错位差越大，叠加越严重。
+- CSS spec：sticky 只调整 paint，不调整 layout（这是设计如此，不是 bug）。
+
+**处理**：
+
+- **永远不要在 sticky 元素上写 negative margin**。这是结构禁忌，不是样式微调。
+- 若需要 sticky 元素"通栏到容器边缘"，改用：① 容器自身 padding-left/right 通栏 + 元素同 padding；② 元素自补 padding + 容器 `padding: 0`；③ **放弃通栏，元素与正文同对齐**（接容器 padding，最简单稳）。
+- **scoped CSS 不自动 reset 未覆盖的全局属性**：组件被搬到新容器时（如 panel 从 detail-col 搬到 popup），原全局 sticky 规则会跨容器穿透。检查全局规则的特异性 + 组件实际渲染位置。
+
+**出处**：[#37](https://github.com/tl0502/APET/issues/37) Fix-4a `c0ab678` / Fix-4b `76dedd7`，2026-05-22。详细分析见 [decisions.md ADR-023](decisions.md#adr-023-styles-panel-title-css-sticky-margin-conflict)。
 
 ---
 
