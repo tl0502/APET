@@ -140,7 +140,7 @@ function msgOf(e: unknown): string {
 
 <template>
   <section class="panel">
-    <h2 class="panel__title">昵称</h2>
+    <h3 class="panel__subtitle">昵称</h3>
     <p class="panel__hint">
       改完会立即同步到对话窗口。留空 = 保留当前值。
     </p>
@@ -188,12 +188,6 @@ function msgOf(e: unknown): string {
   display: flex;
   flex-direction: column;
   gap: var(--aipet-space-4);
-}
-.panel__title {
-  margin: 0;
-  font-size: var(--aipet-font-size-lg);
-  font-weight: 600;
-  color: var(--aipet-color-text-1);
 }
 .panel__hint {
   margin: 0;
