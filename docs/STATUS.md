@@ -19,9 +19,9 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（8/8 落地 ✅；待办 + 物理交互待办）
-- **当前 session 在做**：[#37](https://github.com/tl0502/APET/issues/37) workspace 重设计 P3 — 24 commit `dbf03e0→76dedd7`（chrome L 型框 + Profile popup + 容器公约 + 4 项 P0/P1 structural fix + 7 项视觉错位 fix）— 293/293 vitest pass，全绿
-- **下一步**：[#38](https://github.com/tl0502/APET/issues/38) dark mode token 改造（Phase 2 单独 session） → [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
+- **当前 milestone**：M2 W3 进行中（9/9 落地 ✅；待办 + 物理交互待办）
+- **当前 session 在做**：[#38](https://github.com/tl0502/APET/issues/38) dark mode token 阶梯改造 — tokens.css 单文件 patch（light 背峰式 3+1 + dark 保守型 4 色阶 总跨 28 + dark border #333→#3d 衍生 fix + border-faint 6%→8%/10% + dark bubble-assistant 跟 L2）— 1 commit `d4dff7d`，293/293 vitest pass，4 大窗 × 2 主题手动 e2e 全绿
+- **下一步**：[#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位 → [#23](https://github.com/tl0502/APET/issues/23) 物理交互 + 心情/精力 + 摸鱼
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 
@@ -57,7 +57,7 @@ related:
 - ✅ [#37](https://github.com/tl0502/APET/issues/37) ADR-021 P3: workspace 重设计 — 实色 48px L 型 chrome 框 + Profile in-workspace popup（880×580 overlay + sidebar nav profile/account/privacy/notifications/help/about 6 项）+ panel.css 容器公约（panel--form 720 / panel--chat 880 / panel--list fluid）+ SettingsNickname/About 搬入 popup + workspace settings 简化为 外观+LLM Provider — 24 commit `dbf03e0→76dedd7`（spec + plan + impl + 4 P0/P1 structural fix + 7 视觉错位 fix）
   - ↳ ✅ structural fix `339d1e6→f52e8be`：workspace.css reset / capabilities min/max / grid 列宽 CSS 变量 / 清 grid 子组件 height:100%
   - ↳ ✅ 错位 fix `832a981→76dedd7`：popup 4 panel 删冗余 panel__title / chat master conv-sidebar 适配 / topbar 整层 drag-region / popup-main min-height:0 / panel__title 实色 bg / **panel__title 删 margin negative**（治 sticky 与 layout 算术冲突 — 关键根因）/ NicknameForm 内嵌 panel__title 改 subtitle
-- ⏳ [#38](https://github.com/tl0502/APET/issues/38) [设计系统] dark mode 阶梯不协调 + light mode token 倒序 + border 在 dark 不可见（Phase 2 单独 session）
+- ✅ [#38](https://github.com/tl0502/APET/issues/38) [设计系统] dark mode token 阶梯改造：tokens.css 单文件 patch（light 背峰式 3+1 + dark 保守型 4 色阶 总跨 28 + dark border #333→#3d 衍生 fix + border-faint 6%→8%/10% + dark bubble-assistant 跟 L2）— 1 commit `d4dff7d` + spec/plan/ADR-024，293/293 vitest pass，4 大窗 × 2 主题手动 e2e 全绿
 - ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 

@@ -1,6 +1,6 @@
 ---
 title: AI 桌宠 决策记录
-updated: 2026-05-20
+updated: 2026-05-22
 related:
   - README.md
   - WORKFLOW.md
@@ -246,8 +246,27 @@ related:
 
 ---
 
+### ADR-024 dark / light surface elevation 阶梯设计原则
+
+- **为什么**：[#37](https://github.com/tl0502/APET/issues/37) 落地 workspace L 型 chrome 框后复检发现 ([#38](https://github.com/tl0502/APET/issues/38))：light mode L1 比 L2 更暗（倒序）+ L3 与 L0 同色 / dark mode 4 色阶差只有 5 单位（低于人眼可分辨下限 ~6）/ dark border-faint 6% 几乎不可见 — 三个系统性 token 问题。
+- **选了什么**：
+  - **Light 背峰式 3+1**：L0(#ffffff) / L1(#f5f5f5 sidebar) / L2(#ffffff) / L3(#ffffff)，L0/L2/L3 同色靠 shadow + border 分层（Bear/Linear/MacOS Big Sur 通行）。
+  - **Dark 保守型 4 色阶**：L0(#171717) / L1(#1f1f1f, +8) / L2(#2a2a2a, +11) / L3(#333333, +9)，总跨 28，每档差 ≥8 单位。
+  - **border-faint**：dark 6% → 10% / light 6% → 8%。
+  - **dark bubble-assistant** 跟 L2 surface（#2a2a2a）。
+  - **dark border 衍生 fix**：原 #333 与新 L3 surface-raised #333 撞色 → border 跟到 #3d3d3d（vs L3 +10，vs border-strong -2，保 border < border-strong 顺序）。
+  - 衍生 token（code-bg / surface-blur / shadow alpha）不动 —— 差 4 单位仍可见 / frosted blur 微差肉眼难感知 / 避免大面积视觉漂移。
+- **代价**：
+  - light 模 4 色阶设计不再对称（L0=L2=L3=#ffffff，仅 L1 单点偏灰），mental model 不如 dark 直观；换来 light 模 desktop 软件常见做法的一致性。
+  - dark 模 4 色阶总跨 28 仍略保守（vs Discord ~35-40），桌宠陪伴语境暂不进 Discord 强工具感。
+  - 改 surface token 影响 45 个消费者，需要全窗口手动巡检；落地后无回归。
+- **关联**：spec [`docs/superpowers/specs/2026-05-22-dark-mode-token-stair-design.md`](superpowers/specs/2026-05-22-dark-mode-token-stair-design.md)；plan [`docs/superpowers/plans/2026-05-22-dark-mode-token-stair-implementation.md`](superpowers/plans/2026-05-22-dark-mode-token-stair-implementation.md)；实施 commit `d4dff7d`；父 issue [#37](https://github.com/tl0502/APET/issues/37)。
+- **后续扩展锚**：未来新增 elevation 档（如 L4 toast 浮层）按相同原则补 +8~12 单位差 + 同色靠 shadow（light 路线）；border 与 surface-raised 必须拉开 ≥6 单位避免撞色。
+
+---
+
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-024**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-025**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。
