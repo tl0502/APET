@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力集 — pet / settings / chat / tasks / pomodoro / workspace 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动 + 头像文件选择（#25 用户头像上传）+ 番茄独立窗 fullscreen/AOT 切换（#28 follow-up）+ workspace 主窗（#35 ADR-021 P1）。",
+  "description": "默认能力集 — pet / settings / chat / tasks / pomodoro / workspace 窗口可使用核心 IPC（事件 listen/emit、窗口操作等）+ 全局快捷键 + 拖动 + 头像文件选择（#25 用户头像上传）+ 番茄独立窗 fullscreen/AOT 切换（#28 follow-up）+ workspace 主窗（#35 ADR-021 P1）+ workspace 自绘 chrome min/max 按钮（#37 ADR-021 P3）。",
   "windows": ["pet", "settings", "chat", "tasks", "pomodoro", "workspace"],
   "permissions": [
     "core:default",
@@ -11,6 +11,8 @@
     "core:window:allow-set-fullscreen",
     "core:window:allow-set-always-on-top",
     "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
     "core:window:allow-outer-position",
     "core:window:allow-current-monitor",
     "core:window:allow-available-monitors",
