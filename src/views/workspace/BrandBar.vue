@@ -152,7 +152,8 @@ function handleHelp() {
 
 .brand-bar__avatar--active {
   border-color: var(--aipet-color-primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aipet-color-primary) 25%, transparent);
+  /* box-shadow 由 animation 接管（稳态 2px 与放大 5px 在 brand-bar-avatar-pulse 内脉动） */
+  animation: brand-bar-avatar-pulse 2s ease-in-out infinite;
 }
 
 .brand-bar__avatar-img {
@@ -236,5 +237,33 @@ function handleHelp() {
   color: var(--aipet-color-text-3);
   width: 36px;
   height: 36px;
+}
+
+/* active 左竖条进入动画（切类别时给反馈） */
+.brand-bar__btn--active::before {
+  animation: brand-bar-active-in 200ms var(--aipet-ease-emphasized);
+}
+
+@keyframes brand-bar-active-in {
+  from {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+/* avatar pulse 光环：用 box-shadow spread 脉动（伪元素 + scale 会被 .brand-bar__avatar 的
+   overflow:hidden 裁剪不可见；box-shadow 不受 overflow 约束） */
+@keyframes brand-bar-avatar-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--aipet-color-primary) 25%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--aipet-color-primary) 50%, transparent);
+  }
 }
 </style>
