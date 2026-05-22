@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-21
+updated: 2026-05-22
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -19,9 +19,9 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（7/7 落地；待办 + 物理交互待办）
-- **当前 session 在做**：[#33](https://github.com/tl0502/APET/issues/33) ADR-021 P2 Workspace 三栏 Desktop App Shell 重做 + 5+3 panel 迁入 + chat 主床/磁吸双形态 — A→F 共 8 commit `543213d→b88641e`（288 vitest pass / typecheck / lint / build / cargo check 全绿）
-- **下一步**：#33 关闭 → workspace chrome 层精修单开 issue（brand-bar padding / sash 可见性 / header 固定 / 底部死区，0.5-1d）→ [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
+- **当前 milestone**：M2 W3 进行中（7/7 落地 + chrome 适配 ✅；待办 + 物理交互待办）
+- **当前 session 在做**：[#36](https://github.com/tl0502/APET/issues/36) workspace chrome 层视觉适配 — 8 phase commit `0a7783f→5d60678`（WorkspaceApp 自绘 chrome 三按钮 + brand-bar 占整列 + panel.css/buttons.css 全局抽取 + 8 panel SFC scoped css 重构 + master 节奏对齐业界 + sash 3 状态视觉 + chat 空状态 CTA + brand-bar 微动效）— typecheck / build / cargo check 全绿
+- **下一步**：#36 关闭 → [#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + 5+3 panel 内嵌 + chat 主床/磁吸双形态全套就位
 
@@ -36,7 +36,7 @@ related:
 - W2 收尾 ✅ [#21](https://github.com/tl0502/APET/issues/21) Onboarding Step 2-6 + LivingPet 自由活动 + VRM 微动作
 - 美化补丁 ✅ [#27](https://github.com/tl0502/APET/issues/27) 三窗 design system 收尾（Apple/Bear neutral + Vercel）
 
-### M2 W3-W4（任务三件套 + 物理交互 + 磁吸 + 人格工坊 + workspace 壳）— 进行中（6/7 完成）
+### M2 W3-W4（任务三件套 + 物理交互 + 磁吸 + 人格工坊 + workspace 壳）— 进行中（7/7 完成 + chrome 适配 ✅）
 
 - ✅ [#25](https://github.com/tl0502/APET/issues/25) G: 用户头像上传 v2（cropperjs 圆形裁剪）
 - ✅ [#26](https://github.com/tl0502/APET/issues/26) A: VRM 头像导出（实时预览 + 表情/镜头 + DPR 安全）
@@ -53,7 +53,7 @@ related:
   - ↳ ✅ phase C/D `c5c54df→f2fd7da`：tasks 3 panel 迁入 + DetailColumn map / chat 主床（拆 ChatThreadPane + ConversationListPane，ChatBody 化为薄 wrapper）
   - ↳ ✅ phase E `b929721`：删 settings/tasks 独立窗 + 托盘菜单精简（5 项）+ pomodoro_start 不弹浮窗（17 文件 +56/-762）
   - ↳ ✅ phase E review / phase F chat `154cc98→b88641e`：lint :is 顺序 + dockview 残注释 + ADR-021 Updated；chat 表面视觉收敛（浮卡 composer + 卡片化 sidebar + 中性化气泡）
-  - ⏳ workspace chrome 层精修（brand-bar padding / sash 可见性 / header 固定 / 底部死区）单开 issue 处理
+- ✅ [#36](https://github.com/tl0502/APET/issues/36) workspace chrome 层视觉适配：WorkspaceApp 自绘 chrome 三按钮（min/max/close）+ brand-bar 占整列 + panel.css/buttons.css 全局抽取 + 8 panel SFC scoped css 重构 + master 节奏对齐业界（14/15/18 typography + 36px item + sticky backdrop blur）+ sash 3 状态视觉 + chat 空状态 + 新对话 CTA + brand-bar 微动效（active 竖条 + persona pulse） — 8 phase commit `0a7783f→5d60678`（业界 research：Discord/Slack/VSCode/Linear + Apple Big Sur vibrancy + NN/G empty state）
 - ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
