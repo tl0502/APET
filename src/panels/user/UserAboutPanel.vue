@@ -26,7 +26,6 @@ onMounted(async () => {
 
 <template>
   <section class="panel panel--form">
-    <h2 class="panel__title">关于</h2>
     <div class="panel__content">
       <dl class="about-grid">
         <dt>应用</dt>

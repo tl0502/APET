@@ -9,24 +9,20 @@ import { computed } from 'vue'
 type PlaceholderKind = 'account' | 'privacy' | 'notifications'
 
 interface PlaceholderCopy {
-  title: string
   hint: string
   status: string
 }
 
 const COPY: Record<PlaceholderKind, PlaceholderCopy> = {
   account: {
-    title: '账户',
     hint: '账号信息 / 登录方式管理 / 密码 / 安全中心 / 邮箱手机绑定 / 二步验证 / 设备管理。',
     status: '账户系统将随登录系统一同上线（M3+）。',
   },
   privacy: {
-    title: '数据与隐私',
     hint: '数据导出 / 清除 / 同步、隐私权限、模型访问范围。',
     status: 'M3+ 开发中。',
   },
   notifications: {
-    title: '通知',
     hint: '全局通知开关、桌面通知样式、声音偏好。',
     status: 'M3+ 开发中。',
   },
@@ -39,7 +35,6 @@ const copy = computed(() => COPY[props.kind])
 
 <template>
   <section class="panel panel--form">
-    <h2 class="panel__title">{{ copy.title }}</h2>
     <div class="panel__content">
       <div class="placeholder">
         <p class="panel__hint">{{ copy.hint }}</p>

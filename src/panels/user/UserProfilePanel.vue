@@ -58,7 +58,6 @@ async function onSaveBio() {
 
 <template>
   <section class="panel panel--form">
-    <h2 class="panel__title">个人资料</h2>
     <div class="panel__content">
       <p class="panel__hint">
         头像和昵称用于桃宝对你的称呼与显示；个性资料是可选的、对桃宝介绍你的几句话。

@@ -24,7 +24,6 @@ const SHORTCUTS: ShortcutDef[] = [
 
 <template>
   <section class="panel panel--form">
-    <h2 class="panel__title">帮助</h2>
     <div class="panel__content">
       <div class="panel__section">
         <h3 class="panel__subtitle">链接</h3>
