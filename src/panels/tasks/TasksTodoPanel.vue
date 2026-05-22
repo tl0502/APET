@@ -10,7 +10,7 @@ defineProps<{
 </script>
 
 <template>
-  <div class="placeholder-panel">
+  <div class="panel placeholder-panel">
     <ElEmpty description="" :image-size="80">
       <template #image>
         <span class="placeholder-panel__emoji">🚧</span>
@@ -26,7 +26,6 @@ defineProps<{
 
 <style scoped>
 .placeholder-panel {
-  display: flex;
   align-items: center;
   justify-content: center;
   min-height: 320px;

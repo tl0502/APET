@@ -81,33 +81,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--aipet-space-4);
-}
-.panel__title {
-  margin: 0;
-  font-size: var(--aipet-font-size-lg);
-  font-weight: 600;
-  color: var(--aipet-color-text-1);
-}
-.panel__hint {
-  margin: 0;
-  color: var(--aipet-color-text-3);
-  font-size: var(--aipet-font-size-sm);
-  line-height: var(--aipet-line-height-base);
-}
-.panel__error {
-  margin: 0;
-  color: var(--aipet-color-danger);
-  font-size: var(--aipet-font-size-sm);
-}
-.panel__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--aipet-space-3);
-}
 code {
   padding: 0 var(--aipet-space-1);
   border-radius: var(--aipet-radius-sm);

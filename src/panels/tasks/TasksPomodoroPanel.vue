@@ -271,7 +271,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="pomodoro-panel">
+  <div class="panel pomodoro-panel">
     <header class="pomodoro-header">
       <div class="pomodoro-header__phase">
         <span class="pomodoro-header__emoji">{{ phaseMeta.emoji }}</span>
@@ -427,9 +427,6 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .pomodoro-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--aipet-space-4);
   padding: var(--aipet-space-6) var(--aipet-space-2);
   align-items: stretch;
 }

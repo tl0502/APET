@@ -48,27 +48,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--aipet-space-4);
-}
-.panel__title {
-  margin: 0;
-  font-size: var(--aipet-font-size-lg);
-  font-weight: 600;
-  color: var(--aipet-color-text-1);
-}
-.panel__hint {
-  margin: 0;
-  color: var(--aipet-color-text-3);
-  font-size: var(--aipet-font-size-sm);
-  line-height: var(--aipet-line-height-base);
-}
-.panel__error {
-  color: var(--aipet-color-danger);
-  font-size: var(--aipet-font-size-sm);
-}
 .about-grid {
   display: grid;
   grid-template-columns: 96px 1fr;

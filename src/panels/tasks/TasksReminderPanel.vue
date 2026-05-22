@@ -200,16 +200,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="reminder-panel">
+  <div class="panel reminder-panel">
     <header class="reminder-panel__header">
       <div class="reminder-panel__title-row">
-        <h2 class="reminder-panel__title">提醒</h2>
+        <h2 class="panel__title">提醒</h2>
         <div class="reminder-panel__actions">
           <ElButton :icon="Refresh" :loading="busy" text @click="refresh">刷新</ElButton>
           <ElButton type="primary" :icon="CirclePlus" @click="openCreate">新建提醒</ElButton>
         </div>
       </div>
-      <p class="reminder-panel__hint">
+      <p class="panel__hint">
         点下方模板预设一键创建，或自定义新建。提醒到点会在桌宠头顶气泡 + 系统通知双通道展示。
       </p>
     </header>
@@ -266,13 +266,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.reminder-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--aipet-space-4);
-  padding: var(--aipet-space-4) var(--aipet-space-2);
-}
-
 .reminder-panel__header {
   display: flex;
   flex-direction: column;
@@ -286,24 +279,10 @@ onBeforeUnmount(() => {
   gap: var(--aipet-space-3);
 }
 
-.reminder-panel__title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--aipet-color-text-1);
-}
-
 .reminder-panel__actions {
   display: flex;
   align-items: center;
   gap: var(--aipet-space-2);
-}
-
-.reminder-panel__hint {
-  margin: 0;
-  font-size: 13px;
-  color: var(--aipet-color-text-2);
-  line-height: 1.5;
 }
 
 .reminder-panel__templates {

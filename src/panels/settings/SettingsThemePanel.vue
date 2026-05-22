@@ -97,34 +97,6 @@ function msgOf(e: unknown): string {
 </template>
 
 <style scoped>
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--aipet-space-4);
-}
-.panel__title {
-  margin: 0;
-  font-size: var(--aipet-font-size-lg);
-  font-weight: 600;
-  color: var(--aipet-color-text-1);
-}
-.panel__section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--aipet-space-2);
-}
-.panel__subtitle {
-  margin: 0;
-  font-size: var(--aipet-font-size-base);
-  font-weight: 600;
-  color: var(--aipet-color-text-2);
-}
-.panel__hint {
-  margin: 0;
-  color: var(--aipet-color-text-3);
-  font-size: var(--aipet-font-size-sm);
-  line-height: var(--aipet-line-height-base);
-}
 .panel__dev {
   margin-top: var(--aipet-space-2);
   padding: var(--aipet-space-3) var(--aipet-space-4);
