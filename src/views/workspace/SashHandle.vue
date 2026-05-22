@@ -93,14 +93,18 @@ onBeforeUnmount(() => {
   position: relative;
   background: transparent;
   transition: background 100ms ease;
+  z-index: 3;
 }
 
-.sash:hover,
+.sash:hover {
+  background: color-mix(in srgb, var(--aipet-color-primary) 30%, transparent);
+}
+
 .sash--dragging {
-  background: var(--aipet-color-primary);
+  background: color-mix(in srgb, var(--aipet-color-primary) 50%, transparent);
 }
 
-/* ::after 渲染 1px 视觉线（常态可见，hover 时被 sash 主体盖住） */
+/* ::after 渲染 1px 视觉线（常态可见，hover / drag 时变深） */
 .sash::after {
   content: '';
   position: absolute;
@@ -110,10 +114,14 @@ onBeforeUnmount(() => {
   width: 1px;
   background: var(--aipet-color-border-faint);
   pointer-events: none;
+  transition: background 100ms ease;
 }
 
-.sash:hover::after,
+.sash:hover::after {
+  background: var(--aipet-color-border-strong);
+}
+
 .sash--dragging::after {
-  background: transparent;
+  background: var(--aipet-color-primary);
 }
 </style>
