@@ -140,4 +140,16 @@ function onSelect(itemId: string) {
   color: var(--aipet-color-text-3);
   margin: 0;
 }
+
+/* chat 类别下：ConversationListPane 内嵌于 master-col，需要解锁磁吸窗的 220px 固定宽。
+   conv-sidebar 默认 width: 220px + flex: 0 0 220px（给磁吸窗专用），在 workspace
+   master 列内（默认 240 可拖到 380）会出现 20+px 空白 + 双 border-right + 拖 sash
+   时不跟随。下面 :deep 覆盖把它解放为 fluid + 透明背景，让 master-col 的 surface
+   主导色彩。 */
+.master-col :deep(.conv-sidebar) {
+  width: 100%;
+  flex: 1 1 auto;
+  border-right: none;
+  background: transparent;
+}
 </style>
