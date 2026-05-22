@@ -8,13 +8,16 @@
 // header：当前类别名 + 类别 icon（视觉锚定）
 
 import { computed } from 'vue'
-import { ElIcon } from 'element-plus'
+import { ElIcon, ElButton } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
 
 import MasterList from './MasterList.vue'
 import ConversationListPane from '@/components/chat/ConversationListPane.vue'
 import { useWorkspaceLayoutStore } from '@/stores/workspaceLayout'
+import { useConversationStore } from '@/stores/conversation'
 
 const layout = useWorkspaceLayoutStore()
+const convStore = useConversationStore()
 
 const currentCategoryMeta = computed(() =>
   layout.brandBarItems.find((c) => c.id === layout.currentCategory),
@@ -36,10 +39,18 @@ function onSelect(itemId: string) {
 
     <div class="master-col__body">
       <!-- chat 类别：用 ConversationListPane（共享 store）；其余用 MasterList -->
-      <ConversationListPane
-        v-if="layout.currentCategory === 'chat'"
-        :collapsed="false"
-      />
+      <template v-if="layout.currentCategory === 'chat'">
+        <div v-if="convStore.conversations.length === 0" class="conv-empty">
+          <img src="/avatar/momo-avatar.svg" alt="" class="conv-empty__illustration" />
+          <p class="conv-empty__title">还没开始对话</p>
+          <p class="conv-empty__hint">说一句“你好”就行</p>
+          <ElButton type="primary" @click="convStore.create()">
+            <ElIcon><Plus /></ElIcon>
+            <span style="margin-left: 6px;">新对话</span>
+          </ElButton>
+        </div>
+        <ConversationListPane v-else :collapsed="false" />
+      </template>
       <MasterList
         v-else
         :items="layout.currentMasterItems"
@@ -97,5 +108,36 @@ function onSelect(itemId: string) {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.conv-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--aipet-space-6);
+  gap: var(--aipet-space-3);
+  text-align: center;
+}
+
+.conv-empty__illustration {
+  width: 64px;
+  height: 64px;
+  opacity: 0.6;
+  filter: grayscale(20%);
+}
+
+.conv-empty__title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--aipet-color-text-1);
+  margin: 0;
+}
+
+.conv-empty__hint {
+  font-size: 13px;
+  color: var(--aipet-color-text-3);
+  margin: 0;
 }
 </style>
