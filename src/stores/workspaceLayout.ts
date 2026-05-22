@@ -17,8 +17,6 @@ import {
   Calendar,
   ChatLineRound,
   Connection,
-  EditPen,
-  InfoFilled,
   MagicStick,
   Stopwatch,
   User,
@@ -83,8 +81,6 @@ const BRAND_BAR_ITEMS: BrandBarItem[] = [
     masterItems: [
       { id: 'SettingsTheme', title: '外观', icon: Brush },
       { id: 'SettingsProvider', title: 'LLM Provider', icon: Connection },
-      { id: 'SettingsNickname', title: '昵称', icon: EditPen },
-      { id: 'SettingsAbout', title: '关于', icon: InfoFilled },
     ],
     defaultItemId: 'SettingsTheme',
   },

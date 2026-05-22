@@ -45,12 +45,12 @@ describe('workspaceLayout store', () => {
   it('case 2: setItem 在当前类别下记忆', async () => {
     const store = useWorkspaceLayoutStore()
     store.setCategory('config')
-    store.setItem('SettingsAbout')
+    store.setItem('SettingsProvider')
     await Promise.resolve()
-    expect(store.currentItem).toBe('SettingsAbout')
+    expect(store.currentItem).toBe('SettingsProvider')
     expect(mockSetConfig).toHaveBeenCalledWith(
       'workspace:item_per_category',
-      expect.stringContaining('SettingsAbout'),
+      expect.stringContaining('SettingsProvider'),
     )
   })
 
@@ -64,11 +64,11 @@ describe('workspaceLayout store', () => {
   it('case 4: item-per-category 跨切换记忆', () => {
     const store = useWorkspaceLayoutStore()
     store.setCategory('config')
-    store.setItem('SettingsAbout')
+    store.setItem('SettingsProvider')
     store.setCategory('task')
     store.setItem('TasksPomodoro')
     store.setCategory('config') // 回到 config
-    expect(store.currentItem).toBe('SettingsAbout') // 仍是上次选中
+    expect(store.currentItem).toBe('SettingsProvider') // 仍是上次选中
     store.setCategory('task') // 回到 task
     expect(store.currentItem).toBe('TasksPomodoro')
   })
@@ -103,7 +103,7 @@ describe('workspaceLayout store', () => {
           chat: null,
           task: 'TasksPomodoro',
           creation: 'SettingsPersona',
-          config: 'SettingsAbout',
+          config: 'SettingsProvider',
         })
       if (key === 'workspace:master_width') return '300'
       return null
@@ -115,7 +115,7 @@ describe('workspaceLayout store', () => {
     expect(store.currentCategory).toBe('task')
     expect(store.currentItem).toBe('TasksPomodoro') // task 类别下
     store.setCategory('config')
-    expect(store.currentItem).toBe('SettingsAbout')
+    expect(store.currentItem).toBe('SettingsProvider')
     expect(store.masterWidth).toBe(300)
   })
 
@@ -138,7 +138,7 @@ describe('workspaceLayout store', () => {
           chat: null,
           task: 'WorkspaceObsoletePanel', // 已删除的旧 id
           creation: 'SettingsPersona',
-          config: 'SettingsTheme',
+          config: 'SettingsAbout', // #37 删除：老用户 KV 残留 → 回 config defaultItemId
         })
       return null
     })
@@ -146,6 +146,8 @@ describe('workspaceLayout store', () => {
     await store.loadFromKv()
     store.setCategory('task')
     expect(store.currentItem).toBe('TasksReminder') // task 的 defaultItemId
+    store.setCategory('config')
+    expect(store.currentItem).toBe('SettingsTheme') // config 的 defaultItemId（SettingsAbout 已删）
   })
 
   it('case 9: setCategoryAndItem 同时切类别+项 + 持久化', async () => {
