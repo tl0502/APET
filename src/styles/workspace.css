@@ -1,0 +1,46 @@
+/* workspace 窗口专用全局样式（#37 重设计 P3）。
+ *
+ * 与其他窗（chat / pomodoro / onboarding）同范式：
+ * - html / body / #app 撑满窗口 + overflow:hidden 防外层滚动
+ * - box-sizing: border-box 全局兜底（Tauri frameless 在 Win 上 webview 实际尺寸非整数像素，
+ *   见 Tauri GitHub #7506 / Discussion #11881；不全局兜底容易出 1px overflow）
+ * - margin/padding: 0 reset
+ * - 非透明窗：background = --aipet-color-bg（与 onboarding 同款）
+ * - user-select 关在 body，输入区子组件局部覆盖（与 chat 同款）
+ *
+ * 历史背景：#33 phase B-redo 重写 workspace shell 时遗漏了这层全局 reset，
+ * 导致外层滚动 + 三段不贴合窗口的现象（用户感知"像网页嵌在页面里"）。
+ * #37 P3 补齐。
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--aipet-color-bg);
+  color: var(--aipet-color-text-1);
+  overflow: hidden;
+  font-family: var(--aipet-font-family-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html.dark,
+html.dark body,
+html.dark #app {
+  background: var(--aipet-color-bg);
+}
+
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
