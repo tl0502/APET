@@ -29,7 +29,7 @@ function onSelect(itemId: string) {
 </script>
 
 <template>
-  <aside class="master-col" :style="{ width: layout.masterWidth + 'px' }" aria-label="master 列">
+  <aside class="master-col" aria-label="master 列">
     <header class="master-col__header">
       <ElIcon :size="16" class="master-col__header-icon">
         <component :is="currentCategoryMeta.icon" v-if="currentCategoryMeta" />
@@ -63,13 +63,13 @@ function onSelect(itemId: string) {
 
 <style scoped>
 .master-col {
-  flex: 0 0 auto;
-  height: 100%;
+  /* 宽度由父 grid 列 var(--workspace-master-width) 控制；高度由 grid 行 1fr 控制（#37 P3） */
   background: var(--aipet-color-surface);
   border-right: 1px solid var(--aipet-color-border-faint);
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .master-col__header {

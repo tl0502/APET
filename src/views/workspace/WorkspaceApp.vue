@@ -114,7 +114,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="workspace-root">
+  <div
+    class="workspace-root"
+    :style="{ '--workspace-master-width': layout.masterWidth + 'px' }"
+  >
     <!-- TOPBAR：左 桃宝 avatar / 中 capsule 占位 / 右 chrome 三按钮 -->
     <header class="workspace-topbar">
       <div class="workspace-topbar__avatar-wrap">
@@ -198,7 +201,7 @@ onBeforeUnmount(() => {
   height: 100%;
   display: grid;
   grid-template-rows: 48px 1fr;
-  grid-template-columns: 60px 240px auto 1fr;
+  grid-template-columns: 60px var(--workspace-master-width, 240px) auto 1fr;
   grid-template-areas:
     'topbar  topbar  topbar  topbar'
     'sidebar master  sash    detail';
