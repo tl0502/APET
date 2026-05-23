@@ -207,7 +207,7 @@ onMounted(refresh)
         :todos="filtered"
         :selected-ids="selectedIds"
         :search-query="searchQuery"
-        :draggable="canDrag"
+        :enable-drag="canDrag"
         @complete="onComplete"
         @cancel="onCancel"
         @edit="openEdit"

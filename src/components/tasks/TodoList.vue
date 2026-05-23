@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import draggable from 'vuedraggable'
-import { ElCheckbox, ElButton, ElTooltip, ElIcon, ElMessage } from 'element-plus'
+import { ElCheckbox, ElButton, ElTooltip, ElIcon } from 'element-plus'
 import { Check, Edit, Close, MagicStick } from '@element-plus/icons-vue'
 import type { Todo } from '@/types/todo'
 
@@ -9,7 +9,7 @@ interface Props {
   todos: Todo[]
   selectedIds: Set<string>
   searchQuery: string
-  draggable: boolean
+  enableDrag: boolean
 }
 
 const props = defineProps<Props>()
@@ -56,7 +56,7 @@ function onDragEnd(event: { oldIndex?: number; newIndex?: number }) {
 
 <template>
   <draggable
-    v-if="props.draggable"
+    v-if="props.enableDrag"
     :list="localTodos"
     item-key="id"
     handle=".todo-row__drag-handle"

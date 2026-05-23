@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton, ElButtonGroup, ElTooltip, ElMessage, ElMessageBox } from 'element-plus'
+import { ElButton, ElButtonGroup, ElMessageBox } from 'element-plus'
 import type { TodoPriority } from '@/types/todo'
 
 interface Props {
