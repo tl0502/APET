@@ -271,9 +271,8 @@ async fn list_with_conn(conn: &mut SqliteConnection) -> Result<Vec<Todo>, TodoEr
 ///   * Set on existing → update_internal_tx 同步 trigger_spec + title（同 reminder_id）
 ///   * Clear → delete_internal_tx 清 reminder_id
 /// - title 改动 + has reminder + due_at 未改 → 同步 title 到 reminder（防止提醒触发标题脱节）
-///
-/// 后续 Task：
-/// - C6: status='cancelled' + 有 once reminder → 同 tx 内删 reminder
+/// - status='cancelled' + 有 once reminder → 同 tx 内删 reminder + 清 reminder_id (C6)
+///   （daily / 其他 recurring 保留，独立于该 todo 的用户日常仪式）
 ///
 /// status='done' 通过 update 显式拒绝：必须走 todo_complete（spec §4.2，complete-once 语义）。
 async fn update_with_tx(
@@ -378,6 +377,29 @@ async fn update_with_tx(
         .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
     }
 
+    // 软删 cancelled + 有 once reminder → 删 reminder（同 complete 语义）
+    // 防止用户提前取消后到点仍弹气泡 / 桌宠点头。仅删 once 类型；
+    // daily / 其他 recurring reminder 保留（独立于该 todo 的用户日常仪式）。
+    // 判断用 new_reminder_id（C5 算出的当前值）而非 existing.reminder_id：
+    // 当 input 同时含 status=cancelled + due_at=Clear 时，Clear 先把 reminder_id 设 None，
+    // 此分支 noop（无 rid 可删），是正确语义。
+    let (final_due_at, final_reminder_id) = if new_status == "cancelled"
+        && new_reminder_id.is_some()
+    {
+        let rid = new_reminder_id.as_ref().unwrap();
+        let r = crate::services::reminder::get_internal_tx(tx, rid).await
+            .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
+        if r.trigger_type == "once" {
+            crate::services::reminder::delete_internal_tx(tx, rid).await
+                .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
+            (None, None)
+        } else {
+            (new_due_at.clone(), new_reminder_id.clone())
+        }
+    } else {
+        (new_due_at.clone(), new_reminder_id.clone())
+    };
+
     let now = Utc::now().to_rfc3339();
     {
         let conn: &mut SqliteConnection = &mut **tx;
@@ -388,8 +410,8 @@ async fn update_with_tx(
         )
         .bind(&new_title)
         .bind(&new_status)
-        .bind(&new_due_at)
-        .bind(&new_reminder_id)
+        .bind(&final_due_at)
+        .bind(&final_reminder_id)
         .bind(&new_priority)
         .bind(&now)
         .bind(id)
@@ -637,6 +659,35 @@ mod tests {
         let spec: (String,) = sqlx::query_as("SELECT trigger_spec FROM reminders WHERE id=?")
             .bind(&original_rid).fetch_one(&mut conn).await.unwrap();
         assert_eq!(spec.0, "2026-06-02T10:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn cancel_via_update_with_once_reminder_deletes_reminder() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "x".into(),
+                due_at: Some("2026-06-01T09:00:00Z".into()),
+                priority: None,
+            },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+        let rid = todo.reminder_id.clone().unwrap();
+
+        let mut tx = conn.begin().await.unwrap();
+        let updated = update_with_tx(
+            &mut tx, &todo.id,
+            UpdateInput { status: Some("cancelled".into()), ..Default::default() },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(updated.status, "cancelled");
+        assert!(updated.reminder_id.is_none());
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reminders WHERE id=?")
+            .bind(&rid).fetch_one(&mut conn).await.unwrap();
+        assert_eq!(count.0, 0);
     }
 
     #[tokio::test]
