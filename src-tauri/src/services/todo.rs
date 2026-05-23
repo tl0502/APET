@@ -14,7 +14,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sqlx::{Sqlite, SqliteConnection, Transaction};
+use sqlx::{Connection, Sqlite, SqliteConnection, Transaction};
 use tauri::{AppHandle, Runtime};
 use thiserror::Error;
 use ulid::Ulid;
@@ -95,8 +95,106 @@ pub enum DueAtChange {
 
 // ====== 业务函数留作 Phase C 实现 ======
 
-pub async fn create<R: Runtime>(_app: &AppHandle<R>, _input: CreateInput) -> Result<Todo, TodoError> {
-    Err(TodoError::InvalidInput("not implemented".into()))
+/// 内部实现：接 `&mut Transaction`，所有联动操作在同一 tx 内。
+async fn create_with_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    input: CreateInput,
+) -> Result<Todo, TodoError> {
+    if input.title.trim().is_empty() {
+        return Err(TodoError::InvalidInput("title cannot be empty".into()));
+    }
+    let id = Ulid::new().to_string();
+    let now = Utc::now().to_rfc3339();
+    let priority = input.priority.as_deref().unwrap_or("normal").to_string();
+    validate_priority(&priority)?;
+
+    // due_at 非空时联动 reminder（C2 接入；本 Task 仅无 due_at 路径）
+    let reminder_id: Option<String> = if let Some(ref _due) = input.due_at {
+        None // 占位；C2 替换
+    } else {
+        None
+    };
+
+    // 计算 order_index：放最前（min - 10.0；首条用 0）
+    let row: Option<(Option<f64>,)> = sqlx::query_as(
+        "SELECT MIN(order_index) FROM todos WHERE status='open'",
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    let min_order: Option<f64> = row.and_then(|(v,)| v);
+    let order_index = match min_order {
+        Some(v) => v - 10.0,
+        None => 0.0,
+    };
+
+    {
+        let conn: &mut SqliteConnection = &mut **tx;
+        sqlx::query(
+            r#"INSERT INTO todos
+               (id, title, status, due_at, reminder_id, order_index, priority, created_at, updated_at)
+               VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(&id)
+        .bind(&input.title)
+        .bind(&input.due_at)
+        .bind(&reminder_id)
+        .bind(order_index)
+        .bind(&priority)
+        .bind(&now)
+        .bind(&now)
+        .execute(conn)
+        .await?;
+    }
+
+    get_by_id(&mut **tx, &id).await
+}
+
+fn validate_priority(p: &str) -> Result<(), TodoError> {
+    match p {
+        "low" | "normal" | "high" => Ok(()),
+        _ => Err(TodoError::InvalidInput(format!("invalid priority: {p}"))),
+    }
+}
+
+async fn get_by_id(conn: &mut SqliteConnection, id: &str) -> Result<Todo, TodoError> {
+    let row: Option<(
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        f64,
+        String,
+        String,
+        String,
+    )> = sqlx::query_as(
+        r#"SELECT id, title, status, due_at, reminder_id, order_index, priority, created_at, updated_at
+           FROM todos WHERE id=?"#,
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await?;
+    row.map(|r| Todo {
+        id: r.0,
+        title: r.1,
+        status: r.2,
+        due_at: r.3,
+        reminder_id: r.4,
+        order_index: r.5,
+        priority: r.6,
+        created_at: r.7,
+        updated_at: r.8,
+    })
+    .ok_or_else(|| TodoError::NotFound(id.to_string()))
+}
+
+pub async fn create<R: Runtime>(app: &AppHandle<R>, input: CreateInput) -> Result<Todo, TodoError> {
+    let mut conn = open_app_db(app).await?;
+    let mut tx = conn.begin().await?;
+    let out = create_with_tx(&mut tx, input).await?;
+    tx.commit().await?;
+    conn.close().await?;
+    Ok(out)
 }
 
 pub async fn list<R: Runtime>(_app: &AppHandle<R>) -> Result<Vec<Todo>, TodoError> {
@@ -123,6 +221,7 @@ pub async fn reorder<R: Runtime>(_app: &AppHandle<R>, _id: String, _after_id: Op
 mod tests {
     use super::*;
     use crate::services::test_db::fresh_db;
+    use sqlx::Connection;
 
     #[tokio::test]
     async fn types_compile() {
@@ -134,5 +233,29 @@ mod tests {
         };
         let _ = DueAtChange::Set("2026-05-23T10:00:00Z".into());
         let _ = DueAtChange::Clear;
+    }
+
+    #[tokio::test]
+    async fn create_without_due_at_inserts_row_with_defaults() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "买菜".into(),
+                due_at: None,
+                priority: None,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(todo.title, "买菜");
+        assert_eq!(todo.status, "open");
+        assert_eq!(todo.priority, "normal");
+        assert!(todo.due_at.is_none());
+        assert!(todo.reminder_id.is_none());
     }
 }
