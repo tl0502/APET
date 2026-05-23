@@ -15,6 +15,7 @@
 import { computed, ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useVRMModel } from '@/composables/useVRMModel'
+import { usePetReaction } from '@/composables/usePetReaction'
 import { cancelWander } from '@/services/livingPet'
 import type { AvatarView } from '@/services/vrm'
 
@@ -24,12 +25,15 @@ interface Props {
   view?: AvatarView
   /** 容器逻辑像素尺寸。默认 320×320（兼容 onboarding SoulPledgeView 不传场景）。 */
   size?: { width: number; height: number }
+  /** #29 是否对 reminder:fired 事件作出反应（点头）。onboarding 场景应传 false。 */
+  enableReaction?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   draggable: true,
   view: 'half',
   size: () => ({ width: 320, height: 320 }),
+  enableReaction: true,
 })
 
 const emit = defineEmits<{
@@ -43,6 +47,9 @@ const canvasRef = ref<HTMLCanvasElement | null>(null)
 const MODEL_URL = '/avatar/avatar.vrm'
 
 const { isLoaded, errorMessage, runtime } = useVRMModel(canvasRef, MODEL_URL, props.view)
+
+// #29 桌宠对 reminder:fired 的反应（点头）。onboarding 场景传 enable-reaction="false" 跳过。
+usePetReaction(runtime, () => props.enableReaction)
 
 const stageStyle = computed(() => ({
   width: `${props.size.width}px`,

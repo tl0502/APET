@@ -220,7 +220,7 @@ onBeforeUnmount(() => {
     <h1 id="soul-pledge-title" class="visually-hidden">灵魂宣誓 — momo 的承诺</h1>
 
     <div class="soul-pledge__avatar">
-      <PetCanvas :draggable="false" @loaded="onCanvasLoaded" @error="onCanvasError" />
+      <PetCanvas :draggable="false" :enable-reaction="false" @loaded="onCanvasLoaded" @error="onCanvasError" />
     </div>
 
     <div class="soul-pledge__content" aria-live="polite">
