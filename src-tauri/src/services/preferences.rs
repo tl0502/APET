@@ -15,7 +15,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sqlx::{Connection, FromRow, SqliteConnection};
+use sqlx::{Connection, FromRow, Sqlite, SqliteConnection, Transaction};
 use tauri::{AppHandle, Runtime};
 use thiserror::Error;
 
@@ -145,6 +145,16 @@ pub(crate) async fn delete_with_conn(
         .execute(conn)
         .await?;
     Ok(())
+}
+
+/// #29 跨 service 写操作专用入口：接 `&mut Transaction`，让 onboarding_reminders
+/// drain 时 reminder.create + memory.delete 在同一 tx 内原子化。
+pub(crate) async fn delete_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    key: &str,
+) -> Result<(), PreferenceError> {
+    let conn: &mut SqliteConnection = &mut **tx;
+    delete_with_conn(conn, key).await
 }
 
 #[cfg(test)]
