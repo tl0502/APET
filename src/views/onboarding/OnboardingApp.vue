@@ -177,45 +177,134 @@ async function onResumeExit() {
     console.warn('[OnboardingApp] window.close failed:', e)
   }
 }
+
+// chrome bar ✕ 的关闭路径与 onResumeExit 完全一致（lib.rs:320 onboarding CloseRequested
+// → app.exit(0)）。独立函数让模板/调用站点的语义更明确（用户主动放弃 vs 续接拒绝）。
+async function onChromeClose() {
+  try {
+    await getCurrentWindow().close()
+  } catch (e) {
+    console.warn('[OnboardingApp] chrome close failed:', e)
+  }
+}
 </script>
 
 <template>
-  <!-- 续接模态：onMounted 检测到 KV 存在 → 显示 -->
-  <div
-    v-if="resumePrompt"
-    class="resume-overlay"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="resume-title"
-  >
-    <div class="resume-card">
-      <h2 id="resume-title" class="resume-card__title">欢迎回来 👋</h2>
-      <p class="resume-card__hint">
-        上次我们在
-        <strong>{{ STEP_DISPLAY_NAMES[resumePrompt.step] }}</strong>
-        这步停下了。
-      </p>
-      <p class="resume-card__hint resume-card__hint--small">
-        想接着走完，还是从头开始?
-      </p>
-      <div class="resume-card__actions">
-        <ElButton type="primary" @click="onResumeContinue">继续</ElButton>
-        <ElButton @click="onResumeRestart">重来</ElButton>
-        <ElButton text @click="onResumeExit">退出</ElButton>
+  <div class="onboarding-root">
+    <!-- 自绘 chrome bar（#16 美化补丁 2026-05-22）：
+         tauri.conf.json decorations:false → OS 标题栏关闭,本 bar 承担拖动 + 关闭。
+         关闭 ✕ 调 getCurrentWindow().close() → lib.rs:320 拦截 onboarding CloseRequested
+         → app.exit(0)（与原 OS X 按钮路径等价）。
+         WorkspaceApp 同款 chrome 风格,但 onboarding 只需关闭按钮（resizable:false 无 min/max）。
+
+         title span 显式重复 data-tauri-drag-region 作为防御:某些 Vue render
+         边界下 attribute 继承在 webview 实测偶发失效（child 接收 mousedown 时
+         查不到 drag attribute → startDragging 不触发）。冗余声明,无副作用。 -->
+    <header class="onboarding-chrome" data-tauri-drag-region>
+      <span
+        class="onboarding-chrome__title"
+        data-tauri-drag-region
+      >灵魂宣誓 — AI 桌宠</span>
+      <button
+        class="aipet-chrome-btn aipet-chrome-btn--close"
+        type="button"
+        data-tauri-drag-region="false"
+        title="关闭（退出应用）"
+        aria-label="关闭"
+        @click="onChromeClose"
+      >✕</button>
+    </header>
+
+    <div class="onboarding-body">
+      <!-- 续接模态：onMounted 检测到 KV 存在 → 显示 -->
+      <div
+        v-if="resumePrompt"
+        class="resume-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resume-title"
+      >
+        <div class="resume-card">
+          <h2 id="resume-title" class="resume-card__title">欢迎回来 👋</h2>
+          <p class="resume-card__hint">
+            上次我们在
+            <strong>{{ STEP_DISPLAY_NAMES[resumePrompt.step] }}</strong>
+            这步停下了。
+          </p>
+          <p class="resume-card__hint resume-card__hint--small">
+            想接着走完，还是从头开始?
+          </p>
+          <div class="resume-card__actions">
+            <ElButton type="primary" @click="onResumeContinue">继续</ElButton>
+            <ElButton @click="onResumeRestart">重来</ElButton>
+            <ElButton text @click="onResumeExit">退出</ElButton>
+          </div>
+        </div>
       </div>
+      <!-- 启动期等 KV load 完;期间不渲染 view,避免短暂闪现 -->
+      <template v-else-if="!initializing">
+        <SoulPledgeView v-if="currentStep === 'soul-pledge'" @done="advanceStep" />
+        <PersonaPickerView v-else-if="currentStep === 'persona-picker'" @done="advanceStep" />
+        <ShortcutConfirmView v-else-if="currentStep === 'shortcut-confirm'" @done="advanceStep" />
+        <ReminderIntentsView v-else-if="currentStep === 'reminder-intents'" @done="advanceStep" />
+        <SummonInviteView v-else-if="currentStep === 'summon-invite'" @done="advanceStep" />
+      </template>
     </div>
   </div>
-  <!-- 启动期等 KV load 完;期间不渲染 view,避免短暂闪现 -->
-  <template v-else-if="!initializing">
-    <SoulPledgeView v-if="currentStep === 'soul-pledge'" @done="advanceStep" />
-    <PersonaPickerView v-else-if="currentStep === 'persona-picker'" @done="advanceStep" />
-    <ShortcutConfirmView v-else-if="currentStep === 'shortcut-confirm'" @done="advanceStep" />
-    <ReminderIntentsView v-else-if="currentStep === 'reminder-intents'" @done="advanceStep" />
-    <SummonInviteView v-else-if="currentStep === 'summon-invite'" @done="advanceStep" />
-  </template>
 </template>
 
 <style scoped>
+/* ============ root：chrome bar + body 垂直分层 ============
+ * tauri.conf decorations:false 后窗体由前端自绘；onboarding-root 占满 webview。
+ */
+.onboarding-root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--aipet-color-bg);
+}
+
+/* ============ chrome bar（自绘 40px 顶栏） ============
+ * 整 header 设 data-tauri-drag-region；按钮 data-tauri-drag-region="false" 豁免。
+ * Win11 风格 chrome 按钮复用全局 .aipet-chrome-btn（buttons.css）46×32，hover 红。
+ * 1px hairline 底分 chrome 与 body；clean 桌面应用范式（WorkspaceApp 同款节奏）。
+ */
+.onboarding-chrome {
+  flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: var(--aipet-color-surface-soft);
+  border-bottom: 1px solid var(--aipet-color-border-faint);
+  user-select: none;
+  cursor: default;
+  z-index: 5;
+}
+
+.onboarding-chrome__title {
+  padding-left: var(--aipet-space-4);
+  font-size: var(--aipet-font-size-sm);
+  color: var(--aipet-color-text-2);
+  letter-spacing: 0.02em;
+  /* 中间空白区域明确 drag 提示;按钮区不继承（aipet-chrome-btn 自身 cursor pointer） */
+  cursor: move;
+  flex: 1 1 auto;
+}
+
+/* ============ body：剩余空间承载 view ============
+ * min-height: 0 是 flex column 内子项可缩容的标准技巧——避免 letter 卡片或大段
+ * 内容撑爆 flex 容器把后续兄弟元素挤出可视区（lessons.md "grid item min-size"
+ * 在 flex 上的等价问题）。
+ */
+.onboarding-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+/* ============ 续接模态：占满 body 居中 ============ */
 .resume-overlay {
   display: flex;
   align-items: center;

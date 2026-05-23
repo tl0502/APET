@@ -160,32 +160,34 @@ async function onConfirm() {
       选了我就轻轻提醒,不催不闹。以后随时能关。
     </p>
 
-    <ul class="intent-list" aria-label="提醒类型多选">
-      <li v-for="intent in INTENTS" :key="intent.id" class="intent-item">
-        <ElCheckbox
-          :model-value="selected.has(intent.id)"
-          :disabled="isLocked"
-          @change="(v: CheckboxValueType) => toggleIntent(intent.id, Boolean(v))"
-        >
-          <span class="intent-item__emoji">{{ intent.emoji }}</span>
-          <span class="intent-item__label">{{ intent.label }}</span>
-          <span class="intent-item__hint">{{ intent.hint }}</span>
-        </ElCheckbox>
-      </li>
-      <li class="intent-item intent-item--none">
-        <ElCheckbox
-          :model-value="noneChecked"
-          :disabled="isLocked"
-          @change="(v: CheckboxValueType) => toggleNone(Boolean(v))"
-        >
-          <span class="intent-item__label">我不需要</span>
-        </ElCheckbox>
-      </li>
-    </ul>
+    <div class="reminder-intents__middle">
+      <ul class="intent-list" aria-label="提醒类型多选">
+        <li v-for="intent in INTENTS" :key="intent.id" class="intent-item">
+          <ElCheckbox
+            :model-value="selected.has(intent.id)"
+            :disabled="isLocked"
+            @change="(v: CheckboxValueType) => toggleIntent(intent.id, Boolean(v))"
+          >
+            <span class="intent-item__emoji">{{ intent.emoji }}</span>
+            <span class="intent-item__label">{{ intent.label }}</span>
+            <span class="intent-item__hint">{{ intent.hint }}</span>
+          </ElCheckbox>
+        </li>
+        <li class="intent-item intent-item--none">
+          <ElCheckbox
+            :model-value="noneChecked"
+            :disabled="isLocked"
+            @change="(v: CheckboxValueType) => toggleNone(Boolean(v))"
+          >
+            <span class="intent-item__label">我不需要</span>
+          </ElCheckbox>
+        </li>
+      </ul>
 
-    <p class="reminder-intents__footer-hint">
-      (提醒功能 M2 上线后生效;现在我先记下你的偏好。)
-    </p>
+      <p class="reminder-intents__footer-hint">
+        (提醒功能 M2 上线后生效;现在我先记下你的偏好。)
+      </p>
+    </div>
 
     <div class="reminder-intents__actions">
       <ElButton
@@ -207,7 +209,7 @@ async function onConfirm() {
   align-items: stretch;
   width: 100%;
   height: 100%;
-  padding: var(--aipet-space-6) var(--aipet-space-8) var(--aipet-space-8);
+  padding: var(--aipet-space-3) var(--aipet-space-6) var(--aipet-space-4);
   background: var(--aipet-color-bg);
   box-sizing: border-box;
   user-select: none;
@@ -222,7 +224,7 @@ async function onConfirm() {
 }
 
 .reminder-intents__hint {
-  margin: 0 0 var(--aipet-space-5);
+  margin: 0 0 var(--aipet-space-4);
   font-size: var(--aipet-font-size-sm);
   color: var(--aipet-color-text-3);
   text-align: center;
@@ -235,6 +237,21 @@ async function onConfirm() {
   margin: 0 0 var(--aipet-space-4);
   padding: 0;
   list-style: none;
+  width: 100%;
+  max-width: 360px;
+}
+
+/* ============ middle wrapper ============
+ * 让 intent-list + footer-hint 在 title/hint 与 actions 之间垂直居中。
+ */
+.reminder-intents__middle {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
 }
 
 .intent-item {

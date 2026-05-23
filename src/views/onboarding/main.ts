@@ -9,6 +9,7 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import '@/styles/tokens.css'
 import '@/styles/element-overrides.css'
 import '@/styles/components.css'
+import '@/styles/buttons.css'
 import '@/styles/onboarding.css'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 

@@ -186,42 +186,44 @@ async function onConfirm() {
       随时按这个组合,我就跳出来听你说。以后还能改。
     </p>
 
-    <div class="shortcut-row">
-      <div
-        :class="['shortcut-box', { 'shortcut-box--capturing': mode === 'capturing' }]"
-      >
-        <span v-if="mode === 'display'" class="shortcut-box__combo">{{ shortcut }}</span>
-        <span v-else-if="pendingMods.length > 0" class="shortcut-box__combo">
-          {{ pendingMods.join('+') }}+<span class="shortcut-box__pending">…</span>
-        </span>
-        <span v-else class="shortcut-box__hint">
-          按下组合键<kbd class="shortcut-box__kbd">Esc</kbd>取消
-        </span>
+    <div class="shortcut-confirm__middle">
+      <div class="shortcut-row">
+        <div
+          :class="['shortcut-box', { 'shortcut-box--capturing': mode === 'capturing' }]"
+        >
+          <span v-if="mode === 'display'" class="shortcut-box__combo">{{ shortcut }}</span>
+          <span v-else-if="pendingMods.length > 0" class="shortcut-box__combo">
+            {{ pendingMods.join('+') }}+<span class="shortcut-box__pending">…</span>
+          </span>
+          <span v-else class="shortcut-box__hint">
+            按下组合键<kbd class="shortcut-box__kbd">Esc</kbd>取消
+          </span>
+        </div>
+        <ElButton v-if="mode === 'display'" @click="startCapture">改键</ElButton>
+        <ElButton v-else @click="stopCapture">取消</ElButton>
       </div>
-      <ElButton v-if="mode === 'display'" @click="startCapture">改键</ElButton>
-      <ElButton v-else @click="stopCapture">取消</ElButton>
+
+      <p
+        v-if="mode === 'display' && probeResult && !probing"
+        :class="[
+          'shortcut-status',
+          probeResult.available ? 'shortcut-status--ok' : 'shortcut-status--bad',
+        ]"
+      >
+        <template v-if="probeResult.available">
+          <ElIcon class="shortcut-status__icon"><CircleCheckFilled /></ElIcon>
+          可用
+        </template>
+        <template v-else>
+          <ElIcon class="shortcut-status__icon"><WarningFilled /></ElIcon>
+          已被其他应用占用,请改个组合
+        </template>
+      </p>
+      <p v-else-if="mode === 'display' && probing" class="shortcut-status">检测中...</p>
+      <p v-if="captureHint" class="shortcut-status shortcut-status--bad">{{ captureHint }}</p>
+
+      <p class="shortcut-confirm__footer-hint">摸鱼模式快捷键(M2 上线后再设)。</p>
     </div>
-
-    <p
-      v-if="mode === 'display' && probeResult && !probing"
-      :class="[
-        'shortcut-status',
-        probeResult.available ? 'shortcut-status--ok' : 'shortcut-status--bad',
-      ]"
-    >
-      <template v-if="probeResult.available">
-        <ElIcon class="shortcut-status__icon"><CircleCheckFilled /></ElIcon>
-        可用
-      </template>
-      <template v-else>
-        <ElIcon class="shortcut-status__icon"><WarningFilled /></ElIcon>
-        已被其他应用占用,请改个组合
-      </template>
-    </p>
-    <p v-else-if="mode === 'display' && probing" class="shortcut-status">检测中...</p>
-    <p v-if="captureHint" class="shortcut-status shortcut-status--bad">{{ captureHint }}</p>
-
-    <p class="shortcut-confirm__footer-hint">摸鱼模式快捷键(M2 上线后再设)。</p>
 
     <div class="shortcut-confirm__actions">
       <ElButton
@@ -243,7 +245,7 @@ async function onConfirm() {
   align-items: stretch;
   width: 100%;
   height: 100%;
-  padding: var(--aipet-space-6) var(--aipet-space-8) var(--aipet-space-8);
+  padding: var(--aipet-space-3) var(--aipet-space-6) var(--aipet-space-4);
   background: var(--aipet-color-bg);
   box-sizing: border-box;
   user-select: none;
@@ -260,10 +262,22 @@ async function onConfirm() {
 }
 
 .shortcut-confirm__hint {
-  margin: 0 0 var(--aipet-space-6);
+  margin: 0 0 var(--aipet-space-4);
   font-size: var(--aipet-font-size-sm);
   color: var(--aipet-color-text-3);
   text-align: center;
+}
+
+/* ============ middle wrapper ============
+ * 让 shortcut-row + status + footer-hint 在 title/hint 与 actions 之间垂直居中。
+ */
+.shortcut-confirm__middle {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
 }
 
 .shortcut-row {

@@ -138,31 +138,33 @@ async function onSkip() {
     </h1>
     <p class="persona-picker__hint">选了不喜欢,以后还能换。或者跳过,用我(默默)。</p>
 
-    <p v-if="loading" class="persona-picker__loading">加载中...</p>
-    <ul
-      v-else
-      class="persona-picker__list"
-      role="radiogroup"
-      aria-label="选择内置人格"
-    >
-      <li
-        v-for="p in personas"
-        :key="p.id"
-        :class="['persona-card', { 'persona-card--selected': p.id === selectedId }]"
-        role="radio"
-        :aria-checked="p.id === selectedId"
-        tabindex="0"
-        @click="onSelect(p.id)"
-        @keydown.enter.prevent="onSelect(p.id)"
-        @keydown.space.prevent="onSelect(p.id)"
+    <div class="persona-picker__middle">
+      <p v-if="loading" class="persona-picker__loading">加载中...</p>
+      <ul
+        v-else
+        class="persona-picker__list"
+        role="radiogroup"
+        aria-label="选择内置人格"
       >
-        <div class="persona-card__head">
-          <span class="persona-card__name">{{ p.name }}</span>
-          <span class="persona-card__id">{{ p.id }}</span>
-        </div>
-        <div class="persona-card__tagline">{{ TAGLINE_BY_ID[p.id] ?? '' }}</div>
-      </li>
-    </ul>
+        <li
+          v-for="p in personas"
+          :key="p.id"
+          :class="['persona-card', { 'persona-card--selected': p.id === selectedId }]"
+          role="radio"
+          :aria-checked="p.id === selectedId"
+          tabindex="0"
+          @click="onSelect(p.id)"
+          @keydown.enter.prevent="onSelect(p.id)"
+          @keydown.space.prevent="onSelect(p.id)"
+        >
+          <div class="persona-card__head">
+            <span class="persona-card__name">{{ p.name }}</span>
+            <span class="persona-card__id">{{ p.id }}</span>
+          </div>
+          <div class="persona-card__tagline">{{ TAGLINE_BY_ID[p.id] ?? '' }}</div>
+        </li>
+      </ul>
+    </div>
 
     <div class="persona-picker__actions" role="group" aria-label="操作">
       <ElButton :disabled="submitting" @click="onSkip">跳过(用默认)</ElButton>
@@ -185,7 +187,7 @@ async function onSkip() {
   align-items: stretch;
   width: 100%;
   height: 100%;
-  padding: var(--aipet-space-6) var(--aipet-space-8) var(--aipet-space-8);
+  padding: var(--aipet-space-3) var(--aipet-space-6) var(--aipet-space-4);
   background: var(--aipet-color-bg);
   box-sizing: border-box;
   user-select: none;
@@ -200,7 +202,7 @@ async function onSkip() {
 }
 
 .persona-picker__hint {
-  margin: 0 0 var(--aipet-space-5);
+  margin: 0 0 var(--aipet-space-4);
   font-size: var(--aipet-font-size-sm);
   color: var(--aipet-color-text-3);
   text-align: center;
@@ -217,9 +219,25 @@ async function onSkip() {
   display: flex;
   flex-direction: column;
   gap: var(--aipet-space-3);
-  margin: 0 0 var(--aipet-space-6);
+  margin: 0;
   padding: 0;
   list-style: none;
+  width: 100%;
+  max-width: 360px;
+}
+
+/* ============ middle wrapper ============
+ * 让 list 在 title/hint 与 actions 之间的剩余空间内垂直居中显示。
+ * actions margin-top: auto 推到底；title/hint 在顶；middle flex:1 占余 + 内部 justify center。
+ */
+.persona-picker__middle {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
 }
 
 .persona-card {

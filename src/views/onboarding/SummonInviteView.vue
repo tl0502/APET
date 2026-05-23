@@ -57,14 +57,16 @@ function onStart() {
       想找我聊天的时候,随时按这个组合,我就跳出来听你说。
     </p>
 
-    <div v-if="shortcut" class="summon-invite__shortcut">
-      <kbd class="summon-invite__kbd">{{ shortcut }}</kbd>
-    </div>
-    <div v-else class="summon-invite__shortcut summon-invite__shortcut--fallback">
-      <p>(快捷键还没设好,可以右键我打开菜单)</p>
-    </div>
+    <div class="summon-invite__middle">
+      <div v-if="shortcut" class="summon-invite__shortcut">
+        <kbd class="summon-invite__kbd">{{ shortcut }}</kbd>
+      </div>
+      <div v-else class="summon-invite__shortcut summon-invite__shortcut--fallback">
+        <p>(快捷键还没设好,可以右键我打开菜单)</p>
+      </div>
 
-    <p class="summon-invite__footer-hint">设置里能随时改键、调人格、关提醒。</p>
+      <p class="summon-invite__footer-hint">设置里能随时改键、调人格、关提醒。</p>
+    </div>
 
     <div class="summon-invite__actions">
       <ElButton
@@ -86,7 +88,7 @@ function onStart() {
   align-items: stretch;
   width: 100%;
   height: 100%;
-  padding: var(--aipet-space-6) var(--aipet-space-8) var(--aipet-space-8);
+  padding: var(--aipet-space-3) var(--aipet-space-6) var(--aipet-space-4);
   background: var(--aipet-color-bg);
   box-sizing: border-box;
   user-select: none;
@@ -101,10 +103,23 @@ function onStart() {
 }
 
 .summon-invite__hint {
-  margin: 0 0 var(--aipet-space-6);
+  margin: 0 0 var(--aipet-space-4);
   font-size: var(--aipet-font-size-sm);
   color: var(--aipet-color-text-3);
   text-align: center;
+}
+
+/* ============ middle wrapper ============
+ * 让 shortcut display + footer-hint 在 title/hint 与 actions 之间垂直居中。
+ */
+.summon-invite__middle {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
 }
 
 .summon-invite__shortcut {

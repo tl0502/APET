@@ -220,48 +220,73 @@ onBeforeUnmount(() => {
     <h1 id="soul-pledge-title" class="visually-hidden">灵魂宣誓 — momo 的承诺</h1>
 
     <div class="soul-pledge__avatar">
-      <PetCanvas :draggable="false" :enable-reaction="false" @loaded="onCanvasLoaded" @error="onCanvasError" />
+      <PetCanvas
+        :draggable="false"
+        :size="{ width: 200, height: 200 }"
+        :enable-reaction="false"
+        @loaded="onCanvasLoaded"
+        @error="onCanvasError"
+      />
     </div>
 
-    <div class="soul-pledge__content" aria-live="polite">
+    <p class="soul-pledge__signature" aria-hidden="true">
+      <span class="soul-pledge__signature-line"></span>
+      <span class="soul-pledge__signature-text">
+        默默
+        <span class="soul-pledge__signature-dot">·</span>
+        <span class="soul-pledge__signature-id">momo</span>
+      </span>
+      <span class="soul-pledge__signature-line"></span>
+    </p>
+
+    <article class="soul-pledge__letter" aria-live="polite">
       <p
         v-for="(p, i) in paragraphs"
         :key="i"
         class="soul-pledge__paragraph"
-        :class="{ 'is-visible': i < visibleCount }"
+        :class="{
+          'is-visible': i < visibleCount,
+          'soul-pledge__paragraph--lead': i === 0,
+        }"
         :aria-hidden="i >= visibleCount"
       >
         {{ p }}
       </p>
-      <button
-        v-show="!isPlaying"
-        type="button"
-        class="soul-pledge__policy-link"
-        :disabled="!buttonsEnabled"
-        @click.stop="onShowPolicy"
-      >
-        — 想了解技术细节，看看完整数据策略 —
-      </button>
-    </div>
+      <div v-show="!isPlaying" class="soul-pledge__rule">
+        <button
+          type="button"
+          class="soul-pledge__policy-link"
+          :disabled="!buttonsEnabled"
+          @click.stop="onShowPolicy"
+        >
+          看看完整数据策略
+        </button>
+      </div>
+    </article>
 
-    <div class="soul-pledge__actions" role="group" aria-label="操作">
-      <ElButton
-        ref="policyBtnRef"
-        :disabled="!buttonsEnabled"
-        @click="onShowPolicy"
-      >
-        再看一眼条款
-      </ElButton>
-      <ElButton :disabled="!buttonsEnabled" @click="onExit">退出</ElButton>
-      <ElButton
-        type="primary"
-        :disabled="!buttonsEnabled"
-        :loading="agreeing"
-        @click="onAgree"
-      >
-        我懂了，一起开始
-      </ElButton>
-    </div>
+    <footer class="soul-pledge__footer">
+      <div class="soul-pledge__actions" role="group" aria-label="操作">
+        <ElButton
+          ref="policyBtnRef"
+          :disabled="!buttonsEnabled"
+          @click="onShowPolicy"
+        >
+          再看一眼条款
+        </ElButton>
+        <ElButton text :disabled="!buttonsEnabled" @click="onExit">退出</ElButton>
+        <ElButton
+          type="primary"
+          :disabled="!buttonsEnabled"
+          :loading="agreeing"
+          @click="onAgree"
+        >
+          我懂了,一起开始
+        </ElButton>
+      </div>
+      <p class="soul-pledge__kbd-hints" aria-hidden="true">
+        按 <kbd class="soul-pledge__kbd">ESC</kbd> 随时退出
+      </p>
+    </footer>
 
     <StandardDialog
       v-model="showPolicy"
@@ -280,13 +305,21 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* ============ 舞台容器 ============
+ * isolation: isolate → 创建独立 stacking context,让 ::before 光晕 z-index:-1
+ * 只在 .soul-pledge 内"下沉",不会跑到根 stacking context 的全窗背景之下消失。
+ * overflow: hidden → 光晕 720×520 椭圆边缘超出窗口时被裁掉,不溢出 scrollbar。
+ */
 .soul-pledge {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   width: 100%;
   height: 100%;
-  padding: var(--aipet-space-6) var(--aipet-space-8) var(--aipet-space-8);
+  padding: var(--aipet-space-3) var(--aipet-space-6) var(--aipet-space-4);
   background: var(--aipet-color-bg);
   box-sizing: border-box;
   user-select: none;
@@ -299,36 +332,163 @@ onBeforeUnmount(() => {
   cursor: default;
 }
 
+/* ============ 角色光晕 ============
+ * radial-gradient 椭圆,中心稍偏上（28%）对准 avatar 中心,primary 10% → 透明。
+ * 单点光源,不是页面级渐变,符合"角色光斑"语义（tokens.css §"无渐变"原则的例外）。
+ * z-index: -1 + 父 isolation → 在 .soul-pledge 内最底层,不挡内容。
+ */
+.soul-pledge::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 720px;
+  height: 520px;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse 50% 60% at center 28%,
+    color-mix(in srgb, var(--aipet-color-primary) 10%, transparent),
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0;
+  animation: soul-pledge-glow-in var(--aipet-duration-slow) var(--aipet-ease-standard) 200ms forwards;
+}
+
+@keyframes soul-pledge-glow-in {
+  to {
+    opacity: 1;
+  }
+}
+
+/* ============ avatar ============ */
 .soul-pledge__avatar {
   /* PetCanvas 320×320 居中显示在顶部 */
   flex: 0 0 auto;
   margin-bottom: var(--aipet-space-2);
 }
 
-.soul-pledge__content {
-  flex: 1 1 auto;
+/* ============ 角色署名 ============
+ * "── 默默 · momo ──"：左右 1px hairline + 中间 mono 字 + 字距开间。
+ * letter-spacing 0.16em 营造"戏剧海报副标题"的呼吸感。
+ */
+.soul-pledge__signature {
+  flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  align-items: stretch;
-  width: 100%;
-  max-width: 400px;
-  /* 文案区是阅读区，cursor 恢复 default（防 stage 全 pointer 让人误以为不能选） */
-  cursor: default;
+  gap: var(--aipet-space-3);
+  margin: 0 0 var(--aipet-space-2);
+  font-size: var(--aipet-font-size-xs);
+  color: var(--aipet-color-text-3);
+  opacity: 0;
+  animation: soul-pledge-sig-in var(--aipet-duration-slow) var(--aipet-ease-standard) 400ms forwards;
 }
 
+@keyframes soul-pledge-sig-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.soul-pledge__signature-line {
+  width: 32px;
+  height: 1px;
+  background: var(--aipet-color-border);
+}
+
+.soul-pledge__signature-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--aipet-space-2);
+  letter-spacing: 0.16em;
+}
+
+.soul-pledge__signature-dot {
+  color: var(--aipet-color-border-strong);
+}
+
+.soul-pledge__signature-id {
+  font-family: var(--aipet-font-family-mono);
+  font-size: var(--aipet-font-size-xs);
+  letter-spacing: 0.08em;
+  color: var(--aipet-color-text-3);
+}
+
+/* ============ 信笺卡片 ============
+ * 用 surface + radius-card + shadow-sm + border-faint 形成"信纸"质感。
+ * 与 .soul-pledge bg 同色（亮色都是 #ffffff），靠 shadow + border 浮起 → 符合
+ * tokens.css 注释"L0/L2 同色,靠 shadow + border 分层"（Bear/Linear/MacOS Big Sur 通行）。
+ * 暗色下 surface=#2a2a2a 与 bg=#171717 自然有 +11 灰度差,纯色阶梯生效。
+ *
+ * cursor: default → 卡片内 cursor 不是 pointer（暗示阅读区）；点击仍冒泡到 section
+ * 触发 skipToEnd（stage 整体可 skip,设计意图见 script line 96-103 注释）。
+ */
+.soul-pledge__letter {
+  /* flex: 1 1 0 + min-height: 0 让 letter 严格按 flex 容器分配的空间裁剪自己,
+     内容超过时 overflow-y: auto 优雅滚动。640 紧凑窗下接受 scroll fallback,
+     大多数显示器（缩放 100%）能装下不显 scrollbar。 */
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  width: 100%;
+  max-width: 400px;
+  padding: var(--aipet-space-2) var(--aipet-space-3);
+  border: 1px solid var(--aipet-color-border-faint);
+  border-radius: var(--aipet-radius-card);
+  background: var(--aipet-color-surface);
+  box-shadow: var(--aipet-shadow-sm);
+  cursor: default;
+  overflow-y: auto;
+  /* 极轻 scrollbar:仅在 hover 时显形,不抢仪式感 */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.soul-pledge__letter:hover {
+  scrollbar-color: var(--aipet-color-border) transparent;
+}
+
+.soul-pledge__letter::-webkit-scrollbar {
+  width: 4px;
+}
+
+.soul-pledge__letter::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+
+.soul-pledge__letter:hover::-webkit-scrollbar-thumb {
+  background: var(--aipet-color-border);
+}
+
+/* ============ 段落渐进出现 ============
+ * translateY 12px（原 8）+ duration-slow（原 base），"涌现"感更明显。
+ * line-height: loose（1.6），阅读区呼吸感拉开。
+ */
 .soul-pledge__paragraph {
-  margin: 0 0 var(--aipet-space-3);
+  margin: 0 0 var(--aipet-space-2);
   font-size: var(--aipet-font-size-base);
-  line-height: var(--aipet-line-height-base);
+  line-height: 1.5;
   color: var(--aipet-color-text-1);
   text-align: center;
-  /* 渐进出现动画 */
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(12px);
   transition:
-    opacity var(--aipet-duration-base) var(--aipet-ease-standard),
-    transform var(--aipet-duration-base) var(--aipet-ease-standard);
+    opacity var(--aipet-duration-slow) var(--aipet-ease-standard),
+    transform var(--aipet-duration-slow) var(--aipet-ease-standard);
+}
+
+.soul-pledge__paragraph:last-of-type {
+  margin-bottom: 0;
 }
 
 .soul-pledge__paragraph.is-visible {
@@ -336,15 +496,61 @@ onBeforeUnmount(() => {
   transform: translateY(0);
 }
 
-.soul-pledge__policy-link {
+/* ============ 首段 drop cap ============
+ * 中文 ::first-letter 选中第一个字符（如"诶"），放大 + 紫色 + 下沉。
+ * 注意：text-align: center 会让 drop cap 居中,需要切回 left 才能形成 drop 效果。
+ */
+.soul-pledge__paragraph--lead {
+  text-align: left;
+}
+
+.soul-pledge__paragraph--lead::first-letter {
+  float: left;
+  margin-right: var(--aipet-space-2);
+  padding-top: 2px;
+  font-size: 2em;
+  font-weight: 600;
+  line-height: 0.95;
+  color: var(--aipet-color-primary);
+}
+
+/* ============ 分隔器（hr-with-label）============
+ * "── 看看完整数据策略 ──"：左右伸出 hairline + 中间可点击 link。
+ * flex 1 占据剩余 → line 自动延伸到卡片左右边。
+ * ChatGPT empty state / Linear divider 通行做法。
+ */
+.soul-pledge__rule {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-top: var(--aipet-space-3);
-  padding: var(--aipet-space-2);
+}
+
+.soul-pledge__rule::before,
+.soul-pledge__rule::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--aipet-color-border);
+  opacity: 0;
+  animation: soul-pledge-rule-in var(--aipet-duration-slow) var(--aipet-ease-standard) 100ms forwards;
+}
+
+@keyframes soul-pledge-rule-in {
+  to {
+    opacity: 1;
+  }
+}
+
+.soul-pledge__policy-link {
+  flex: 0 0 auto;
+  padding: var(--aipet-space-1) var(--aipet-space-3);
+  margin: 0 var(--aipet-space-2);
   border: none;
   background: transparent;
   color: var(--aipet-color-text-3);
   font: inherit;
   font-size: var(--aipet-font-size-sm);
-  text-align: center;
   cursor: pointer;
   transition: color var(--aipet-duration-fast) var(--aipet-ease-standard);
 }
@@ -360,13 +566,59 @@ onBeforeUnmount(() => {
   opacity: 0.5;
 }
 
-.soul-pledge__actions {
+/* ============ footer ============
+ * 用 border-top hairline 与上方信笺卡片软性切分,而不是裸悬底部。
+ * cursor: default → 按钮区不参与 stage skip 视觉提示。
+ */
+.soul-pledge__footer {
+  flex: 0 0 auto;
   display: flex;
-  gap: var(--aipet-space-3);
-  margin-top: var(--aipet-space-4);
+  flex-direction: column;
+  align-items: center;
+  gap: var(--aipet-space-2);
+  width: 100%;
+  max-width: 440px;
+  margin-top: var(--aipet-space-3);
+  padding-top: var(--aipet-space-3);
+  border-top: 1px solid var(--aipet-color-border-faint);
   cursor: default;
 }
 
+.soul-pledge__actions {
+  display: flex;
+  gap: var(--aipet-space-3);
+  align-items: center;
+}
+
+/* ============ 键盘提示 ============
+ * Linear/Telegram 桌面端通行：底部 mono 提示一两个关键快捷键。
+ * 只提 ESC（默认 focus 在"再看一眼条款",Enter 行为取决于 focus,
+ * 不要误导用户以为 Enter = 同意,避免破坏 script 中"focus 默认非危险按钮"的 UX 意图）。
+ */
+.soul-pledge__kbd-hints {
+  margin: 0;
+  font-size: var(--aipet-font-size-xs);
+  color: var(--aipet-color-text-3);
+  letter-spacing: 0.04em;
+}
+
+.soul-pledge__kbd {
+  display: inline-block;
+  min-width: 28px;
+  padding: 1px 6px;
+  margin: 0 2px;
+  border: 1px solid var(--aipet-color-border);
+  border-bottom-width: 2px;
+  border-radius: var(--aipet-radius-sm);
+  background: var(--aipet-color-surface-soft);
+  font-family: var(--aipet-font-family-mono);
+  font-size: var(--aipet-font-size-xs);
+  color: var(--aipet-color-text-2);
+  line-height: 1.2;
+  text-align: center;
+}
+
+/* ============ policy 弹窗内容 ============ */
 .soul-pledge__policy {
   max-height: 50vh;
   overflow-y: auto;
@@ -409,7 +661,7 @@ onBeforeUnmount(() => {
 }
 
 .soul-pledge__policy :deep(th) {
-  background: var(--aipet-color-surface);
+  background: var(--aipet-color-surface-soft);
 }
 
 .soul-pledge__policy :deep(code) {
