@@ -11,8 +11,8 @@
 //!   daily → 加一天/重算）。
 //! - snooze 5/15/30 × 最多 3 次（ADR 决策 14 + UAT-Reminder-3）；前端 UI 在
 //!   snooze_count==3 时隐藏稍后按钮，后端 MAX_SNOOZE_COUNT 防御一次。
-//! - 时区：内部一律 RFC3339 UTC；UI 转本地。daily HH:MM 当前按 UTC 解释——M2 简化（中国
-//!   时区用户 +8h 偏移），follow-up #29 接入本地时区转换。
+//! - 时区：内部一律 RFC3339 UTC；UI 转本地。daily HH:MM 按系统本地时区解释（#29 接入），
+//!   Tz-injectable 设计便于测试（compute_next_fire_at_daily_hhmm_in_tz 接 &Tz 参数）。
 //!
 //! Schema（migrations/001_init.sql:99-120）零迁移（lesson #2）:
 //! - reminders: id/title/trigger_type/trigger_spec/priority/enabled/snooze_count/
@@ -24,7 +24,7 @@
 //! - 'reminder:fired' { reminderId, priority, title, snoozeCount }（architecture §683 契约）
 //! - 'reminder:catch_up' [{reminderId, title, priority}]（启动期合并补提）
 
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Sqlite, SqliteConnection, Transaction};
 use tauri::{AppHandle, Emitter, Runtime};
@@ -853,25 +853,10 @@ fn compute_next_fire_at(
                 DailySpec::EveryMinutes(n) => {
                     Ok(Some(from + chrono::Duration::minutes(n as i64)))
                 }
-                DailySpec::DailyAt { hour, minute } => {
-                    // M2 简化：HH:MM 按 UTC 解释（中国时区用户 +8h 偏移）；
-                    // follow-up #29 / M3 引入 chrono-tz + 用户时区配置后转本地。
-                    let date = from.date_naive();
-                    let today = Utc
-                        .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
-                        .single();
-                    match today {
-                        Some(dt) => {
-                            if dt > from {
-                                Ok(Some(dt))
-                            } else {
-                                Ok(Some(dt + chrono::Duration::days(1)))
-                            }
-                        }
-                        None => Err(ReminderError::InvalidTrigger(
-                            "daily compute target invalid".into(),
-                        )),
-                    }
+                DailySpec::DailyAt { hour: _, minute: _ } => {
+                    // HH:MM 按系统本地时区解释（#29 E1 接入）；
+                    // Tz-injectable 设计便于单测（compute_next_fire_at_daily_hhmm_in_tz）。
+                    Ok(Some(compute_next_fire_at_daily_hhmm(trigger_spec, from)?))
                 }
             }
         }
@@ -879,6 +864,42 @@ fn compute_next_fire_at(
             "unsupported trigger_type: {trigger_type}"
         ))),
     }
+}
+
+/// Tz-injectable 版本：把 HH:MM 在指定时区下解释，算出本地 next_fire 后转 UTC。
+/// 用于单测控制时区（生产代码用 compute_next_fire_at_daily_hhmm 默认 Local）。
+/// DST 兜底：from_local_datetime(...).latest() 在 fall-back 时模糊时刻选最晚的可能值。
+fn compute_next_fire_at_daily_hhmm_in_tz<Tz: chrono::TimeZone>(
+    spec: &str,
+    now_utc: DateTime<Utc>,
+    tz: &Tz,
+) -> Result<DateTime<Utc>, ReminderError>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let hhmm = NaiveTime::parse_from_str(spec, "%H:%M")
+        .map_err(|e| ReminderError::InvalidTrigger(format!("daily HH:MM: {e}")))?;
+    let now_local = now_utc.with_timezone(tz);
+    let today_local_naive = now_local.date_naive().and_time(hhmm);
+    let next_local_naive = if now_local.naive_local() < today_local_naive {
+        today_local_naive
+    } else {
+        today_local_naive + chrono::Duration::days(1)
+    };
+    let next_local = tz
+        .from_local_datetime(&next_local_naive)
+        .latest()
+        .ok_or_else(|| ReminderError::InvalidTrigger(format!("DST gap: {next_local_naive}")))?;
+    Ok(next_local.with_timezone(&Utc))
+}
+
+/// 生产入口：把 HH:MM 在系统本地时区下解释，算出 UTC 触发时刻。
+/// 单测请用 compute_next_fire_at_daily_hhmm_in_tz 控制时区。
+fn compute_next_fire_at_daily_hhmm(
+    spec: &str,
+    now_utc: DateTime<Utc>,
+) -> Result<DateTime<Utc>, ReminderError> {
+    compute_next_fire_at_daily_hhmm_in_tz(spec, now_utc, &Local)
 }
 
 /// 跨 service 读操作专用入口：接 `&mut Transaction`，调用方负责 begin / commit。
@@ -1041,13 +1062,16 @@ mod tests {
 
     #[test]
     fn compute_next_for_daily_at_hourminute_skips_to_tomorrow_if_past() {
+        // 用 UTC tz 测试 "已过 HH:MM 跳明天" 行为（独立于宿主机本地时区）。
+        use chrono::FixedOffset;
+        let utc_tz = FixedOffset::east_opt(0).unwrap();
         let now = Utc::now();
         // 选一个肯定已经过去的时间（now - 1h），daily HH:MM 应跳到明天同时刻
         let past = now - chrono::Duration::hours(1);
         let spec = past.format("%H:%M").to_string();
-        let next = compute_next_fire_at("daily", &spec, now).unwrap().unwrap();
+        let next = compute_next_fire_at_daily_hhmm_in_tz(&spec, now, &utc_tz).unwrap();
         assert!(next > now);
-        // 距离至少 22h（即明天附近的同时刻）
+        // 距离至少 22h（即明天附近的同时刻；HH:MM 分钟粒度，最坏 ~23h）
         let delta = next - now;
         assert!(delta.num_minutes() >= 22 * 60);
     }
@@ -1073,5 +1097,38 @@ mod tests {
         // daily 永远 OK（不论 HH:MM 是否已过；compute_next_fire_at 会自动跳到明天）
         assert!(validate_trigger_future("daily", "09:00").is_ok());
         assert!(validate_trigger_future("daily", "*/30 * *").is_ok());
+    }
+
+    #[test]
+    fn daily_hhmm_in_utc8_evening_after_target() {
+        // 北京 17:00 = UTC 09:00；用户设 daily 09:00 (本地) → 明天本地 09:00 = 明天 UTC 01:00
+        use chrono::{FixedOffset, TimeZone};
+        let utc_plus8 = FixedOffset::east_opt(8 * 3600).unwrap();
+        let now_utc = Utc.with_ymd_and_hms(2026, 5, 23, 9, 0, 0).unwrap();
+        let next = compute_next_fire_at_daily_hhmm_in_tz("09:00", now_utc, &utc_plus8).unwrap();
+        let expected = Utc.with_ymd_and_hms(2026, 5, 24, 1, 0, 0).unwrap();
+        assert_eq!(next, expected);
+    }
+
+    #[test]
+    fn daily_hhmm_in_utc8_morning_before_target() {
+        // UTC 23:00 5/23 = 北京 07:00 5/24；用户设 daily 09:00 → 今日本地 09:00 = 今日 UTC 01:00 5/24
+        use chrono::{FixedOffset, TimeZone};
+        let utc_plus8 = FixedOffset::east_opt(8 * 3600).unwrap();
+        let now_utc = Utc.with_ymd_and_hms(2026, 5, 23, 23, 0, 0).unwrap();
+        let next = compute_next_fire_at_daily_hhmm_in_tz("09:00", now_utc, &utc_plus8).unwrap();
+        let expected = Utc.with_ymd_and_hms(2026, 5, 24, 1, 0, 0).unwrap();
+        assert_eq!(next, expected);
+    }
+
+    #[test]
+    fn daily_hhmm_in_utc_neutral_zone() {
+        // UTC 23:00 设 23:00 → 明天 23:00 UTC（regression — UTC 本身没偏移）
+        use chrono::{FixedOffset, TimeZone};
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let now_utc = Utc.with_ymd_and_hms(2026, 5, 23, 23, 0, 0).unwrap();
+        let next = compute_next_fire_at_daily_hhmm_in_tz("23:00", now_utc, &utc).unwrap();
+        let expected = Utc.with_ymd_and_hms(2026, 5, 24, 23, 0, 0).unwrap();
+        assert_eq!(next, expected);
     }
 }
