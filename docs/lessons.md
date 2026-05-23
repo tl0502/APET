@@ -253,6 +253,43 @@ related:
 
 ---
 
+## 15. 跨 service 写操作必须 tx 注入式（#29 落地）
+
+**触点**：todo↔reminder 联动（#29）& onboarding KV drain（#29）需要"todo + reminder + KV delete 同失败同成功"。
+
+**反 pattern**：在 service A 业务函数内调 service B 的 `*_internal()` 公共入口（B 内部 `open_app_db` 自取连接 → 不在 A 的 tx 内）。失败时 A 的 tx rollback，但 B 的写入已 commit → 数据脏。
+
+**正解**：B 提供 `*_internal_tx(tx: &mut Transaction<'_, Sqlite>, ...)` 入口，接 A 的 tx 引用。A 业务函数：`pool.begin()` → 调 B::*_tx × N → `tx.commit()`。任一 step 失败 → A 在 `?` 处提前 return → `tx` drop → sqlx 自动 rollback → A 和 B 同时未写入。
+
+**三层封装**：
+- `pub fn xxx(app)` — IPC/外部入口，自取连接，内部走 `pool.begin → xxx_with_conn → commit`
+- `pub fn xxx_internal_tx(tx, ...)` — 跨 service 入口，接外部 tx
+- `private fn xxx_with_conn(conn, ...)` — 实际 SQL，conn 可以是 `&mut SqliteConnection` 或 `&mut **tx`（deref 两次）
+
+**核验**：cargo test `tx_rollback_on_reminder_coupling_failure_keeps_todos_clean`（[todo.rs](../src-tauri/src/services/todo.rs)）+ `drain_in_tx_rollback_keeps_kv_and_reminders_clean`（[onboarding_reminders.rs](../src-tauri/src/services/onboarding_reminders.rs)）双向验证。
+
+**出处**：#29 Phase B-D 落地，2026-05-23。`b5ee65e` / `addded1` / `3e3b3a9`。
+
+---
+
+## 16. REMINDER_TEMPLATES 前后端双写约束（#29 落地）
+
+**触点**：onboarding step 4 reminder 模板列表（5 条），前后端各持一份 hardcode。
+
+**反 pattern**：仅改一边 → 启动期 `instantiate_onboarding_reminders` 在 `drain_in_tx` 内找不到 template id 静默 skip → 用户勾的 intent 不实例化。
+
+**正解**：扩 template 时同步修改：
+- [src/types/reminder.ts](../src/types/reminder.ts) `REMINDER_TEMPLATES` 数组
+- [src-tauri/src/services/onboarding_reminders.rs](../src-tauri/src/services/onboarding_reminders.rs) `TEMPLATES` 静态数组
+
+字段一一对应：`id / title / trigger_type / trigger_spec / priority`。
+
+**核验**：onboarding_reminders.rs 的 `drain_in_tx_skips_unknown_ids` 单测对"扩 template 后老 KV 找不到 id"的 skip 行为是兜底，但不能替代双写约束 — skip 后 reminders 表没增行，跟"用户没勾"无法从结果反查。
+
+**出处**：#29 D1 落地，2026-05-23。`addded1`。
+
+---
+
 ## 添加新 lesson 的判据
 
 只在以下情况追加：

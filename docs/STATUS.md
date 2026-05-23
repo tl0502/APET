@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-22
+updated: 2026-05-23
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -19,9 +19,9 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（10/10 落地 ✅；待办 + 物理交互待办）
-- **当前 session 在做**：[#34](https://github.com/tl0502/APET/issues/34) workspace 主窗 rect 持久化（ADR-021 P3 收尾）— window_state.rs 新增 LastRect + WorkspaceSaveDebouncer + apply_initial_workspace_rect + lib.rs Moved/Resized 钩子 — 1 commit `408a555`，cargo test 230 pass，手动 e2e 5 例全绿
-- **下一步**：[#29](https://github.com/tl0502/APET/issues/29) Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位 → [#23](https://github.com/tl0502/APET/issues/23) 物理交互 + 心情/精力 + 摸鱼
+- **当前 milestone**：M2 W3 进行中（11/11 落地 ✅；物理交互待办）
+- **当前 session 在做**：[#29](https://github.com/tl0502/APET/issues/29) TodoService MVP + 衔接收尾（onboarding KV 实例化 + LivingPet reminder hook + daily 时区修）— ~45 commits `1a03cf8..4c5b9f5`，cargo test 264 pass / vitest 293 pass / 手动 e2e 16 例全绿
+- **下一步**：[#23](https://github.com/tl0502/APET/issues/23) 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 
@@ -36,7 +36,7 @@ related:
 - W2 收尾 ✅ [#21](https://github.com/tl0502/APET/issues/21) Onboarding Step 2-6 + LivingPet 自由活动 + VRM 微动作
 - 美化补丁 ✅ [#27](https://github.com/tl0502/APET/issues/27) 三窗 design system 收尾（Apple/Bear neutral + Vercel）
 
-### M2 W3-W4（任务三件套 + 物理交互 + 磁吸 + 人格工坊 + workspace 壳）— 进行中（10/10 完成 ✅）
+### M2 W3-W4（任务三件套 + 物理交互 + 磁吸 + 人格工坊 + workspace 壳）— 进行中（11/11 完成 ✅）
 
 - ✅ [#25](https://github.com/tl0502/APET/issues/25) G: 用户头像上传 v2（cropperjs 圆形裁剪）
 - ✅ [#26](https://github.com/tl0502/APET/issues/26) A: VRM 头像导出（实时预览 + 表情/镜头 + DPR 安全）
@@ -59,7 +59,7 @@ related:
   - ↳ ✅ 错位 fix `832a981→76dedd7`：popup 4 panel 删冗余 panel__title / chat master conv-sidebar 适配 / topbar 整层 drag-region / popup-main min-height:0 / panel__title 实色 bg / **panel__title 删 margin negative**（治 sticky 与 layout 算术冲突 — 关键根因）/ NicknameForm 内嵌 panel__title 改 subtitle
 - ✅ [#38](https://github.com/tl0502/APET/issues/38) [设计系统] dark mode token 阶梯改造：tokens.css 单文件 patch（light 背峰式 3+1 + dark 保守型 4 色阶 总跨 28 + dark border #333→#3d 衍生 fix + border-faint 6%→8%/10% + dark bubble-assistant 跟 L2）— 1 commit `d4dff7d` + spec/plan/ADR-024，293/293 vitest pass，4 大窗 × 2 主题手动 e2e 全绿
 - ✅ [#34](https://github.com/tl0502/APET/issues/34) ADR-021 P3 收尾：workspace 主窗 rect 跨重启持久化 — window_state.rs 新增 LastRect + WorkspaceSaveDebouncer + apply_initial_workspace_rect 复用 pet/pomodoro pattern + lib.rs Moved/Resized 钩子；min 800×520 自愈 / 拔屏 fallback 主屏 center；1 commit `408a555`，cargo test 230 pass，手动 e2e 5 例全绿
-- ⏳ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: Todo + #21 KV 实例化 + LivingPet hook + AI 拆解 IPC 占位（从原 #22 拆出）
+- ✅ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: TodoService MVP + onboarding KV 实例化 + LivingPet reminder hook + daily 时区修 + UI 扩展（拖排序/priority/批量/搜索/最小日历）— ~45 commits `1a03cf8..4c5b9f5`，cargo test 264 pass / vitest 293 pass / 手动 e2e 16 例全绿（spec §12.3）；新增 lessons §15（tx 注入式）+ §16（REMINDER_TEMPLATES 双写）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
 ### 立项准备期（2026-04-30 → 2026-05-05）✅
