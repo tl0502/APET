@@ -26,7 +26,7 @@
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{Connection, SqliteConnection};
+use sqlx::{Connection, Sqlite, SqliteConnection, Transaction};
 use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_notification::NotificationExt;
 use thiserror::Error;
@@ -139,18 +139,46 @@ pub async fn create<R: Runtime>(
     app: &AppHandle<R>,
     input: CreateInput,
 ) -> Result<Reminder, ReminderError> {
+    let mut conn = open_app_db(app).await?;
+    let mut tx = conn.begin().await?;
+    let reminder = create_internal_tx(&mut tx, input).await?;
+    tx.commit().await?;
+    conn.close().await?;
+    Ok(reminder)
+}
+
+/// 跨 service 写操作专用入口：接 `&mut Transaction`，调用方负责 begin / commit / rollback。
+/// 用于 todo.rs / onboarding_reminders.rs 把 reminder 写入合并进自己的 tx
+/// （#29 spec §5.2 tx-injection）。
+///
+/// 包含输入校验（priority / trigger 格式 / 未来性），保证任何入口都走同一校验闸。
+pub async fn create_internal_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    input: CreateInput,
+) -> Result<Reminder, ReminderError> {
     let priority = input.priority.as_deref().unwrap_or("soft").to_string();
     validate_priority(&priority)?;
     validate_trigger(&input.trigger_type, &input.trigger_spec)?;
     validate_trigger_future(&input.trigger_type, &input.trigger_spec)?;
 
+    let conn: &mut SqliteConnection = &mut **tx;
+    create_with_conn(conn, input, priority).await
+}
+
+/// INSERT 主体 — 接 `&mut SqliteConnection`，复用给 tx 路径与 pool 路径。
+/// 纯 DB I/O：调用方必须先做 input 校验（priority / trigger）。
+/// （#29 tx-injection 重构；priority 已由调用方归一化）
+async fn create_with_conn(
+    conn: &mut SqliteConnection,
+    input: CreateInput,
+    priority: String,
+) -> Result<Reminder, ReminderError> {
     let id = Ulid::new().to_string();
     let now = Utc::now();
     let now_str = now.to_rfc3339();
     let next = compute_next_fire_at(&input.trigger_type, &input.trigger_spec, now)?;
     let next_str = next.map(|dt| dt.to_rfc3339());
 
-    let mut conn = open_app_db(app).await?;
     sqlx::query(
         r#"INSERT INTO reminders
            (id, title, trigger_type, trigger_spec, priority, enabled, snooze_count, next_fire_at, created_at, updated_at)
@@ -164,12 +192,10 @@ pub async fn create<R: Runtime>(
     .bind(&next_str)
     .bind(&now_str)
     .bind(&now_str)
-    .execute(&mut conn)
+    .execute(&mut *conn)
     .await?;
 
-    let reminder = get_with_conn(&mut conn, &id).await?;
-    conn.close().await?;
-    Ok(reminder)
+    get_with_conn(conn, &id).await
 }
 
 pub async fn list<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<Reminder>, ReminderError> {
