@@ -70,8 +70,6 @@ const isPersonaActive = computed(
     <TasksTodoPanel
       v-show="layout.currentItem === 'TasksTodo'"
       class="detail-col__panel"
-      title="待办"
-      issue="#29"
     />
   </main>
 </template>

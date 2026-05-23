@@ -90,6 +90,7 @@ const BRAND_BAR_ITEMS: BrandBarItem[] = [
 const KV_KEY_CATEGORY = 'workspace:current_category'
 const KV_KEY_ITEM_PER_CATEGORY = 'workspace:item_per_category'
 const KV_KEY_MASTER_WIDTH = 'workspace:master_width'
+const KV_KEY_TODO_VIEW = 'workspace:todo_view'
 
 const MASTER_WIDTH_DEFAULT = 240
 const MASTER_WIDTH_MIN = 180
@@ -117,6 +118,7 @@ export const useWorkspaceLayoutStore = defineStore('workspaceLayout', () => {
   )
   const masterWidth = ref<number>(MASTER_WIDTH_DEFAULT)
   const loaded = ref(false)
+  const todoView = ref<'list' | 'calendar'>('list')
 
   // module-private（不 reactive，单实例 store 内共享）
   let widthSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -177,6 +179,15 @@ export const useWorkspaceLayoutStore = defineStore('workspaceLayout', () => {
       widthSaveTimer = null
       void saveMasterWidthToKv()
     }, SAVE_DEBOUNCE_MS)
+  }
+
+  async function setTodoView(v: 'list' | 'calendar') {
+    todoView.value = v
+    try {
+      await setConfig(KV_KEY_TODO_VIEW, v)
+    } catch (e) {
+      console.warn('[workspaceLayout] save todoView failed:', e)
+    }
   }
 
   // === KV 持久化 ===
@@ -248,6 +259,14 @@ export const useWorkspaceLayoutStore = defineStore('workspaceLayout', () => {
     } catch (e) {
       console.warn('[workspaceLayout] load masterWidth failed:', e)
     }
+    try {
+      const tv = await getConfig(KV_KEY_TODO_VIEW)
+      if (tv === 'list' || tv === 'calendar') {
+        todoView.value = tv
+      }
+    } catch (e) {
+      console.warn('[workspaceLayout] load todoView failed:', e)
+    }
   }
 
   return {
@@ -256,6 +275,7 @@ export const useWorkspaceLayoutStore = defineStore('workspaceLayout', () => {
     currentItemPerCategory,
     masterWidth,
     loaded,
+    todoView,
     // getters
     currentItem,
     brandBarItems,
@@ -266,6 +286,7 @@ export const useWorkspaceLayoutStore = defineStore('workspaceLayout', () => {
     setItem,
     setCategoryAndItem,
     setMasterWidth,
+    setTodoView,
     loadFromKv,
     // 测试暴露
     _MASTER_WIDTH_MIN: MASTER_WIDTH_MIN,
