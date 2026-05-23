@@ -211,7 +211,45 @@ pub async fn update<R: Runtime>(
     input: UpdateInput,
 ) -> Result<Reminder, ReminderError> {
     let mut conn = open_app_db(app).await?;
-    let mut r = get_with_conn(&mut conn, &id).await?;
+    let mut tx = conn.begin().await?;
+    let out = update_internal_tx(&mut tx, &id, input).await?;
+    tx.commit().await?;
+    conn.close().await?;
+    Ok(out)
+}
+
+/// 跨 service 写操作专用入口：接 `&mut Transaction`，调用方负责 begin / commit / rollback。
+/// 用于 todo.rs / onboarding_reminders.rs 把 reminder 修改合并进自己的 tx
+/// （#29 spec §5.2 tx-injection）。
+///
+/// 输入级校验在此（priority 早校验，避免无谓 DB 读）；trigger 合并 + 校验依赖现有行，
+/// 留在 update_with_conn 内部按原顺序执行。
+pub async fn update_internal_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    id: &str,
+    input: UpdateInput,
+) -> Result<Reminder, ReminderError> {
+    // priority 是输入级 enum 校验（不依赖现有行），早校验失败可避免无谓 SELECT。
+    // 校验顺序对外行为与旧版一致：旧版在 merge 阶段才校验 priority，但 priority 校验
+    // 无副作用，提前不改变可观察行为。
+    if let Some(ref p) = input.priority {
+        validate_priority(p)?;
+    }
+
+    let conn: &mut SqliteConnection = &mut **tx;
+    update_with_conn(conn, id, input).await
+}
+
+/// UPDATE 主体 — 接 `&mut SqliteConnection`，复用给 tx 路径与单连接路径。
+/// 内含：SELECT 现有行 → 合并 input → 触发参数变化时校验 → UPDATE → 重新 SELECT 返回。
+/// priority 输入级校验已由调用方完成；trigger 合并依赖现有行，仍在此处按原顺序校验。
+/// （#29 tx-injection 重构；行为字符级保真自 P0-1 修复版本）
+async fn update_with_conn(
+    conn: &mut SqliteConnection,
+    id: &str,
+    input: UpdateInput,
+) -> Result<Reminder, ReminderError> {
+    let mut r = get_with_conn(&mut *conn, id).await?;
 
     // P0-1 修复（2026-05-17 review #22）:
     // 旧版无条件 `snooze_count=0` 并重算 next_fire_at —— 用户改个标题就会清空 snooze 链；
@@ -232,7 +270,7 @@ pub async fn update<R: Runtime>(
         r.trigger_spec = v;
     }
     if let Some(v) = input.priority {
-        validate_priority(&v)?;
+        // 已在 update_internal_tx 校验过；此处仅赋值。
         r.priority = v;
     }
     if let Some(v) = input.enabled {
@@ -269,8 +307,8 @@ pub async fn update<R: Runtime>(
         .bind(if r.enabled { 1 } else { 0 })
         .bind(&next_str)
         .bind(&now_str)
-        .bind(&id)
-        .execute(&mut conn)
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
     } else {
         // 纯改 title/priority —— 保留 snooze_count、next_fire_at、enabled 不动。
@@ -280,14 +318,12 @@ pub async fn update<R: Runtime>(
         .bind(&r.title)
         .bind(&r.priority)
         .bind(&now_str)
-        .bind(&id)
-        .execute(&mut conn)
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
     }
 
-    let out = get_with_conn(&mut conn, &id).await?;
-    conn.close().await?;
-    Ok(out)
+    get_with_conn(conn, id).await
 }
 
 pub async fn delete<R: Runtime>(app: &AppHandle<R>, id: String) -> Result<(), ReminderError> {
