@@ -48,6 +48,10 @@ pub mod reminder;
 pub mod scheduler;
 // #29 TodoService：待办 CRUD + reminder 联动（schema 见 migrations/001_init.sql:122）。
 pub mod todo;
+// #29 Phase D — Onboarding reminder intent 启动期实例化（闭合 #21 ADR-019 step 4）。
+// 启动 setup 钩子读 KV `onboarding:reminder_intents` → batch create reminders → delete KV，
+// 同 tx 原子；前 5 模板与 src/types/reminder.ts:80 REMINDER_TEMPLATES 双写（lessons.md）。
+pub mod onboarding_reminders;
 // #28 PomodoroService：番茄钟状态机 + drift 校准 + FOCUS/REST 自动转换 + reminder/livingPet 协作 hook。
 // 运行时态走 KV `pomodoro:active_session`（不污染 pomodoro_sessions 表；lesson #2）。
 pub mod pomodoro;
