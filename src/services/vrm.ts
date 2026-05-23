@@ -29,6 +29,12 @@ export interface VRMRuntimeInitOptions {
   preserveDrawingBuffer?: boolean
 }
 
+// #29 桌宠反应动作 ID 契约。#23 接 reaction_table 时扩这个 union。
+export type PetActionId =
+  | 'nod'                  // #29 实现
+  | 'head_pat' | 'surprised' | 'fall_asleep' | 'dizzy' | 'protest' | 'cheer'  // #23 placeholder
+  | 'drink' | 'stretch' | 'sleep' | 'wander' | 'idle'                          // #23 placeholder
+
 interface ViewConfig {
   /** 相机世界坐标 */
   cameraPos: THREE.Vector3
@@ -564,6 +570,62 @@ export class VRMRuntime {
     if (this.rafId !== null) return // 已在跑
     if (!this.vrm || !this.renderer) return // 还没就绪，loadModel 完成时会自然 startLoop
     this.startLoop()
+  }
+
+  /**
+   * 播放命名动作。M2 W3 仅 'nod'（#29），其他 #23 接入 reaction_table 时填。
+   * vrm 未 ready 时静默 no-op（reminder:fired 可能在 VRM 加载完成前到达）。
+   */
+  async playAction(actionId: PetActionId): Promise<void> {
+    if (!this.vrm) {
+      // 静默 no-op：onboarding 期 / VRM 加载失败时 reminder:fired 仍会触发；
+      // 此处不报错不弹 toast（spec §8.2 + R8）。
+      return
+    }
+    if (actionId === 'nod') {
+      await this.playNod()
+      return
+    }
+    // #23 placeholder：其他 actionId 走 dev 警告 + no-op
+    if (import.meta.env.DEV) {
+      console.warn('[vrm] playAction not implemented:', actionId)
+    }
+  }
+
+  /**
+   * 短促点头动效：head bone X 轴 ±15° / 360ms RAF 插值（不引动画 clip）。
+   * 不打断 wander tween，不持久化（瞬时动效）。
+   * head bone 的 rotation 不被 applyBreathing/applyBlink/applyLookAt 任一改写
+   * （那三个分别动 chest / expression / lookAtTarget），所以直接写 rotation.x 安全。
+   */
+  private async playNod(): Promise<void> {
+    if (!this.vrm) return
+    const humanoid = this.vrm.humanoid
+    if (!humanoid) return
+    const headNode = humanoid.getNormalizedBoneNode('head')
+    if (!headNode) return
+
+    const baseX = headNode.rotation.x
+    const peakDelta = (15 * Math.PI) / 180 // +15°
+    const duration = 360
+    const start = performance.now()
+
+    return new Promise<void>((resolve) => {
+      const tick = (t: number) => {
+        const elapsed = t - start
+        if (elapsed >= duration) {
+          headNode.rotation.x = baseX
+          resolve()
+          return
+        }
+        const p = elapsed / duration // 0..1
+        // 三角包络：0 → 1 → 0
+        const tri = p < 0.5 ? p * 2 : (1 - p) * 2
+        headNode.rotation.x = baseX + peakDelta * tri
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
   }
 
   destroy(): void {
