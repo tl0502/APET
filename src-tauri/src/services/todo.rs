@@ -108,9 +108,21 @@ async fn create_with_tx(
     let priority = input.priority.as_deref().unwrap_or("normal").to_string();
     validate_priority(&priority)?;
 
-    // due_at 非空时联动 reminder（C2 接入；本 Task 仅无 due_at 路径）
-    let reminder_id: Option<String> = if let Some(ref _due) = input.due_at {
-        None // 占位；C2 替换
+    // due_at 非空时联动 reminder：同 tx 内创建 once reminder 并回填 reminder_id。
+    // 任一失败 → 调用方 tx drop 自动 rollback → todo + reminder 同时未写入（spec §5.2）。
+    let reminder_id: Option<String> = if let Some(ref due) = input.due_at {
+        let r = crate::services::reminder::create_internal_tx(
+            tx,
+            crate::services::reminder::CreateInput {
+                title: input.title.clone(),
+                trigger_type: "once".into(),
+                trigger_spec: due.clone(),
+                priority: Some("soft".into()),
+            },
+        )
+        .await
+        .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
+        Some(r.id)
     } else {
         None
     };
@@ -257,5 +269,33 @@ mod tests {
         assert_eq!(todo.priority, "normal");
         assert!(todo.due_at.is_none());
         assert!(todo.reminder_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_with_due_at_writes_reminder_and_backfills_id() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "复诊".into(),
+                due_at: Some("2026-06-01T09:00:00Z".into()),
+                priority: Some("high".into()),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(todo.due_at.as_deref(), Some("2026-06-01T09:00:00Z"));
+        let rid = todo.reminder_id.expect("reminder_id should be set");
+        // 验证 reminders 表 +1 行
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reminders WHERE id=?")
+            .bind(&rid)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 1);
     }
 }
