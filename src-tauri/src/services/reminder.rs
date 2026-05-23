@@ -328,20 +328,44 @@ async fn update_with_conn(
 
 pub async fn delete<R: Runtime>(app: &AppHandle<R>, id: String) -> Result<(), ReminderError> {
     let mut conn = open_app_db(app).await?;
+    let mut tx = conn.begin().await?;
+    delete_internal_tx(&mut tx, &id).await?;
+    tx.commit().await?;
+    conn.close().await?;
+    Ok(())
+}
+
+/// 跨 service 写操作专用入口：接 `&mut Transaction`，调用方负责 begin / commit / rollback。
+/// 用于 todo.rs 在删 todo 时一并清掉关联 reminder（#29 spec §5.2 tx-injection）。
+///
+/// 语义：原子级联（reminders + reminder_history）+ NotFound 检查，与单连接路径完全一致。
+pub async fn delete_internal_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    id: &str,
+) -> Result<(), ReminderError> {
+    let conn: &mut SqliteConnection = &mut **tx;
+    delete_with_conn(conn, id).await
+}
+
+/// DELETE 主体 — 接 `&mut SqliteConnection`，复用给 tx 路径与单连接路径。
+/// 顺序与旧版一致：先删 reminders（NotFound 检查），再级联清 reminder_history（无 FK）。
+/// tx 路径下两步原子，主表删除失败会回滚 history 删除（理论上不会发生，但语义更稳）。
+async fn delete_with_conn(
+    conn: &mut SqliteConnection,
+    id: &str,
+) -> Result<(), ReminderError> {
     let res = sqlx::query("DELETE FROM reminders WHERE id=?")
-        .bind(&id)
-        .execute(&mut conn)
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
     if res.rows_affected() == 0 {
-        conn.close().await?;
-        return Err(ReminderError::NotFound(id));
+        return Err(ReminderError::NotFound(id.to_string()));
     }
     // schema 无 FK，手动级联清 history。
     sqlx::query("DELETE FROM reminder_history WHERE reminder_id=?")
-        .bind(&id)
-        .execute(&mut conn)
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
-    conn.close().await?;
     Ok(())
 }
 
@@ -855,6 +879,17 @@ fn compute_next_fire_at(
             "unsupported trigger_type: {trigger_type}"
         ))),
     }
+}
+
+/// 跨 service 读操作专用入口：接 `&mut Transaction`，调用方负责 begin / commit。
+/// 用于 todo.rs `complete` / `update`-with-cancel 在删 reminder 前查 trigger_type
+/// （#29 spec §5.2 tx-injection；C6/C7 任务）。
+pub async fn get_internal_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    id: &str,
+) -> Result<Reminder, ReminderError> {
+    let conn: &mut SqliteConnection = &mut **tx;
+    get_with_conn(conn, id).await
 }
 
 async fn get_with_conn(
