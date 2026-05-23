@@ -264,11 +264,15 @@ async fn list_with_conn(conn: &mut SqliteConnection) -> Result<Vec<Todo>, TodoEr
 
 /// 内部 update 实现：接 `&mut Transaction`，保持 tx-injection pattern。
 ///
-/// 本 Task (C4) 覆盖："title-only / priority-only / status=open|cancelled" 路径——
-/// 保留原 due_at + reminder_id 不动。
+/// 覆盖路径：
+/// - title / priority / status='open'|'cancelled' 直改 (C4)
+/// - due_at None=keep / Set(value) / Clear 三态联动 reminder (C5)
+///   * Set on null → create_internal_tx 回填 reminder_id
+///   * Set on existing → update_internal_tx 同步 trigger_spec + title（同 reminder_id）
+///   * Clear → delete_internal_tx 清 reminder_id
+/// - title 改动 + has reminder + due_at 未改 → 同步 title 到 reminder（防止提醒触发标题脱节）
 ///
-/// 路径覆盖留待后续 Task：
-/// - C5: due_at change → 同 tx 内 reminder create/update/delete 联动
+/// 后续 Task：
 /// - C6: status='cancelled' + 有 once reminder → 同 tx 内删 reminder
 ///
 /// status='done' 通过 update 显式拒绝：必须走 todo_complete（spec §4.2，complete-once 语义）。
@@ -306,10 +310,73 @@ async fn update_with_tx(
         None => existing.status.clone(),
     };
 
-    // due_at + reminder 联动留待 C5；C6 加 cancelled + once 删 reminder。
-    // 本 Task 仅"非 due_at 改动 + 非 cancelled-with-reminder"路径：保留原 due_at / reminder_id。
-    let new_due_at: Option<String> = existing.due_at.clone();
-    let new_reminder_id: Option<String> = existing.reminder_id.clone();
+    // due_at + reminder 联动 (C5)：根据 input.due_at 三态在同 tx 内联动 reminder。
+    // 任一 reminder::*_internal_tx 失败 → 调用方 tx drop 自动 rollback。
+    let (new_due_at, new_reminder_id): (Option<String>, Option<String>) = match input.due_at {
+        // 字段省略 = keep（保留原值）
+        None => (existing.due_at.clone(), existing.reminder_id.clone()),
+        // Set(value)
+        Some(DueAtChange::Set(ref value)) => {
+            match (&existing.reminder_id, &existing.due_at) {
+                // 原有 reminder + 改时刻 → update reminder.trigger_spec (& title sync)
+                (Some(rid), Some(_)) => {
+                    crate::services::reminder::update_internal_tx(
+                        tx,
+                        rid,
+                        crate::services::reminder::UpdateInput {
+                            title: Some(new_title.clone()),
+                            trigger_type: Some("once".into()),
+                            trigger_spec: Some(value.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
+                    (Some(value.clone()), Some(rid.clone()))
+                }
+                // 原 null → 新建 reminder
+                _ => {
+                    let r = crate::services::reminder::create_internal_tx(
+                        tx,
+                        crate::services::reminder::CreateInput {
+                            title: new_title.clone(),
+                            trigger_type: "once".into(),
+                            trigger_spec: value.clone(),
+                            priority: Some("soft".into()),
+                        },
+                    )
+                    .await
+                    .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
+                    (Some(value.clone()), Some(r.id))
+                }
+            }
+        }
+        // Clear
+        Some(DueAtChange::Clear) => {
+            if let Some(rid) = &existing.reminder_id {
+                crate::services::reminder::delete_internal_tx(tx, rid)
+                    .await
+                    .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
+            }
+            (None, None)
+        }
+    };
+
+    // 仅改 title 但有 reminder_id → 同步 title 到 reminder（避免提醒触发时与 todo 标题脱节）。
+    // 注意只在 due_at 未改路径触发——Set 分支已经在上面同步过 title。
+    if input.due_at.is_none() && existing.reminder_id.is_some() && new_title != existing.title {
+        let rid = existing.reminder_id.as_ref().unwrap();
+        crate::services::reminder::update_internal_tx(
+            tx,
+            rid,
+            crate::services::reminder::UpdateInput {
+                title: Some(new_title.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| TodoError::ReminderCoupling(e.to_string()))?;
+    }
 
     let now = Utc::now().to_rfc3339();
     {
@@ -514,5 +581,90 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, TodoError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn update_due_at_set_on_null_creates_reminder() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput { title: "x".into(), due_at: None, priority: None },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = conn.begin().await.unwrap();
+        let updated = update_with_tx(
+            &mut tx, &todo.id,
+            UpdateInput {
+                due_at: Some(DueAtChange::Set("2026-06-01T09:00:00Z".into())),
+                ..Default::default()
+            },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(updated.due_at.as_deref(), Some("2026-06-01T09:00:00Z"));
+        assert!(updated.reminder_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_due_at_set_on_existing_updates_reminder_spec() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "x".into(),
+                due_at: Some("2026-06-01T09:00:00Z".into()),
+                priority: None,
+            },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+        let original_rid = todo.reminder_id.clone().unwrap();
+
+        let mut tx = conn.begin().await.unwrap();
+        let updated = update_with_tx(
+            &mut tx, &todo.id,
+            UpdateInput {
+                due_at: Some(DueAtChange::Set("2026-06-02T10:00:00Z".into())),
+                ..Default::default()
+            },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(updated.reminder_id.as_deref(), Some(original_rid.as_str()));
+        // 验证 reminder.trigger_spec 同步更新
+        let spec: (String,) = sqlx::query_as("SELECT trigger_spec FROM reminders WHERE id=?")
+            .bind(&original_rid).fetch_one(&mut conn).await.unwrap();
+        assert_eq!(spec.0, "2026-06-02T10:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn update_due_at_clear_deletes_reminder() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "x".into(),
+                due_at: Some("2026-06-01T09:00:00Z".into()),
+                priority: None,
+            },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+        let original_rid = todo.reminder_id.clone().unwrap();
+
+        let mut tx = conn.begin().await.unwrap();
+        let updated = update_with_tx(
+            &mut tx, &todo.id,
+            UpdateInput { due_at: Some(DueAtChange::Clear), ..Default::default() },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert!(updated.due_at.is_none());
+        assert!(updated.reminder_id.is_none());
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reminders WHERE id=?")
+            .bind(&original_rid).fetch_one(&mut conn).await.unwrap();
+        assert_eq!(count.0, 0);
     }
 }
