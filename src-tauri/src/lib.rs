@@ -10,7 +10,7 @@ use services::window_actions::{
     emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL,
     POMODORO_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
 };
-use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer};
+use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer, WorkspaceSaveDebouncer};
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -242,6 +242,14 @@ pub fn run() {
                 eprintln!("[setup] apply_initial_pomodoro_position failed: {e}");
             }
             app.manage(PomodoroSaveDebouncer::default());
+            // #34 workspace 主窗 rect（位置 + 尺寸）持久化：setup 阶段 visible:false 状态下还原（无视觉抖动）。
+            // 首启 KV 空 / 损坏 / 拔屏导致 monitor 不在 → 静默 fallback 主屏 center + 默认 1100×720。
+            if let Err(e) =
+                crate::services::window_state::apply_initial_workspace_rect(app.handle())
+            {
+                eprintln!("[setup] apply_initial_workspace_rect failed: {e}");
+            }
+            app.manage(WorkspaceSaveDebouncer::default());
             // #30 follow-up I：磁吸 solver state。前端 commit / detach 后 invoke snap_sync_constraints
             // 同步全量 constraint；Moved 事件触发 Rust 端 BFS solver + 批量 set_position 替代前端 IPC。
             app.manage(crate::services::snap::SnapState::default());
@@ -402,11 +410,27 @@ pub fn run() {
                             let debouncer = app.state::<PomodoroSaveDebouncer>();
                             debouncer.schedule(pom);
                         }
+                    } else if label == WORKSPACE_WINDOW_LABEL {
+                        // #34 workspace 主窗位置持久化：Moved 触发 debouncer（与 Resized 共用）
+                        if let Some(ws) = app.get_webview_window(WORKSPACE_WINDOW_LABEL) {
+                            let debouncer = app.state::<WorkspaceSaveDebouncer>();
+                            debouncer.schedule(ws);
+                        }
                     }
                     // #30 follow-up I：所有窗 Moved 都触发 snap solver（fast-path 内部判定）。
                     // has_dependents 无 dep 时立刻 return，无开销；有 dep 才进 BFS + set_position。
                     // 替代前端 group-drag 路径每帧 N 次 setPosition IPC，消除链式拖动抖动。
                     crate::services::snap::on_window_moved(app, label);
+                }
+                tauri::WindowEvent::Resized(_) => {
+                    // #34 workspace 主窗尺寸持久化：仅 workspace resizable，其他窗 size 固定不需处理
+                    if label == WORKSPACE_WINDOW_LABEL {
+                        let app = window.app_handle();
+                        if let Some(ws) = app.get_webview_window(WORKSPACE_WINDOW_LABEL) {
+                            let debouncer = app.state::<WorkspaceSaveDebouncer>();
+                            debouncer.schedule(ws);
+                        }
+                    }
                 }
                 _ => {}
             }

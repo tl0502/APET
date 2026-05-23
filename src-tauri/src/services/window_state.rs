@@ -30,7 +30,9 @@ use tauri::{
 };
 
 use crate::services::config;
-use crate::services::window_actions::{CHAT_WINDOW_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL};
+use crate::services::window_actions::{
+    CHAT_WINDOW_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
+};
 
 /// `config` 表 key：桌宠窗口最后位置（JSON 序列化的 LastPosition）
 pub const CONFIG_KEY_PET_POSITION: &str = "window:pet:last_position";
@@ -40,6 +42,16 @@ pub const CONFIG_KEY_PET_VIEW_PRESET: &str = "window:pet:view_preset";
 pub const CONFIG_KEY_POMODORO_POSITION: &str = "window:pomodoro:last_position";
 /// `config` 表 key：alwaysOnTop 全局开关（#31 follow-up；pet + chat 两窗同步切换）
 pub const CONFIG_KEY_ALWAYS_ON_TOP: &str = "window:always_on_top";
+
+/// `config` 表 key：workspace 主窗最后 rect（JSON 序列化 LastRect）
+pub const CONFIG_KEY_WORKSPACE_RECT: &str = "window:workspace:last_rect";
+
+/// workspace size 下限（tauri.conf.json minWidth / minHeight 同步）
+const WORKSPACE_MIN_W: f64 = 800.0;
+const WORKSPACE_MIN_H: f64 = 520.0;
+/// workspace 首次启动 / fallback 默认尺寸（tauri.conf.json 同步）
+const WORKSPACE_DEFAULT_W: f64 = 1100.0;
+const WORKSPACE_DEFAULT_H: f64 = 720.0;
 
 /// 视角档位切换跨窗口广播事件名（pet/settings 都 listen，chat 收到 no-op）
 const PET_VIEW_CHANGED_EVENT: &str = "pet:view-changed";
@@ -77,6 +89,17 @@ pub struct LastPosition {
     pub monitor_id: String,
     pub logical_x: f64,
     pub logical_y: f64,
+}
+
+/// workspace 主窗 rect 持久化数据（位置 + 尺寸 + monitor_id）。
+/// 与 LastPosition 并存：pet/pomodoro 用 LastPosition（size 固定），workspace 用 LastRect（resizable）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LastRect {
+    pub monitor_id: String,
+    pub logical_x: f64,
+    pub logical_y: f64,
+    pub logical_w: f64,
+    pub logical_h: f64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -387,6 +410,118 @@ pub fn apply_initial_pomodoro_position<R: Runtime>(
         .map_err(|e| format!("set_position: {e}"))
 }
 
+// === #34 workspace rect 持久化 ===
+
+/// 从 webview 当前 outer_position + outer_size + current_monitor 推导 LastRect。
+pub fn compute_rect_from_window<R: Runtime>(
+    window: &WebviewWindow<R>,
+) -> Result<LastRect, String> {
+    let physical_pos = window
+        .outer_position()
+        .map_err(|e| format!("outer_position: {e}"))?;
+    let physical_size = window
+        .outer_size()
+        .map_err(|e| format!("outer_size: {e}"))?;
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| format!("current_monitor: {e}"))?
+        .ok_or_else(|| "current_monitor returned None".to_string())?;
+    let scale = monitor.scale_factor();
+    let logical_pos = LogicalPosition::<f64>::from_physical(physical_pos, scale);
+    let logical_size = LogicalSize::<f64>::from_physical(physical_size, scale);
+    Ok(LastRect {
+        monitor_id: monitor_id(&monitor),
+        logical_x: logical_pos.x,
+        logical_y: logical_pos.y,
+        logical_w: logical_size.width,
+        logical_h: logical_size.height,
+    })
+}
+
+/// 把窗口当前 outer_position + outer_size 转 logical 写 KV。
+pub async fn save_workspace_rect<R: Runtime>(
+    window: &WebviewWindow<R>,
+) -> Result<(), WindowStateError> {
+    let rect = compute_rect_from_window(window)
+        .map_err(|e| WindowStateError::Config(config::ConfigError::Database(e)))?;
+    let serialized = serde_json::to_string(&rect)?;
+    config::set(window.app_handle(), CONFIG_KEY_WORKSPACE_RECT, &serialized).await?;
+    Ok(())
+}
+
+pub async fn load_workspace_rect<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<LastRect>, WindowStateError> {
+    let raw = config::get(app, CONFIG_KEY_WORKSPACE_RECT).await?;
+    match raw {
+        None => Ok(None),
+        Some(s) => match serde_json::from_str::<LastRect>(&s) {
+            Ok(r) => Ok(Some(r)),
+            // KV 损坏 → 视同空，启动期走 fallback default（不让单条坏数据阻断启动）
+            Err(e) => {
+                eprintln!("[window_state] load_workspace_rect parse failed (treat as empty): {e}");
+                Ok(None)
+            }
+        },
+    }
+}
+
+/// workspace fallback default：主屏 center + 默认 1100×720。
+/// 主屏不存在（极端 headless 场景）→ None，由调用方走 tauri.conf center:true 兜底。
+fn fallback_workspace_default<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<(f64, f64, f64, f64)> {
+    let primary = app.primary_monitor().ok().flatten()?;
+    let scale = primary.scale_factor();
+    let origin = primary.position().to_logical::<f64>(scale);
+    let size = primary.size().to_logical::<f64>(scale);
+    let w = WORKSPACE_DEFAULT_W;
+    let h = WORKSPACE_DEFAULT_H;
+    let x = origin.x + (size.width - w) / 2.0;
+    let y = origin.y + (size.height - h) / 2.0;
+    Some((x, y, w, h))
+}
+
+/// 启动期调用：读 last_rect → 找 monitor 是否还在 → set_size + set_position 还原 / fallback。
+/// workspace `visible: false`，setup 期 set_size + set_position 不视觉抖动。
+pub fn apply_initial_workspace_rect<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(WORKSPACE_WINDOW_LABEL)
+        .ok_or_else(|| format!("workspace window '{WORKSPACE_WINDOW_LABEL}' not found"))?;
+
+    let last = tauri::async_runtime::block_on(load_workspace_rect(app))
+        .map_err(|e| format!("load workspace rect: {e}"))?;
+
+    let monitors = window
+        .available_monitors()
+        .map_err(|e| format!("available_monitors: {e}"))?;
+
+    let (logical_x, logical_y, w, h) = match last {
+        Some(r) => match monitors.iter().find(|m| monitor_id(m) == r.monitor_id) {
+            Some(monitor) => {
+                let w = r.logical_w.max(WORKSPACE_MIN_W);
+                let h = r.logical_h.max(WORKSPACE_MIN_H);
+                let (x, y) = clamp_into_monitor(monitor, w, h, r.logical_x, r.logical_y);
+                (x, y, w, h)
+            }
+            // monitor 不在场 → fallback 主屏 center
+            None => fallback_workspace_default(app)
+                .ok_or_else(|| "no primary monitor for fallback".to_string())?,
+        },
+        // KV 空 / 损坏 → fallback 主屏 center
+        None => fallback_workspace_default(app)
+            .ok_or_else(|| "no primary monitor for fallback".to_string())?,
+    };
+
+    window
+        .set_size(LogicalSize::new(w, h))
+        .map_err(|e| format!("set_size: {e}"))?;
+    window
+        .set_position(LogicalPosition::new(logical_x, logical_y))
+        .map_err(|e| format!("set_position: {e}"))?;
+    Ok(())
+}
+
 /// 番茄独立窗位置防抖锁（独立 slot，避免与 pet SaveDebouncer 串扰）。
 #[derive(Default)]
 pub struct PomodoroSaveDebouncer {
@@ -406,6 +541,32 @@ impl PomodoroSaveDebouncer {
             tokio::time::sleep(Duration::from_millis(SAVE_DEBOUNCE_MS)).await;
             if let Err(e) = save_pomodoro_position(&window).await {
                 eprintln!("[window_state] save_pomodoro_position failed: {e}");
+            }
+        });
+        *slot = Some(handle);
+    }
+}
+
+/// workspace 主窗 rect 防抖锁（独立 slot，避免与 pet/pomodoro 串扰）。
+/// Moved + Resized 共用同一 debouncer：每次 schedule 都 abort 上次 → 拖动 + resize 期间停手 200ms 后落盘一次。
+#[derive(Default)]
+pub struct WorkspaceSaveDebouncer {
+    pending: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl WorkspaceSaveDebouncer {
+    pub fn schedule<R: Runtime>(&self, window: WebviewWindow<R>) {
+        let mut slot = match self.pending.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(prev) = slot.take() {
+            prev.abort();
+        }
+        let handle = tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(SAVE_DEBOUNCE_MS)).await;
+            if let Err(e) = save_workspace_rect(&window).await {
+                eprintln!("[window_state] save_workspace_rect failed: {e}");
             }
         });
         *slot = Some(handle);
@@ -487,5 +648,28 @@ pub fn apply_initial_always_on_top<R: Runtime>(app: &AppHandle<R>) {
     };
     if let Err(e) = apply_always_on_top(app, v) {
         eprintln!("[window_state] apply_initial_always_on_top failed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_rect_serde_roundtrip() {
+        let r = LastRect {
+            monitor_id: "monitor-1920x1080-0-0".into(),
+            logical_x: 100.5,
+            logical_y: 80.25,
+            logical_w: 1200.0,
+            logical_h: 760.0,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let parsed: LastRect = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.monitor_id, "monitor-1920x1080-0-0");
+        assert_eq!(parsed.logical_x, 100.5);
+        assert_eq!(parsed.logical_y, 80.25);
+        assert_eq!(parsed.logical_w, 1200.0);
+        assert_eq!(parsed.logical_h, 760.0);
     }
 }
