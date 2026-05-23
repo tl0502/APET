@@ -10,7 +10,10 @@
 //! 字段映射：Rust `title` <- ts `label`（用户可读名）；`emoji`/`hint`/`label` 等纯 UI
 //! 字段不落库（reminders 表无对应列）。
 
-use sqlx::{Sqlite, SqliteConnection, Transaction};
+use sqlx::{Connection, Sqlite, SqliteConnection, Transaction};
+use tauri::{AppHandle, Runtime};
+
+use crate::services::db::open_app_db;
 
 pub(crate) const ONBOARDING_KV_KEY: &str = "onboarding:reminder_intents";
 
@@ -109,12 +112,6 @@ async fn read_kv(conn: &mut SqliteConnection, key: &str) -> Result<Option<String
 /// - KV 不存在 / null / [] / 无效 JSON → 删 KV（若存在）后返回 Ok，无 reminder 创建。
 /// - id 不在 TEMPLATES → 静默 skip + eprintln warn（前后端版本错位容错）。
 /// - reminder.create_internal_tx 失败 → 直接传播 → 调用方 rollback。
-///
-/// `#[allow(dead_code)]`: D3 (`instantiate_onboarding_reminders` + lib.rs setup hook)
-/// 会是首个真实调用方；移除本 allow 是 D3 commit 自检清单的一项（届时 read_kv /
-/// parse_intent_ids / lookup_template / TEMPLATES / ReminderTemplate / ONBOARDING_KV_KEY
-/// 都会随调用链变 live，无需各自加 allow）。
-#[allow(dead_code)]
 pub(crate) async fn drain_in_tx(tx: &mut Transaction<'_, Sqlite>) -> Result<(), String> {
     let raw = read_kv(&mut **tx, ONBOARDING_KV_KEY).await?;
     let ids = match parse_intent_ids(raw.as_deref()) {
@@ -154,6 +151,21 @@ pub(crate) async fn drain_in_tx(tx: &mut Transaction<'_, Sqlite>) -> Result<(), 
         .await
         .map_err(|e| format!("delete kv: {e}"))?;
     Ok(())
+}
+
+/// 启动期同步入口：lib.rs::setup 调用。内部 block_on 走 drain_in_tx 异步实现。
+/// 失败仅 warn（log + 下次启动重试）；不影响 app 启动流程。
+///
+/// 调用 pattern 复用 #34 / lesson §10 "只在 setup / 其他确认是同步上下文的入口用 block_on" 例外条款。
+pub fn instantiate_onboarding_reminders<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    tauri::async_runtime::block_on(async move {
+        let mut conn = open_app_db(app).await.map_err(|e| format!("open db: {e}"))?;
+        let mut tx = conn.begin().await.map_err(|e| format!("begin tx: {e}"))?;
+        drain_in_tx(&mut tx).await?;
+        tx.commit().await.map_err(|e| format!("commit: {e}"))?;
+        conn.close().await.map_err(|e| format!("close conn: {e}"))?;
+        Ok::<(), String>(())
+    })
 }
 
 #[cfg(test)]

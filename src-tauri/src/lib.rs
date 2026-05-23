@@ -268,6 +268,11 @@ pub fn run() {
             // dev 期实测设 env LIVING_PET_DEV_INTERVAL=5（秒）可强制 5s 间隔。
             app.manage(crate::services::living_pet::LivingPet::default());
             crate::services::living_pet::start_scheduler(app.handle().clone());
+            // #29 闭环 #21 ADR-019 step 4：消化 onboarding 期写入的 reminder intent KV
+            // → 真实 reminders 行 + 删 KV，全程同一 tx 原子化。
+            if let Err(e) = crate::services::onboarding_reminders::instantiate_onboarding_reminders(app.handle()) {
+                eprintln!("[setup] instantiate_onboarding_reminders failed: {e}");
+            }
             // #22 ReminderService 启动期：① catch-up overdue（30min 内合并 / 超过标 overdue）→
             // ② scheduler 5s polling task 启动。两者都在 ConsentGate manage 后，gate=false 时
             // catch-up 仍跑（让 reminder_history 一致），但前端 emit 给 onboarding 窗也无 listener
