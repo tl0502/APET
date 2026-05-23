@@ -450,6 +450,19 @@ async fn complete_with_tx(
 ) -> Result<Todo, TodoError> {
     let existing = get_by_id(&mut **tx, id).await?;
 
+    // 状态机守卫：只允许 open → done。
+    // - 已 done：noop 返当前 row（idempotent，不动 updated_at）— UI 双击不出错
+    // - cancelled：拒绝（避免取消后又被复活成 done）
+    if existing.status == "done" {
+        return Ok(existing);
+    }
+    if existing.status != "open" {
+        return Err(TodoError::InvalidInput(format!(
+            "cannot complete todo in status '{}' (only 'open' allowed)",
+            existing.status
+        )));
+    }
+
     // 删 once reminder（防止用户提前完成后到点仍弹气泡）。仅 once；daily 等 recurring 保留。
     let final_reminder_id: Option<String> = match &existing.reminder_id {
         Some(rid) => {
@@ -809,5 +822,54 @@ mod tests {
 
         assert_eq!(done.status, "done");
         assert!(done.reminder_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn complete_on_already_done_is_idempotent_noop() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput { title: "x".into(), due_at: None, priority: None },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // First complete
+        let mut tx = conn.begin().await.unwrap();
+        let done1 = complete_with_tx(&mut tx, &todo.id).await.unwrap();
+        tx.commit().await.unwrap();
+        let first_updated_at = done1.updated_at.clone();
+
+        // Second complete — should be noop (returns same row, updated_at unchanged)
+        let mut tx = conn.begin().await.unwrap();
+        let done2 = complete_with_tx(&mut tx, &todo.id).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(done2.status, "done");
+        assert_eq!(done2.updated_at, first_updated_at);  // no UPDATE issued
+    }
+
+    #[tokio::test]
+    async fn complete_on_cancelled_returns_invalid_input() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput { title: "x".into(), due_at: None, priority: None },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // Cancel it
+        let mut tx = conn.begin().await.unwrap();
+        update_with_tx(
+            &mut tx, &todo.id,
+            UpdateInput { status: Some("cancelled".into()), ..Default::default() },
+        ).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // Try to complete cancelled todo
+        let mut tx = conn.begin().await.unwrap();
+        let err = complete_with_tx(&mut tx, &todo.id).await.unwrap_err();
+        assert!(matches!(err, TodoError::InvalidInput(_)));
     }
 }
