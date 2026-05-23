@@ -119,16 +119,20 @@ CREATE TABLE reminder_history (
 );
 CREATE INDEX idx_reminder_history_rid ON reminder_history(reminder_id);
 
+-- todos: #29 落地（原 M2 placeholder schema 含 source/parent_id/done_at 未被任何代码消费，
+-- 2026-05-23 整体替换。lesson §2 零迁移：001 未对外发布前直接改）
 CREATE TABLE todos (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  due_at TEXT,
-  status TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'done' | 'cancelled'
-  source TEXT NOT NULL,                  -- 'manual' | 'ai_breakdown'
-  parent_id TEXT,                        -- 拆解结果的父任务
-  created_at TEXT NOT NULL,
-  done_at TEXT
+  id           TEXT PRIMARY KEY NOT NULL,         -- ULID
+  title        TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'open',      -- 'open' | 'done' | 'cancelled'
+  due_at       TEXT,                              -- RFC3339 UTC; NULL = 无截止
+  reminder_id  TEXT,                              -- 软引用 reminders.id; NULL = 无关联
+  order_index  REAL NOT NULL DEFAULT 0,           -- 分数排序（拖排序）
+  priority     TEXT NOT NULL DEFAULT 'normal',    -- 'low' | 'normal' | 'high'
+  created_at   TEXT NOT NULL,                     -- RFC3339 UTC
+  updated_at   TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_todos_status_order ON todos(status, order_index);
 
 CREATE TABLE pomodoro_sessions (
   id TEXT PRIMARY KEY,
