@@ -63,8 +63,7 @@ export const REMINDER_BUFFER_FLUSH_EVENT = 'reminder:buffer_flush'
  * 模板预设库（hardcode；前 3 个 id 与 onboarding Step 4 ReminderIntentsView INTENTS 对齐）。
  * #29 实例化 onboarding KV `onboarding:reminder_intents` 时直接按 id 反查本表 → CreateInput。
  *
- * 注：daily HH:MM M2 按 UTC 解释；中国用户感受为 +8h 偏移（如 23:00 → 7AM 本地）。
- * follow-up #29/M3 接入本地时区后此偏移消失。每 N 分钟形式（triggerSpec 为
+ * 注：daily HH:MM 按本地时区解释（#29 已接入）。每 N 分钟形式（triggerSpec 为
  * 星号-斜杠-N-空格-星号-空格-星号）不受时区影响。
  */
 export interface ReminderTemplate {
@@ -100,7 +99,7 @@ export const REMINDER_TEMPLATES: readonly ReminderTemplate[] = [
     id: 'focus_study',
     emoji: '📚',
     label: '学习专注',
-    hint: '每天 09:00（UTC，约本地 17:00）',
+    hint: '每天 09:00（本地）',
     triggerType: 'daily',
     triggerSpec: '09:00',
     priority: 'hard',
@@ -118,7 +117,7 @@ export const REMINDER_TEMPLATES: readonly ReminderTemplate[] = [
     id: 'early_sleep',
     emoji: '🌙',
     label: '早睡',
-    hint: '每天 23:00（UTC，约本地 07:00）',
+    hint: '每天 23:00（本地）',
     triggerType: 'daily',
     triggerSpec: '23:00',
     priority: 'soft',
