@@ -545,6 +545,13 @@ pub fn run() {
             commands::pomodoro::pomodoro_stop,
             commands::pomodoro::pomodoro_active,
             commands::pomodoro::pomodoro_today_stats,
+            // #29 todo（6 命令）
+            crate::commands::todo::todo_create,
+            crate::commands::todo::todo_list,
+            crate::commands::todo::todo_update,
+            crate::commands::todo::todo_complete,
+            crate::commands::todo::todo_breakdown,
+            crate::commands::todo::todo_reorder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
