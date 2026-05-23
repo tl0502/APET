@@ -1089,4 +1089,44 @@ mod tests {
         let err = reorder_with_tx(&mut tx, "nonexistent-id", None).await.unwrap_err();
         assert!(matches!(err, TodoError::NotFound(_)));
     }
+
+    #[tokio::test]
+    async fn breakdown_always_returns_not_implemented() {
+        // 不需要 DB；breakdown 是 pure stub
+        let err = TodoError::BreakdownNotImplemented;
+        assert_eq!(err.to_string(), "breakdown not implemented (M3+)");
+    }
+
+    #[tokio::test]
+    async fn tx_rollback_on_reminder_coupling_failure_keeps_todos_clean() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+
+        // 喂入非法 trigger_spec 让 reminder.create_internal_tx 报 InvalidTrigger
+        let result = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "x".into(),
+                due_at: Some("not-a-date".into()), // 非法 RFC3339
+                priority: None,
+            },
+        )
+        .await;
+        // tx drop → 自动 rollback；conn 状态回到 begin 前
+        drop(tx);
+
+        assert!(matches!(result, Err(TodoError::ReminderCoupling(_))));
+        // 验证 todos 表无残留
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM todos")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0);
+        // 验证 reminders 表无残留
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reminders")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0);
+    }
 }
