@@ -209,8 +209,57 @@ pub async fn create<R: Runtime>(app: &AppHandle<R>, input: CreateInput) -> Resul
     Ok(out)
 }
 
-pub async fn list<R: Runtime>(_app: &AppHandle<R>) -> Result<Vec<Todo>, TodoError> {
-    Err(TodoError::InvalidInput("not implemented".into()))
+pub async fn list<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<Todo>, TodoError> {
+    let mut conn = open_app_db(app).await?;
+    let out = list_with_conn(&mut conn).await?;
+    conn.close().await?;
+    Ok(out)
+}
+
+/// 内部 list 实现：单次 SELECT，无 tx 包裹（只读、单语句、与 reminder::list 同 pattern）。
+///
+/// SQL 排序契约（前端只做 search/filter，不重排）：
+/// 1. status: open(0) → done(1) → cancelled(2)（CASE 表达式）
+/// 2. order_index ASC（拖拽分数序）
+/// 3. updated_at DESC（同 order_index 时新近改动靠前）
+async fn list_with_conn(conn: &mut SqliteConnection) -> Result<Vec<Todo>, TodoError> {
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        f64,
+        String,
+        String,
+        String,
+    )> = sqlx::query_as(
+        r#"SELECT id, title, status, due_at, reminder_id, order_index, priority, created_at, updated_at
+           FROM todos
+           ORDER BY CASE status
+                      WHEN 'open' THEN 0
+                      WHEN 'done' THEN 1
+                      ELSE 2
+                    END ASC,
+                    order_index ASC,
+                    updated_at DESC"#,
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Todo {
+            id: r.0,
+            title: r.1,
+            status: r.2,
+            due_at: r.3,
+            reminder_id: r.4,
+            order_index: r.5,
+            priority: r.6,
+            created_at: r.7,
+            updated_at: r.8,
+        })
+        .collect())
 }
 
 pub async fn update<R: Runtime>(_app: &AppHandle<R>, _id: String, _input: UpdateInput) -> Result<Todo, TodoError> {
@@ -297,5 +346,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 1);
+    }
+
+    #[tokio::test]
+    async fn list_returns_open_first_then_done_then_cancelled_sorted_by_order_index() {
+        let (_dir, mut conn) = fresh_db().await;
+        // 直插 4 行不同 status + order_index
+        let now = Utc::now().to_rfc3339();
+        for (id, status, oi) in &[
+            ("a", "done", 5.0),
+            ("b", "open", 20.0),
+            ("c", "open", 10.0),
+            ("d", "cancelled", 1.0),
+        ] {
+            sqlx::query(
+                r#"INSERT INTO todos (id,title,status,order_index,priority,created_at,updated_at)
+                   VALUES (?, ?, ?, ?, 'normal', ?, ?)"#,
+            )
+            .bind(*id).bind(*id).bind(*status).bind(*oi).bind(&now).bind(&now)
+            .execute(&mut conn).await.unwrap();
+        }
+
+        let list = list_with_conn(&mut conn).await.unwrap();
+        let ids: Vec<&str> = list.iter().map(|t| t.id.as_str()).collect();
+        // open (按 order_index ASC: c=10, b=20), then done (a), then cancelled (d)
+        assert_eq!(ids, vec!["c", "b", "a", "d"]);
     }
 }
