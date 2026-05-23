@@ -262,8 +262,88 @@ async fn list_with_conn(conn: &mut SqliteConnection) -> Result<Vec<Todo>, TodoEr
         .collect())
 }
 
-pub async fn update<R: Runtime>(_app: &AppHandle<R>, _id: String, _input: UpdateInput) -> Result<Todo, TodoError> {
-    Err(TodoError::InvalidInput("not implemented".into()))
+/// 内部 update 实现：接 `&mut Transaction`，保持 tx-injection pattern。
+///
+/// 本 Task (C4) 覆盖："title-only / priority-only / status=open|cancelled" 路径——
+/// 保留原 due_at + reminder_id 不动。
+///
+/// 路径覆盖留待后续 Task：
+/// - C5: due_at change → 同 tx 内 reminder create/update/delete 联动
+/// - C6: status='cancelled' + 有 once reminder → 同 tx 内删 reminder
+///
+/// status='done' 通过 update 显式拒绝：必须走 todo_complete（spec §4.2，complete-once 语义）。
+async fn update_with_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    id: &str,
+    input: UpdateInput,
+) -> Result<Todo, TodoError> {
+    // 读旧 row（不存在 → NotFound 直接冒泡）
+    let existing = get_by_id(&mut **tx, id).await?;
+
+    let new_title = input.title.unwrap_or_else(|| existing.title.clone());
+    if new_title.trim().is_empty() {
+        return Err(TodoError::InvalidInput("title cannot be empty".into()));
+    }
+
+    let new_priority = match input.priority.as_deref() {
+        Some(p) => {
+            validate_priority(p)?;
+            p.to_string()
+        }
+        None => existing.priority.clone(),
+    };
+
+    let new_status = match input.status.as_deref() {
+        Some(s) if s == "open" || s == "cancelled" => s.to_string(),
+        Some("done") => {
+            return Err(TodoError::InvalidInput(
+                "status='done' must go through todo_complete".into(),
+            ));
+        }
+        Some(other) => {
+            return Err(TodoError::InvalidInput(format!("invalid status: {other}")));
+        }
+        None => existing.status.clone(),
+    };
+
+    // due_at + reminder 联动留待 C5；C6 加 cancelled + once 删 reminder。
+    // 本 Task 仅"非 due_at 改动 + 非 cancelled-with-reminder"路径：保留原 due_at / reminder_id。
+    let new_due_at: Option<String> = existing.due_at.clone();
+    let new_reminder_id: Option<String> = existing.reminder_id.clone();
+
+    let now = Utc::now().to_rfc3339();
+    {
+        let conn: &mut SqliteConnection = &mut **tx;
+        sqlx::query(
+            r#"UPDATE todos
+               SET title=?, status=?, due_at=?, reminder_id=?, priority=?, updated_at=?
+               WHERE id=?"#,
+        )
+        .bind(&new_title)
+        .bind(&new_status)
+        .bind(&new_due_at)
+        .bind(&new_reminder_id)
+        .bind(&new_priority)
+        .bind(&now)
+        .bind(id)
+        .execute(conn)
+        .await?;
+    }
+
+    get_by_id(&mut **tx, id).await
+}
+
+pub async fn update<R: Runtime>(
+    app: &AppHandle<R>,
+    id: String,
+    input: UpdateInput,
+) -> Result<Todo, TodoError> {
+    let mut conn = open_app_db(app).await?;
+    let mut tx = conn.begin().await?;
+    let out = update_with_tx(&mut tx, &id, input).await?;
+    tx.commit().await?;
+    conn.close().await?;
+    Ok(out)
 }
 
 pub async fn complete<R: Runtime>(_app: &AppHandle<R>, _id: String) -> Result<Todo, TodoError> {
@@ -371,5 +451,68 @@ mod tests {
         let ids: Vec<&str> = list.iter().map(|t| t.id.as_str()).collect();
         // open (按 order_index ASC: c=10, b=20), then done (a), then cancelled (d)
         assert_eq!(ids, vec!["c", "b", "a", "d"]);
+    }
+
+    #[tokio::test]
+    async fn update_title_only_does_not_touch_reminder() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "old".into(),
+                due_at: None,
+                priority: None,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = conn.begin().await.unwrap();
+        let updated = update_with_tx(
+            &mut tx,
+            &todo.id,
+            UpdateInput {
+                title: Some("new".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(updated.title, "new");
+        assert!(updated.reminder_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_cannot_set_status_done_directly() {
+        let (_dir, mut conn) = fresh_db().await;
+        let mut tx = conn.begin().await.unwrap();
+        let todo = create_with_tx(
+            &mut tx,
+            CreateInput {
+                title: "x".into(),
+                due_at: None,
+                priority: None,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = conn.begin().await.unwrap();
+        let err = update_with_tx(
+            &mut tx,
+            &todo.id,
+            UpdateInput {
+                status: Some("done".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, TodoError::InvalidInput(_)));
     }
 }
