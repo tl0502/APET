@@ -544,67 +544,55 @@ async fn reorder_with_tx(
     id: &str,
     after_id: Option<&str>,
 ) -> Result<Todo, TodoError> {
-    // 算 newOrder
-    let new_order = match after_id {
+    // 状态机守卫：仅 open todo 可重排（done/cancelled 不在用户可拖动列表中）。
+    let target_status: Option<(String,)> = sqlx::query_as(
+        "SELECT status FROM todos WHERE id=?",
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match target_status {
+        None => return Err(TodoError::NotFound(id.to_string())),
+        Some((s,)) if s != "open" => {
+            return Err(TodoError::InvalidInput(format!(
+                "cannot reorder todo in status '{s}' (only 'open' allowed)"
+            )));
+        }
+        Some(_) => {}
+    }
+
+    // 算 newOrder + 探测 gap 是否需要 normalize（共用一次邻居查询）
+    let (new_order, needs_normalize) = match after_id {
         Some(after) => {
-            // 取 after.order_index
-            let after_row: (f64,) = sqlx::query_as(
-                "SELECT order_index FROM todos WHERE id=? AND status='open'",
+            let after_row: Option<(f64,)> = sqlx::query_as(
+                "SELECT order_index FROM todos WHERE id=? AND status='open'"
             )
-            .bind(after)
-            .fetch_optional(&mut **tx)
-            .await?
-            .ok_or_else(|| {
-                TodoError::InvalidInput(format!("after_id not open todo: {after}"))
-            })?;
-            // 取 after 之后第一个 open（按 order_index ASC），排除自身（拖动行）
+            .bind(after).fetch_optional(&mut **tx).await?;
+            let after_oi = after_row
+                .ok_or_else(|| TodoError::InvalidInput(format!("after_id not open todo: {after}")))?
+                .0;
             let next_row: Option<(f64,)> = sqlx::query_as(
                 r#"SELECT order_index FROM todos
                    WHERE status='open' AND order_index > ? AND id != ?
                    ORDER BY order_index ASC LIMIT 1"#,
             )
-            .bind(after_row.0)
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?;
-            match next_row {
-                Some((next_oi,)) => (after_row.0 + next_oi) / 2.0,
-                None => after_row.0 + 10.0,
-            }
+            .bind(after_oi).bind(id).fetch_optional(&mut **tx).await?;
+            let (new_order, needs_normalize) = match next_row {
+                Some((next_oi,)) => {
+                    let gap = (next_oi - after_oi).abs();
+                    ((after_oi + next_oi) / 2.0, gap < ORDER_GAP_THRESHOLD)
+                }
+                None => (after_oi + 10.0, false),
+            };
+            (new_order, needs_normalize)
         }
         None => {
-            // 拖到最前：取当前 min - 10（首条 / 全空时落 0）
             let row: Option<(Option<f64>,)> = sqlx::query_as(
                 "SELECT MIN(order_index) FROM todos WHERE status='open' AND id != ?",
-            )
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?;
-            row.and_then(|(v,)| v).map(|v| v - 10.0).unwrap_or(0.0)
+            ).bind(id).fetch_optional(&mut **tx).await?;
+            let new_order = row.and_then(|(v,)| v).map(|v| v - 10.0).unwrap_or(0.0);
+            (new_order, false)
         }
-    };
-
-    // 检查是否需要 normalize（after 与其 next 的 gap < threshold）
-    let needs_normalize = if let Some(after) = after_id {
-        let after_oi: (f64,) = sqlx::query_as("SELECT order_index FROM todos WHERE id=?")
-            .bind(after)
-            .fetch_one(&mut **tx)
-            .await?;
-        let next: Option<(f64,)> = sqlx::query_as(
-            r#"SELECT order_index FROM todos
-               WHERE status='open' AND order_index > ? AND id != ?
-               ORDER BY order_index ASC LIMIT 1"#,
-        )
-        .bind(after_oi.0)
-        .bind(id)
-        .fetch_optional(&mut **tx)
-        .await?;
-        match next {
-            Some((next_oi,)) => (next_oi - after_oi.0).abs() < ORDER_GAP_THRESHOLD,
-            None => false,
-        }
-    } else {
-        false
     };
 
     if needs_normalize {
@@ -1075,5 +1063,30 @@ mod tests {
                 "expected gap >> threshold, got {:?}", orders
             );
         }
+    }
+
+    #[tokio::test]
+    async fn reorder_target_status_done_returns_invalid_input() {
+        let (_dir, mut conn) = fresh_db().await;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"INSERT INTO todos (id,title,status,order_index,priority,created_at,updated_at)
+               VALUES (?, ?, 'done', ?, 'normal', ?, ?)"#,
+        )
+        .bind("a").bind("a").bind(0.0).bind(&now).bind(&now)
+        .execute(&mut conn).await.unwrap();
+
+        let mut tx = conn.begin().await.unwrap();
+        let err = reorder_with_tx(&mut tx, "a", None).await.unwrap_err();
+        assert!(matches!(err, TodoError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn reorder_target_not_found_returns_not_found() {
+        let (_dir, mut conn) = fresh_db().await;
+
+        let mut tx = conn.begin().await.unwrap();
+        let err = reorder_with_tx(&mut tx, "nonexistent-id", None).await.unwrap_err();
+        assert!(matches!(err, TodoError::NotFound(_)));
     }
 }
