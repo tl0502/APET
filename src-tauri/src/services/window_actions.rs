@@ -33,6 +33,14 @@ pub const POMODORO_WINDOW_LABEL: &str = "pomodoro";
 /// #33 phase E：settings/tasks 独立窗已删（panel 迁入 workspace），剩 pet/chat/workspace/pomodoro 四窗。
 pub const WORKSPACE_WINDOW_LABEL: &str = "workspace";
 
+/// pet-reminder overlay 窗 label（2026-05-24 pet UI 重构第二轮）。
+/// 透明常驻浮层，由 reminder 内容变化驱动 show/hide；reminders.length=0 时 hide。
+/// 位置算法见 services/pet_overlay.rs，跟随 pet 主窗 Moved 事件。
+pub const PET_REMINDER_OVERLAY_LABEL: &str = "pet-reminder";
+/// pet-command overlay 窗 label（2026-05-24 pet UI 重构第二轮）。
+/// pet 主窗 contextmenu 触发 show；tray close（点外部 / Esc / 完成操作）emit close 事件 hide。
+pub const PET_COMMAND_OVERLAY_LABEL: &str = "pet-command";
+
 /// #30 follow-up G：跨 webview 广播窗口 visibility 变化的事件名。
 pub const VISIBILITY_CHANGED_EVENT: &str = "window:visibility-changed";
 

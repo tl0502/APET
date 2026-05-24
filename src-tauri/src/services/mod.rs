@@ -84,6 +84,12 @@ pub mod bosskey;
 pub mod mood;
 pub mod energy;
 
+// 2026-05-24 pet UI 重构第二轮：pet-reminder / pet-command 双 overlay 协作模块。
+// 位置算法（reminder 上方居中 / command 右下偏侧）+ pet WindowEvent::Moved 跟随
+// （200ms settled debounce）+ contextmenu 全局事件转发。reminder/interaction/bosskey
+// 业务逻辑零改动；本模块仅负责窗口侧编排。
+pub mod pet_overlay;
+
 // #6 系统托盘 + 窗口动作 helper（M1 W2 主态可达交付物）。
 // window_actions 的 show_pet / hide_pet 在 #6 范围内未消费，#7 shortcuts task
 // 接入 Ctrl+Alt+Space 全局快捷键时启用；mod 级 #[allow(dead_code)] 屏蔽 dead_code warning，
