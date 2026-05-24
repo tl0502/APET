@@ -3,6 +3,7 @@
 // 后续按 milestone 节奏接入：shortcuts / cursor_tracker / window:Moved emit 等。
 
 mod commands;
+mod kernel;
 mod services;
 
 use services::shortcuts::ShortcutRegistry;

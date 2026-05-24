@@ -1,0 +1,287 @@
+// SafetyGuard — Constitution #1, 7-state FSM (spec §6.6), Scan Scope Matrix (§6.6.2)。
+// Phase A0 实现 scope 1+2+3 (user input / stream token / final text)。
+// scope 4 (memory KV) Phase A2 落; scope 6 (tool result) Phase C; scope 5+7 P1。
+
+use thiserror::Error;
+
+use crate::services::llm::{ChatMessage, ContentPart, Role};
+
+#[derive(Debug, Error)]
+pub enum SafetyError {
+    #[error("safety prefix asset missing: {0}")]
+    PrefixMissing(String),
+    #[error("scan rule load failed: {0}")]
+    ScanRuleLoad(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// 流式 token scan 决策 (Scan Scope #2)。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScanTokenResult {
+    Pass,
+    SoftBlock {
+        replace_last_n: usize,
+        placeholder: String,
+    },
+    HardEnd {
+        rule_id: String,
+    },
+}
+
+/// 终态 scan 决策 (Scan Scope #1 user input / #3 final text)。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScanFinalResult {
+    Ok,
+    Redacted {
+        redacted_text: String,
+        rule_ids: Vec<String>,
+    },
+    Blocked {
+        rule_ids: Vec<String>,
+        fallback: String,
+    },
+    ScanFailed {
+        reason: String,
+        fallback: String,
+    },
+}
+
+/// SafetyGuard trait — kernel-owned, subsystem 无法构造, 仅经 Boot 时 SafetyGuardImpl::load。
+pub trait SafetyGuard: Send + Sync {
+    /// 出方向: prompt → LLM, prefix 强制 system message 第一位 (Scope: SafetyPrefix)。
+    fn wrap_messages(&self, messages: Vec<ChatMessage>, locale: Locale) -> Vec<ChatMessage>;
+
+    /// 入方向: 流式 token chunk 增量扫 (Scope #2)。
+    fn scan_token(&self, partial: &str, accumulated: &str, finished: bool) -> ScanTokenResult;
+
+    /// 入方向: 流终态全文扫 (Scope #3 LLM final)。
+    fn scan_final(&self, full_text: &str, persona_snapshot_id: &str) -> ScanFinalResult;
+
+    /// 入方向: 用户输入扫 (Scope #1, 防 prompt injection)。
+    fn scan_user_input(&self, text: &str) -> ScanFinalResult;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Locale {
+    ZhCn,
+    EnUs,
+}
+
+const FALLBACK_REFUSAL: &str = "这个我现在没法陪你聊,要不我们换个话题?";
+
+/// Phase A0 实现: prefix 从 assets/safety/prefix_v1.txt 加载, scan 用静态黑词表。
+pub struct SafetyGuardImpl {
+    prefix: String,
+    /// 黑词表 (Phase A0 简单 substring 匹配, P1 评估 regex/classifier)
+    hard_blocklist: Vec<&'static str>,
+    soft_blocklist: Vec<&'static str>,
+}
+
+impl SafetyGuardImpl {
+    pub fn load(prefix_path: &std::path::Path) -> Result<Self, SafetyError> {
+        let prefix = std::fs::read_to_string(prefix_path)?;
+        if prefix.trim().is_empty() {
+            return Err(SafetyError::PrefixMissing(
+                prefix_path.display().to_string(),
+            ));
+        }
+        Ok(Self {
+            prefix,
+            hard_blocklist: vec!["自杀", "自残"],
+            soft_blocklist: vec!["违法", "违禁"],
+        })
+    }
+}
+
+impl SafetyGuard for SafetyGuardImpl {
+    fn wrap_messages(&self, mut messages: Vec<ChatMessage>, _locale: Locale) -> Vec<ChatMessage> {
+        match messages.first_mut() {
+            Some(first) if first.role == Role::System => {
+                let prefix_part = ContentPart::Text {
+                    text: format!("{}\n\n", self.prefix),
+                };
+                first.content.insert(0, prefix_part);
+            }
+            _ => {
+                let new_system = ChatMessage::text(Role::System, self.prefix.clone());
+                messages.insert(0, new_system);
+            }
+        }
+        messages
+    }
+
+    fn scan_token(&self, _partial: &str, accumulated: &str, _finished: bool) -> ScanTokenResult {
+        for rule in &self.hard_blocklist {
+            if accumulated.contains(rule) {
+                return ScanTokenResult::HardEnd {
+                    rule_id: rule.to_string(),
+                };
+            }
+        }
+        for rule in &self.soft_blocklist {
+            if accumulated.contains(rule) {
+                return ScanTokenResult::SoftBlock {
+                    replace_last_n: 8,
+                    placeholder: "[审核中…]".to_string(),
+                };
+            }
+        }
+        ScanTokenResult::Pass
+    }
+
+    fn scan_final(&self, full_text: &str, _persona_snapshot_id: &str) -> ScanFinalResult {
+        let mut hit_rules = Vec::new();
+        for rule in &self.hard_blocklist {
+            if full_text.contains(rule) {
+                hit_rules.push(rule.to_string());
+            }
+        }
+        if !hit_rules.is_empty() {
+            return ScanFinalResult::Blocked {
+                rule_ids: hit_rules,
+                fallback: FALLBACK_REFUSAL.to_string(),
+            };
+        }
+        let mut soft_hit = Vec::new();
+        let mut redacted = full_text.to_string();
+        for rule in &self.soft_blocklist {
+            if redacted.contains(rule) {
+                redacted = redacted.replace(rule, "***");
+                soft_hit.push(rule.to_string());
+            }
+        }
+        if !soft_hit.is_empty() {
+            return ScanFinalResult::Redacted {
+                redacted_text: redacted,
+                rule_ids: soft_hit,
+            };
+        }
+        ScanFinalResult::Ok
+    }
+
+    fn scan_user_input(&self, text: &str) -> ScanFinalResult {
+        self.scan_final(text, "")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_guard() -> SafetyGuardImpl {
+        SafetyGuardImpl {
+            prefix: "TEST_PREFIX".to_string(),
+            hard_blocklist: vec!["自杀"],
+            soft_blocklist: vec!["违禁"],
+        }
+    }
+
+    #[test]
+    fn wrap_messages_inserts_prefix_as_first_system() {
+        let guard = make_guard();
+        let user_msg = ChatMessage::text(Role::User, "hi");
+        let wrapped = guard.wrap_messages(vec![user_msg], Locale::ZhCn);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].role, Role::System);
+        assert!(matches!(&wrapped[0].content[0], ContentPart::Text { text } if text == "TEST_PREFIX"));
+    }
+
+    #[test]
+    fn wrap_messages_prepends_to_existing_system() {
+        let guard = make_guard();
+        let sys = ChatMessage::text(Role::System, "you are momo");
+        let wrapped = guard.wrap_messages(vec![sys], Locale::ZhCn);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0].role, Role::System);
+        assert!(matches!(&wrapped[0].content[0], ContentPart::Text { text } if text.starts_with("TEST_PREFIX")));
+    }
+
+    #[test]
+    fn scan_token_returns_pass_for_clean_text() {
+        let guard = make_guard();
+        assert_eq!(guard.scan_token("h", "hello", false), ScanTokenResult::Pass);
+    }
+
+    #[test]
+    fn scan_token_returns_hard_end_for_hard_block_word() {
+        let guard = make_guard();
+        let result = guard.scan_token("", "我想自杀", false);
+        assert!(matches!(result, ScanTokenResult::HardEnd { .. }));
+    }
+
+    #[test]
+    fn scan_token_returns_soft_block_for_soft_word() {
+        let guard = make_guard();
+        let result = guard.scan_token("", "教我违禁的", false);
+        match result {
+            ScanTokenResult::SoftBlock { placeholder, .. } => {
+                assert_eq!(placeholder, "[审核中…]");
+            }
+            _ => panic!("expected SoftBlock"),
+        }
+    }
+
+    #[test]
+    fn scan_final_returns_ok_for_clean_text() {
+        let guard = make_guard();
+        assert_eq!(guard.scan_final("hello", "snap_1"), ScanFinalResult::Ok);
+    }
+
+    #[test]
+    fn scan_final_returns_blocked_for_hard_hit() {
+        let guard = make_guard();
+        let result = guard.scan_final("自杀方法", "snap_1");
+        match result {
+            ScanFinalResult::Blocked { rule_ids, fallback } => {
+                assert!(rule_ids.contains(&"自杀".to_string()));
+                assert!(!fallback.is_empty());
+            }
+            _ => panic!("expected Blocked, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn scan_final_returns_redacted_for_soft_hit() {
+        let guard = make_guard();
+        let result = guard.scan_final("教我违禁知识", "snap_1");
+        match result {
+            ScanFinalResult::Redacted {
+                redacted_text,
+                rule_ids,
+            } => {
+                assert!(redacted_text.contains("***"));
+                assert!(!redacted_text.contains("违禁"));
+                assert!(rule_ids.contains(&"违禁".to_string()));
+            }
+            _ => panic!("expected Redacted, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn scan_user_input_uses_same_rules() {
+        let guard = make_guard();
+        assert!(matches!(
+            guard.scan_user_input("自杀"),
+            ScanFinalResult::Blocked { .. }
+        ));
+    }
+
+    #[test]
+    fn load_reads_prefix_from_file() {
+        let tmp = std::env::temp_dir().join(format!("test_prefix_{}.txt", ulid::Ulid::new()));
+        std::fs::write(&tmp, "MY_TEST_PREFIX_CONTENT").unwrap();
+        let guard = SafetyGuardImpl::load(&tmp).unwrap();
+        assert_eq!(guard.prefix, "MY_TEST_PREFIX_CONTENT");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn load_fails_on_empty_file() {
+        let tmp = std::env::temp_dir().join(format!("test_empty_{}.txt", ulid::Ulid::new()));
+        std::fs::write(&tmp, "").unwrap();
+        let result = SafetyGuardImpl::load(&tmp);
+        assert!(matches!(result, Err(SafetyError::PrefixMissing(_))));
+        std::fs::remove_file(&tmp).ok();
+    }
+}
