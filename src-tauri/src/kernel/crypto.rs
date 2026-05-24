@@ -5,7 +5,7 @@
 // Linux/macOS fallback P1 评估 (libsecret / Keychain)。
 
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Debug, Error)]
 pub enum CryptoError {
@@ -13,7 +13,9 @@ pub enum CryptoError {
     EncryptFailed(String),
     #[error("DPAPI decrypt failed: {0}")]
     DecryptFailed(String),
+    /// Phase A0 forward hook for P1 input validation; 暂未被任何路径触发。
     #[error("invalid ciphertext")]
+    #[allow(dead_code)]
     InvalidCiphertext,
 }
 
@@ -43,6 +45,10 @@ impl CryptoService for DpapiCryptoService {
         let mut out_blob = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
 
         let ok = unsafe {
+            // SAFETY: in_blob.pbData points into the input slice which outlives this call.
+            // DPAPI per MS docs treats pDataIn as [in] only — does not write through the
+            // pointer nor retain it past return. out_blob receives a fresh Windows
+            // allocation (LocalAlloc) that we LocalFree below.
             CryptProtectData(
                 &mut in_blob,
                 std::ptr::null(),       // description
@@ -59,10 +65,22 @@ impl CryptoService for DpapiCryptoService {
             return Err(CryptoError::EncryptFailed(format!("WIN32 error {}", err)));
         }
 
+        if out_blob.pbData.is_null() {
+            return Err(CryptoError::EncryptFailed("DPAPI returned null pbData".into()));
+        }
+
         let result = unsafe {
+            // SAFETY: on TRUE return DPAPI guarantees out_blob.pbData is a valid
+            // Windows-allocated buffer of out_blob.cbData bytes (null check above
+            // is defensive against contract violations).
             std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec()
         };
-        unsafe { LocalFree(out_blob.pbData as _); }
+        unsafe {
+            // SAFETY: out_blob.pbData was allocated by DPAPI via LocalAlloc; per MS
+            // docs caller is responsible for LocalFree. Buffer is no longer used
+            // (we already copied into `result`).
+            LocalFree(out_blob.pbData as _);
+        }
         Ok(result)
     }
 
@@ -77,6 +95,10 @@ impl CryptoService for DpapiCryptoService {
         let mut out_blob = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
 
         let ok = unsafe {
+            // SAFETY: in_blob.pbData points into the input slice which outlives this call.
+            // DPAPI per MS docs treats pDataIn as [in] only — does not write through the
+            // pointer nor retain it past return. out_blob receives a fresh Windows
+            // allocation (LocalAlloc) that we LocalFree below.
             CryptUnprotectData(
                 &mut in_blob,
                 std::ptr::null_mut(),
@@ -93,10 +115,22 @@ impl CryptoService for DpapiCryptoService {
             return Err(CryptoError::DecryptFailed(format!("WIN32 error {}", err)));
         }
 
+        if out_blob.pbData.is_null() {
+            return Err(CryptoError::DecryptFailed("DPAPI returned null pbData".into()));
+        }
+
         let result = unsafe {
+            // SAFETY: on TRUE return DPAPI guarantees out_blob.pbData is a valid
+            // Windows-allocated buffer of out_blob.cbData bytes (null check above
+            // is defensive against contract violations).
             std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec()
         };
-        unsafe { LocalFree(out_blob.pbData as _); }
+        unsafe {
+            // SAFETY: out_blob.pbData was allocated by DPAPI via LocalAlloc; per MS
+            // docs caller is responsible for LocalFree. Buffer is no longer used
+            // (we already copied into `result`).
+            LocalFree(out_blob.pbData as _);
+        }
         Ok(result)
     }
 }
@@ -116,8 +150,7 @@ impl CryptoService for DpapiCryptoService {
 }
 
 /// 持有 secret plaintext 的 wrapper, Drop 时 zeroize。
-#[derive(Zeroize)]
-#[zeroize(drop)]
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct SecretValue(pub Vec<u8>);
 
 impl std::fmt::Debug for SecretValue {

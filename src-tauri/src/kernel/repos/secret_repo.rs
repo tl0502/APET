@@ -142,4 +142,15 @@ mod tests {
         let secret = repo.get(&mut conn, "k").await.unwrap();
         assert_eq!(secret.0, b"v2");
     }
+
+    #[tokio::test]
+    async fn delete_removes_key_and_subsequent_get_returns_not_found() {
+        let mut conn = setup_test_db().await;
+        let repo = SecretRepo::new(Arc::new(DpapiCryptoService));
+        repo.set(&mut conn, "k", b"v").await.unwrap();
+        repo.delete(&mut conn, "k").await.unwrap();
+        assert!(matches!(repo.get(&mut conn, "k").await, Err(SecretError::NotFound(_))));
+        // 二次 delete 也应返 NotFound
+        assert!(matches!(repo.delete(&mut conn, "k").await, Err(SecretError::NotFound(_))));
+    }
 }
