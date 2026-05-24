@@ -72,6 +72,7 @@ pub enum SubsystemId {
     ToolSub,
     LivingSub,
     Surface,
+    /// Stored as `"Soul"` in audit log (Spec §8.2 wording — abbreviated to match Soul subsystem id).
     SoulOverlay,
     Boot,
 }
@@ -121,6 +122,13 @@ pub struct DenyOnlyPermissionService {
 }
 
 impl DenyOnlyPermissionService {
+    /// 构造 DenyOnly 服务。
+    ///
+    /// **ORDER DEPENDENCY** (Spec §11 / Task 6 boot 1-7):
+    /// 调用方必须保证 `db_path` 指向的 SQLite 文件已由 plugin migrations 建好
+    /// (即 Task 6 boot 步骤 3 之后) 才能调 `read_context`。`connect_at` 用
+    /// `create_if_missing(false)`, DB 不存在时 audit 写失败 — 但 Denied 不变量
+    /// 由 `read_context` 内部 swallow-and-eprintln 保证, 不会回退到 Ok(Some)。
     pub fn new(audit_repo: Arc<PermissionRepo>, db_path: std::path::PathBuf) -> Self {
         Self {
             audit_repo,
@@ -149,10 +157,35 @@ impl PermissionService for DenyOnlyPermissionService {
         used_for: &str,
         actor: SubsystemId,
     ) -> Result<Option<ContextValue>, PermissionError> {
-        let mut conn = crate::services::db::connect_at(&self.db_path).await?;
-        self.audit_repo
-            .append_denied(&mut conn, scope.as_str(), actor.as_str(), used_for, None)
-            .await?;
+        // **DenyOnly 不变量**: 无论 audit 写入是否成功, 必须返回 Denied。
+        // 审计失败仅 eprintln 留痕, 绝不传播为 PermissionError::Db / PermissionError::Repo
+        // (避免 caller 误以为不是 Denied 状态而 log-and-continue, 击穿 Phase A0 deny gate)。
+        match crate::services::db::connect_at(&self.db_path).await {
+            Ok(mut conn) => {
+                if let Err(e) = self
+                    .audit_repo
+                    .append_denied(&mut conn, scope.as_str(), actor.as_str(), used_for, None)
+                    .await
+                {
+                    eprintln!(
+                        "[kernel.permission_service] audit write failed (scope={}, actor={}): {} \
+                         — Denied invariant preserved",
+                        scope.as_str(),
+                        actor.as_str(),
+                        e
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[kernel.permission_service] connect_at failed for audit (scope={}, actor={}): {} \
+                     — Denied invariant preserved",
+                    scope.as_str(),
+                    actor.as_str(),
+                    e
+                );
+            }
+        }
         Err(PermissionError::Denied {
             scope: scope.as_str().to_string(),
             reason: "Phase A0: DenyOnly".into(),
@@ -186,4 +219,25 @@ mod tests {
     }
 
     // read_context audit 写入测试在 Task 6 集成 lib.rs setup 后做 (需要真 DB path)
+
+    #[tokio::test]
+    async fn deny_only_read_context_returns_denied_even_when_db_missing() {
+        // Pin Phase A0 invariant: DB unavailable → still Denied, never Db / Repo error
+        let repo = Arc::new(PermissionRepo::new());
+        let bogus_path = std::path::PathBuf::from("/__definitely_does_not_exist__/no.db");
+        let svc = DenyOnlyPermissionService::new(repo, bogus_path);
+        let result = svc
+            .read_context(
+                ContextScope::ForegroundAppName,
+                "test_proactive_eval",
+                SubsystemId::InitiativeSub,
+            )
+            .await;
+        match result {
+            Err(PermissionError::Denied { scope, .. }) => {
+                assert_eq!(scope, "foreground_app_name");
+            }
+            other => panic!("expected Denied (invariant), got {:?}", other),
+        }
+    }
 }
