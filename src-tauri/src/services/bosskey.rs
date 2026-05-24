@@ -40,8 +40,8 @@ use tauri_plugin_notification::NotificationExt;
 use crate::services::config;
 use crate::services::consent_gate::ConsentGate;
 use crate::services::window_actions::{
-    CHAT_WINDOW_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL, VISIBILITY_CHANGED_EVENT,
-    WORKSPACE_WINDOW_LABEL,
+    CHAT_WINDOW_LABEL, PET_COMMAND_OVERLAY_LABEL, PET_REMINDER_OVERLAY_LABEL,
+    PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL, VISIBILITY_CHANGED_EVENT, WORKSPACE_WINDOW_LABEL,
 };
 
 pub const CONFIG_KEY_SHORTCUT_BOSSKEY: &str = "shortcut:bosskey";
@@ -53,11 +53,16 @@ pub const KV_PENDING_REMINDERS: &str = "boss_key_pending_reminders";
 
 /// 隐藏窗集合（flows §12.1 Updated 2026-05-24）。
 /// onboarding 不在内 —— BossKey 在 onboarding 期已被 consent_gate 拦截。
+/// 2026-05-24 第二轮 pet UI 重构：追加 pet-reminder / pet-command 两 overlay；
+/// hide 时若未 visible 自然跳过（show_overlay 是幂等），recover 时同步 show 让用户
+/// toggle 回来后 overlay 立即可见（前提是其 content flag 仍为 true）。
 pub const SNAPSHOTABLE_LABELS: &[&str] = &[
     PET_WINDOW_LABEL,
     CHAT_WINDOW_LABEL,
     WORKSPACE_WINDOW_LABEL,
     POMODORO_WINDOW_LABEL,
+    PET_REMINDER_OVERLAY_LABEL,
+    PET_COMMAND_OVERLAY_LABEL,
 ];
 
 /// hide 前为每窗记录的快照。show 时按此恢复。
@@ -530,15 +535,17 @@ mod tests {
         assert!(queue.is_empty());
     }
 
-    /// SNAPSHOTABLE_LABELS 含 4 个目标窗（pet/chat/workspace/pomodoro），不含 onboarding。
-    /// flows §12.1 Updated 2026-05-24 锁定的边界。
+    /// SNAPSHOTABLE_LABELS 含 6 个目标窗（pet/chat/workspace/pomodoro 主体 4 + pet-reminder/pet-command
+    /// overlay 2），不含 onboarding。flows §12.1 Updated 2026-05-24 锁定的边界。
     #[test]
     fn snapshotable_labels_match_flows_12_1() {
-        assert_eq!(SNAPSHOTABLE_LABELS.len(), 4);
+        assert_eq!(SNAPSHOTABLE_LABELS.len(), 6);
         assert!(SNAPSHOTABLE_LABELS.contains(&PET_WINDOW_LABEL));
         assert!(SNAPSHOTABLE_LABELS.contains(&CHAT_WINDOW_LABEL));
         assert!(SNAPSHOTABLE_LABELS.contains(&WORKSPACE_WINDOW_LABEL));
         assert!(SNAPSHOTABLE_LABELS.contains(&POMODORO_WINDOW_LABEL));
+        assert!(SNAPSHOTABLE_LABELS.contains(&PET_REMINDER_OVERLAY_LABEL));
+        assert!(SNAPSHOTABLE_LABELS.contains(&PET_COMMAND_OVERLAY_LABEL));
         // onboarding 不应在集合内（consent_gate 已前置拦截）
         assert!(!SNAPSHOTABLE_LABELS.contains(&"onboarding"));
     }

@@ -10,13 +10,11 @@
 // 已 setSize，前端 ref 还要拉一次让 size computed 同步真值）；同时 listen `pet:view-changed`
 // 接 settings 改 preset 的反向通知。onboarding 窗用同款 PetCanvas 但不参与此体系（默认 half）。
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { emit as emitTauri, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import AppShell from '@/components/layouts/AppShell.vue'
 import PetCanvas from '@/components/PetCanvas.vue'
-import PetCommandTray from '@/components/PetCommandTray.vue'
 import PetOnboardingBubble from '@/components/PetOnboardingBubble.vue'
-import PetReminderBubble from '@/components/PetReminderBubble.vue'
 import { useToast } from '@/composables/useToast'
 import { useSnapWindow } from '@/composables/useSnapWindow'
 import type { InteractionContextMenuEvent } from '@/composables/useInteractionRaycaster'
@@ -75,20 +73,14 @@ const snapPreviewStyle = computed(() => ({
 const view = ref<AvatarView>('half')
 const size = computed(() => PET_VIEW_SIZES[view.value])
 
-// PetCommandTray (2026-05-24 UI 重构) 状态提升：commandTrayContext 非 null = tray 打开。
-// 同时透传 commandTrayOpen 给 PetReminderBubble，让它强制 collapsed + 降透明度避让。
-const commandTrayContext = ref<(InteractionContextMenuEvent & { close: () => void }) | null>(
-  null,
-)
-const commandTrayOpen = computed(() => commandTrayContext.value !== null)
-
+// 2026-05-24 pet UI 重构第二轮：PetCommandTray / PetReminderBubble 已迁出 pet 窗到
+// 独立 Tauri overlay 窗（pet-command / pet-reminder）。pet 窗 contextmenu 只 emit 全局
+// Tauri 事件 `pet:contextmenu:request-open`，由 pet-command overlay 接收 v-if 显示，
+// Rust services/pet_overlay.rs 同步 show overlay window。位置由 Rust 算，不传前端 x/y。
 function onPetContextmenu(ctx: InteractionContextMenuEvent & { close: () => void }) {
-  commandTrayContext.value = ctx
-}
-
-function closeCommandTray() {
-  commandTrayContext.value?.close()
-  commandTrayContext.value = null
+  void emitTauri('pet:contextmenu:request-open', { reaction: ctx.reaction })
+  // 立刻清本地 contextMenu ref，让下次右键能再次触发（不依赖 overlay 反馈关闭）
+  ctx.close()
 }
 
 function asPreset(payload: unknown): PetViewPreset {
@@ -187,15 +179,7 @@ onBeforeUnmount(() => {
 <template>
   <AppShell variant="transparent" :class="snapPreviewClass" :style="snapPreviewStyle">
     <PetCanvas :view="view" :size="size" @contextmenu="onPetContextmenu" />
-    <PetReminderBubble :tray-open="commandTrayOpen" />
     <PetOnboardingBubble />
-    <PetCommandTray
-      v-if="commandTrayContext"
-      :x="commandTrayContext.x"
-      :y="commandTrayContext.y"
-      :pet-size="size"
-      @close="closeCommandTray"
-    />
   </AppShell>
 </template>
 
