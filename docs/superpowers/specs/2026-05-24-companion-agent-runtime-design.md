@@ -1,5 +1,5 @@
 ---
-title: Companion Agent Runtime v2 — Revised MVP Architecture Spec (post review)
+title: Companion Agent Runtime v3 — Phase A0/A1/A2 + Persona Rebinding Rules (post review-2)
 updated: 2026-05-24
 related:
   - ../../decisions.md
@@ -9,30 +9,28 @@ related:
   - ../../roadmap/development-roadmap.md
 ---
 
-# Companion Agent Runtime v2 — Revised MVP Architecture Spec
+# Companion Agent Runtime v3 — Revised MVP Architecture Spec
 
-> **第三方审核结论 (2026-05-24)**: v1 架构方向通过, MVP 范围 / 隐私模型 / 人格 session / Soul 格式 / Tool 授权 / Context 感知 / Memory / StateStore 八项收紧后重新出 v2。
-> **Audience**: 项目核心开发 + 第三方架构审核。本文档**自包含**, 不要求读者预读其他 docs/。
-> **Status**: Brainstorm v2, 等 second review; 通过后进入 implementation plan 阶段。
-> **Spec scope**: 顶层 Runtime 架构 + 7 件 kernel + 6 件 subsystem 契约 + **三阶段** MVP 实现范围 (Phase A P0 / Phase B nice / Phase C P1 deferred)。
+> **第三方审核 v2 verdict (2026-05-24)**: v2 架构方向通过, 10 项收紧后出 v3 进入 **Phase A0 开发就绪**。
+> **Audience**: 项目核心开发 + 第三方架构审核。本文档**自包含**。
+> **Status**: Brainstorm v3, 等 third review (若需);通过后进入 implementation plan 阶段。
+> **Spec scope**: 顶层 Runtime 架构 + 7 件 kernel + 6 件 subsystem 契约 + **四阶段** MVP (Phase A0/A1/A2/B/C)。
 
-## v1 → v2 主要变更（review 落地清单）
+## v2 → v3 主要变更（review-2 落地清单）
 
-| # | 项 | v1 | v2 |
+| # | 项 | v2 | v3 |
 |---|---|---|---|
-| 1 | 隐私模型 | 永远不读 app/window/mic | **默认不读**, 可选 Context Awareness **显式授权增强** (P1+) |
-| 2 | Soul 格式 | `.soul.md` 单文件 | `.soul/` **多文件包** + `.soulpack` 分发 + **SoulCompiler** + **PersonaSnapshot** |
-| 3 | Persona Session | conversation 读 active_persona | conversation **强绑定** `persona_snapshot_id`, 活跃人格切换不污染历史会话 |
-| 4 | MVP 范围 | 7.5 周完整 7 件套一次性 | **三阶段**: Phase A P0 (~3 周, 安全+对话稳定) / Phase B nice (~2 周, 主动陪伴闭环) / Phase C P1 (deferred, Tool+FTS5) |
-| 5 | SafetyGuard | 简单 wrap+scan | **7-state FSM**: pending/streaming/stream_soft_blocked/final_ok/final_redacted/final_blocked/scan_failed |
-| 6 | Tool Grant | 走 EventBus | **同步 request/response** via **GrantBroker** (hot path, 非 post-hoc) |
-| 7 | 权限域 | Tool / Soul 二分 | **Tool / Context Awareness / Soul 三分**; Soul 不能扩大任何权限 |
-| 8 | Memory MVP | KV + episodic + FTS5 + 摘要 一次到位 | MVP=**KV → prompt + token-aware history window + 可选 rolling_summary**; episodic + FTS5 + RetrievalRanker 推 **Phase C P1** |
-| 9 | StateStore | `WriterCap<T>` 编译期保护 | MVP=**Repository pattern** per owner; WriterCap 推 P1 hardening |
-| 10 | EventBus 失败 | publish 失败 → panic / Suspend | **分级降级**: messages fatal-for-conv / tool_audit fail → 禁 ToolSub / event_log fail → error_logs 不 panic |
-| 11 | Kernel 件数 | 5 件 | **7 件** (+ **PermissionService** + **GrantBroker**) |
-| 12 | Constitution | 8 条 | **14 条** (+6 新: Privacy by Default / Session Persona Stability / Soul Cannot Grant / Soul Package Compile Boundary / Tool Grant Sync / Memory MVP First) |
-| 13 | 新 ADR | 025/026/027 | 025/026/027 + **028 Soul Package** + **029 Context Awareness Permission** |
+| 1 | Soul 术语统一 | `.soul.md` / `.soul/` / `.soulpack` 残留混用 | **`.soul/` 一等格式** / `.soulpack` 分发 / `.soul.md` legacy 输入;§2.6.1 Soul Package Terminology |
+| 2 | Phase A 拆分 | 单 Phase A ~3w | **Phase A0 Safety & Secrets (~1w) / A1 Persona Snapshot & Soul Package (~1.5w) / A2 Conversation Memory & History Stability (~0.5-1w)** |
+| 3 | Phase A DoD | (无) | **每个 sub-phase 独立 DoD** (§14.x) |
+| 4 | 旧 conversation migration | 默认 `COALESCE 'momo'` silent backfill | **cascade**: existing persona_id → metadata/messages → `LegacyUnknownSnapshot`; SQLite 两步 ALTER |
+| 5 | SafetyGuard Scan Scope | §6.6 提及无矩阵 | **Scan Scope Matrix 7 项** (user input / stream token / final text / memory KV / rolling_summary / tool result / context snapshot); 分 **SafetyPrefix vs SafetyScanRules** |
+| 6 | Memory MVP rolling_summary | "可选" | **默认关闭 / deterministic placeholder**; 自动 LLM rolling summary 推 P1 (要求 provider check / token budget / SafetyGuard scan / fallback) |
+| 7 | PermissionService Phase A | "stub" | **DenyOnly stub**: 绝不调 GetForegroundWindow/getUserMedia/MediaRecorder/BitBlt; request_context 默认 denied + 审计 |
+| 8 | GrantBroker Phase A | "stub" | **trait + DenyAllGrantBroker / MockGrantBroker only**; 无 UI modal / 无 persistent cache / 不接 ToolSub |
+| 9 | Repository transaction | 未详 | **raw `sqlx::Pool` 仅 kernel/db 可见 + RuntimeUnitOfWork 跨 owner tx + migration 唯一 raw SQL 例外** |
+| 10 | `.soulpack` 安全导入 | 未详 | **10 项硬规则** (max size / 禁绝对路径 / 禁 ../ / 禁 symlink / 禁可执行 / 扩展 allowlist / manifest 在根 / temp dir 解 / validate 通过移动 / 失败清理) |
+| 11 | Persona Rebinding Rules | 仅"active 切换不污染" | **完整 11 条 + 4 UI 状态 (UpToDate / SamePersonaOutdated / DifferentFromActivePersona / LegacyUnknownPersona) + 判断表 + Snapshot 冻结 vs 不冻结 carve-out + fork 默认 = 复制 history + 切到新 conv** |
 
 ---
 
@@ -42,7 +40,7 @@ related:
 
 **AIPET**（AI Desktop Pet, 内部代号）是一个 Windows 桌面 AI 桌宠应用。10 周 MVP, 单人 vibecoding 项目。差异化定位三引擎:
 
-1. **用户自主人格**: 角色定义文件 `.soul.md` 归属用户(参考 OpenClaw 开源项目验证可行)。用户可编辑、可分享、可从零创建。
+1. **用户自主人格**: 角色定义采用 **`.soul/` 多文件包**作为底层一等格式 (manifest+identity+style+initiative+memory+examples);用户可分享的 `.soulpack` 是 zip 分发格式;`.soul.md` 是 legacy / simple 模式输入, 由 SoulCompiler 转换为默认 `.soul/` 布局。参考 OpenClaw 开源项目验证可行。用户可编辑、可分享、可从零创建。详见 §2.6 与 ADR-028。
 2. **主动陪伴**: 桌宠**默认**基于本地空闲信号(GetLastInputInfo)主动起话题。**默认不读**窗口标题/应用名/输入内容/麦克风/屏幕内容。这些能力作为**可选 Context Awareness 增强**仅在用户**显式授权**后开放(P1+, 见 ADR-029)。
 3. **共同活动**: 物理交互(摸头/抗议/拖动反应)、装扮系统、声音表情、本地小游戏(3 个) + LLM 小游戏(2 个,故事接龙 + 角色扮演)。
 
@@ -90,10 +88,10 @@ related:
 ### 0.5 项目设计哲学（不可被本 spec 违反）
 
 1. **Local-first**: 不引入用户数据强制上传。所有 LLM 调用经用户配置的 provider。
-2. **用户自主权**: `.soul.md`/装扮/设置完全归用户;用户能读、能改、能导出、能迁移。
+2. **用户自主权**: `.soul/` 包 (含 `.soulpack` 导入导出 + `.soul.md` legacy 输入) / 装扮 / 设置完全归用户;用户能读、能改、能导出、能迁移。
 3. **非养成原则**: 不引入流失/死亡/必须签到机制。
 4. **隐私边界 (默认保守 + 可选授权)**: **默认不读**应用名/窗口标题/输入内容/麦克风/屏幕内容(CI 静态扫描黑名单含 `getUserMedia` / `MediaRecorder` / `GetForegroundWindow` / `GetWindowText`)。Context Awareness 作为 P1+ 增强能力, 仅在用户**显式授权**后通过 **PermissionService** 统一开闸, 可撤销, 可审计 (`context_access_log` 表)。Soul / Persona **不能**启用、扩大或绕过权限。
-5. **安全护栏不可绕过**: 任何人格/游戏场景不能覆盖系统安全前缀。
+5. **安全护栏不可绕过**: 任何人格 / 游戏场景 / `.soul/` 自定义内容不能覆盖系统安全前缀;SoulValidator 拒绝 manifest 出现 permissions/tools/safety_prefix 字段 (Constitution #11)。
 
 ### 0.6 当前 AI 路径关键缺口（本 spec 解决的根本问题）
 
@@ -394,29 +392,91 @@ Tauri 主进程常驻 (process always-on),但 **state machine tick + agent loop 
 
 **为什么**: 桌宠商品定位与"屏幕监听 Agent"差异本质在隐私态度。审核者指出 v1 "永不读取" 一句话会与 P1+ 路线自相矛盾;但若直接改成"会读取"又损害定位。正解是 **default off + 显式 opt-in + 三权限域分离**。
 
-### 2.5 Session Persona Stability
+### 2.5 Session Persona Stability + Rebinding Rules
 
-> v2 新增 First Principle, reviewer P0。**人格切换不污染历史会话**。
+> v2 新增 First Principle, reviewer P0;v3 review-2 补完整 **Persona Rebinding Rules 11 条** + UI 状态 + 判断表 + Snapshot 冻结边界。
 
-**规则**:
-- `conversations` 表必须有 `persona_id` + `persona_snapshot_id` 双字段; **创建会话时绑定**, 之后**不变** (除非用户显式"为此会话换人格"操作, 走单独 IPC, 写新 snapshot)
-- 用户 active persona 切换 (设置面板 / 试聊沙盒 / persona.activate):
+**核心规则**:
+- `conversations` 表必须有 `persona_id` + `persona_snapshot_id` 双字段; **创建会话时绑定**, 之后**不会被 runtime 静默修改**
+- 用户 active persona 切换 (设置面板 / 试聊沙盒 / `persona.activate`):
   - **仅影响**: 新会话默认人格 / 桌宠 idle / proactive 表现 / 未绑定会话的轻量气泡
   - **不影响**: 已存在的 conversation system prompt / 已发送消息的语气包装
-- 人格编辑 (`.soul/` 文件被修改):
-  - 旧 conversation 仍使用**当时绑定**的 snapshot (`persona_snapshot_id` 不会被悄悄替换)
-  - 用户可在 UI 手动选择"应用最新人格到此会话",触发显式 snapshot 重绑定
 
-**Hot path 改变**:
+**Hot path 强制路径**:
+
 ```
 v1 (错):  ConversationSub.handle_user_message → PersonaSub.read_active() → build_prompt
-v2 (对):  ConversationSub.handle_user_message(conv_id)
+v2/v3:    ConversationSub.handle_user_message(conv_id)
           → ConversationStore.read(conv_id) → persona_snapshot_id
           → PersonaSub.read_snapshot(persona_snapshot_id)
           → PromptBuilder.build(runtime_profile, ...)
 ```
 
-**为什么**: 陪伴产品中 persona 不是 UI theme, 是**关系上下文**。用户对 momo 说过的私密话不该因为切到 joker 就被"出戏"地引用。snapshot 是稳定锚, 也是 ToolSub / MemorySub audit 绑定 actor 的稳定 id。
+#### 2.5.1 Conversation Persona Rebinding Rules (v3 新增, 11 条)
+
+| # | 规则 | 实施 |
+|---|---|---|
+| 1 | `active_persona_id` 切换不会自动修改任何 existing conversation 的 `persona_snapshot_id` | ConversationSub 严禁监听 `persona.activated` 事件去 update conv;Constitution #10 加强 |
+| 2 | 修改 `.soul/` 文件 (或导入新 `.soulpack`) 后, PersonaSub 必须**生成新 PersonaSnapshot** | source_hash 改变 → 新 row in `persona_snapshot_profiles`;旧 snapshot 保留供历史会话使用 |
+| 3 | 新 conversation 默认使用该 persona 的 **latest snapshot** | `ConversationSub.create_conversation(persona_id)` 内部 `PersonaSub.read_latest_snapshot(persona_id)` |
+| 4 | 旧 conversation 继续使用**原 `persona_snapshot_id`**, 与 latest snapshot 解耦 | hot path 强制 read by snapshot_id (Constitution #10) |
+| 5 | 若旧 conversation 的 `persona_id` **与 latest snapshot persona_id 相同**, 用户可在 UI 选择"切换到最新版" → **原地 rebind**, 更新从下一条消息开始生效 | UI 状态 `SamePersonaOutdated`;触发 `ConversationSub.rebind_persona_snapshot(conv_id, latest_snapshot_id)` |
+| 6 | 若 `active_persona_id` **与 conversation.persona_id 不同**, 用户选择"用当前人格继续"时, **默认 fork conversation** (复制全部 history + 用 active persona snapshot + 切到新 conv;原 conv 保留, 仍可继续用原 persona) | UI 状态 `DifferentFromActivePersona`;`ConversationSub.fork_conversation(source_conv_id, target_persona_snapshot_id)` |
+| 7 | 所有 rebind / fork 都**必须可审计**, 记录 `from_snapshot` / `to_snapshot` / `reason` / `created_at` / `actor` | 新表 `persona_rebind_audit` (Phase A1 新增) |
+| 8 | **Silent rebinding forbidden**: Runtime 不得因为 active persona 切换或 `.soul/` 文件变化而静默重绑 conversation.persona_snapshot_id | Constitution #10 加 sub-rule;CI 静态扫描禁止 `conversations.persona_snapshot_id` 在 ConversationSub 之外被 UPDATE |
+| 9 | UI 状态有 4 种 (见 §2.5.2 表) | `ConversationSub.get_persona_status(conv_id)` 返枚举 |
+| 10 | 判断表 (见 §2.5.3) 决定每个 UI 状态下的允许动作 | 实现在 UI 层 + ConversationSub trait method |
+| 11 | PersonaSnapshot **只冻结人格定义**, 不冻结 SafetyGuard / Permission / Tool whitelist / nickname / user preference / mood/energy 等 Core/User/Runtime state (见 §2.5.4 carve-out 表) | SoulRuntimeProfile schema 严格限定字段 |
+
+#### 2.5.2 UI 状态枚举 (4 种)
+
+```rust
+pub enum ConvPersonaStatus {
+    /// conversation.persona_snapshot_id == latest_snapshot_of(conversation.persona_id)
+    /// AND conversation.persona_id == active_persona_id
+    UpToDate,
+
+    /// conversation.persona_snapshot_id != latest_snapshot_of(conversation.persona_id)
+    /// 即同人格但 .soul/ 已被编辑过, 生成了新 snapshot
+    /// (active persona 是否 = conv persona 不影响此状态)
+    SamePersonaOutdated { latest_snapshot_id: SnapshotId },
+
+    /// active_persona_id != conversation.persona_id
+    /// 用户切了 active persona, 但本会话绑定的是另一个人格
+    DifferentFromActivePersona { active_persona_id: PersonaId, active_snapshot_id: SnapshotId },
+
+    /// conversation.persona_snapshot_id 指向 LegacyUnknownSnapshot
+    /// (migration 时无法推断, 用兜底 snapshot 包住; 详见 §12.2 migration cascade)
+    LegacyUnknownPersona,
+}
+```
+
+#### 2.5.3 判断表 (UI 状态 → 允许动作)
+
+| UI 状态 | 允许动作 | 默认 |
+|---|---|---|
+| `UpToDate` | (无 rebind 需要) | 直接对话 |
+| `SamePersonaOutdated` | ① 保留原 snapshot 继续对话 / ② 显式"切换到最新版"原地 rebind | 保留 (用户主动点才 rebind) |
+| `DifferentFromActivePersona` | ① 保留原 conv 用原 persona / ② 显式"用当前人格继续" → **fork** 到新 conv (复制 history) | 保留 (用户主动点才 fork) |
+| `LegacyUnknownPersona` | 保持 LegacyUnknownSnapshot (兜底 prompt) / 用户可显式绑定到某 active persona (fork OR 原地 rebind 由用户选) | 保持迁移人格 (兜底), 允许显式绑定或 fork |
+
+#### 2.5.4 PersonaSnapshot 冻结边界 (carve-out)
+
+| **在 Snapshot 内 (会被冻结)** | **不在 Snapshot 内 (Conversation 始终读最新)** |
+|---|---|
+| `identity_prompt` | safety prefix (kernel-level, SafetyGuard.load 时全局加载) |
+| `style_prompt` | safety scan rules (kernel-level) |
+| `initiative_config` (proactivity / quiet_hours 默认) | tool whitelist / denylist (kernel-level, ADR-025) |
+| `memory_policy` (KV scope) | PermissionService grants (用户全局, 跨人格共享) |
+| `examples` (few-shot 对话样本) | nickname (用户属性, persona-scoped KV 但不冻结) |
+| `ui_metadata` (头像 / 主题色) | user_preference (用户全局) |
+| `source_hash` (`.soul/` 树的 hash) | mood / energy (Living state, lazy aging) |
+|   | rolling_summary (Conversation state, 不冻结) |
+|   | conversations.archived / title (Conversation state) |
+
+**为什么 carve-out**: 用户改昵称 / 调 safety prefix / 改隐私设置不应被人格 snapshot 锁住。否则用户每改一次设置就要 fork 所有 conversation, 不可接受。Snapshot 锚定**人格定义**, 不锚定 Core/User/Runtime 状态。
+
+**为什么**: 陪伴产品中 persona 不是 UI theme, 是**关系上下文**。用户对 momo 说过的私密话不该因为切到 joker 就被"出戏"地引用。snapshot 是稳定锚, 也是 ToolSub / MemorySub audit 绑定 actor 的稳定 id。Rebinding/fork 的语义清晰 + 用户主动 = 产品信任与工程稳定的双底线。
 
 ### 2.6 Soul Package Compile Boundary
 
@@ -424,10 +484,10 @@ v2 (对):  ConversationSub.handle_user_message(conv_id)
 
 **问题**: `.soul.md` 单文件 markdown 被 PromptBuilder / ToneShaper / InitiativeWeights / MemoryPolicy / UI 编辑器五方各自解析 → 长期不可维护。
 
-**v2 解法**:
+**v2/v3 解法**:
 
 ```
-.soul/ package (源, 用户编辑)
+.soul/ package (源, 用户编辑) — 一等格式
 ├── manifest.toml           ← schema / id / name / version / author
 ├── identity.md             ← LLM 用 system prompt 来源
 ├── style.toml              ← 语气 / 口头禅 / 表情 token (ToneShaper 用)
@@ -438,8 +498,8 @@ v2 (对):  ConversationSub.handle_user_message(conv_id)
 
          ↓ SoulPackageParser + SoulValidator
          ↓ schema_version check / required fields
-         ↓ deny manifest 篡改 SAFETY_PREFIX / 系统约束
-         ↓ SoulCompiler (kernel-internal service)
+         ↓ deny manifest 篡改 SAFETY_PREFIX / 系统约束 / permissions / tools
+         ↓ SoulCompiler (PersonaSub-internal service)
 
 SoulRuntimeProfile { identity_prompt, style_prompt, initiative_config,
                      memory_policy, examples, ui_metadata, source_hash }
@@ -457,9 +517,61 @@ PersonaSnapshot (运行时锚, conversation 绑定, audit 锚)
 - MemorySub 读 `memory_policy`
 - UI 读 `ui_metadata` + 原始 `.soul/` 文件用于编辑器
 
-**分发格式**: `.soulpack` = `.soul/` 目录的 zip 归档 (用户分享 / OpenClaw 兼容路径), 导入时 unzip → 同样走 SoulCompiler。
+#### 2.6.1 Soul Package Terminology (v3 新增, 统一术语)
 
-**为什么**: 单文件 markdown 多方解析 = schema 演进瘫痪。多文件包 + compile 一次 + snapshot 锚定 = 编辑安全 / 运行高效 / 审计稳定 / 高级编辑器友好。`.soul.md` 简单模式 P1 可作为 SoulCompiler 输入的特殊形式 (单文件 → 默认 .soul/ 布局), 但 MVP 起点是 `.soul/` 目录。
+| 术语 | 定义 | 状态 | 谁产 / 谁消费 |
+|---|---|---|---|
+| **`.soul/` 目录** | 底层**一等格式**, 多文件目录 (manifest.toml + identity.md + style.toml + initiative.toml + memory.toml + examples.md + 可选 assets/) | 一等 (Phase A1 起) | 用户直接编辑 / SoulCompiler 输入 |
+| **`.soulpack` 文件** | **分发格式**, `.soul/` 目录的 zip 归档, 用户跨设备 / 跨用户分享, OpenClaw 路径兼容 | 一等 (Phase A1 起) | 用户导入导出 / 必经 SoulPackageImporter 安全 unzip → 之后等价 `.soul/` |
+| **`.soul.md` 单文件** | **legacy / simple 输入**, 仅 identity 部分 | 兼容支持 (P1+ 重新评估是否保留) | 用户简单模式 / SoulCompiler 的 `LegacyMd` 输入路径 → 内部转默认 `.soul/` 布局 |
+| **SoulPackage** | 解析后的中间数据结构 (Rust struct), 含 manifest + 各 section 原文 | 内部 (kernel/PersonaSub) | SoulPackageParser 产 / SoulValidator + SoulCompiler 消费 |
+| **SoulRuntimeProfile** | SoulCompiler 输出, 含 identity_prompt / style_prompt / initiative_config / memory_policy / examples / ui_metadata / source_hash | 内部 (PersonaSub + Soul Overlay) | SoulCompiler 产 / 4 Soul Overlay 组件消费 |
+| **PersonaSnapshot** | 写入 `persona_snapshot_profiles` 表的稳定 row, 含 snapshot_id + SoulRuntimeProfile + created_at | 内部 (PersonaSub) | PersonaSub.activate / load_soul_package 产 / ConversationSub 强绑 (Constitution #10) |
+
+**v3 关键不混用**:
+- 严禁混用"`.soul.md` 是 schema v2" (旧措辞), v3 起 `.soul.md` 仅是 SoulCompiler 输入路径之一
+- 严禁说"导入 `.soul/` 文件" — 应说"导入 `.soulpack` 文件" 或 "打开 `.soul/` 目录"
+
+#### 2.6.2 `.soulpack` 安全导入规则 (v3 新增, P0)
+
+> 用户分享的 `.soulpack` 是真实攻击面 (path traversal / zip bomb / symlink / 可执行文件 / 篡改安全约束)。Phase A1 SoulPackageImporter 必须满足以下 10 条:
+
+| # | 规则 | 实施 |
+|---|---|---|
+| 1 | **Max size 限制**: `.soulpack` ≤ 10 MB (含 assets), 单个内部文件 ≤ 2 MB | unzip 前先读 zip header 累加 uncompressed 大小, 超限早返 `ImportError::SizeLimit` |
+| 2 | **禁止绝对路径**: zip 内 entry 路径必须相对 | 任一 entry 以 `/` 或 `C:\` 等开头 → reject |
+| 3 | **禁止 `../`**: 防 path traversal | entry 路径 normalize 后检查不含 `..` 段 |
+| 4 | **禁止 symlink**: 不跟随任何 symlink entry | zip entry attribute 检查 symlink flag, 命中 → reject |
+| 5 | **禁止可执行文件**: 任何 `*.exe / *.dll / *.bat / *.ps1 / *.sh / *.cmd / *.scr / *.com` | 扩展黑名单检查;Phase A1 仅允许扩展 allowlist (第 6 条) |
+| 6 | **文件扩展 allowlist**: `.toml / .md / .json / .txt / .png / .jpg / .jpeg / .gif / .webp / .wav / .mp3 / .ogg` (Phase A1 仅 toml + md;音频/图片 P1+) | unzip 时按扩展过滤, 非 allowlist → reject 整个包 |
+| 7 | **manifest.toml 必须在 zip 根** | 解压后必须存在 `<root>/manifest.toml`, 否则 reject |
+| 8 | **解包到 temp dir**: 不直接落到 `%APPDATA%\AIDesktopPet\personas\user\` | `std::env::temp_dir().join(uuid)`, 避免污染目标目录 |
+| 9 | **validate 通过后移动**: SoulValidator.validate 通过 (含 manifest schema_version 校验 + permissions/tools/safety 字段 deny) 才移动到目标目录 | atomic rename;移动失败回滚到 temp |
+| 10 | **失败清理**: 任一步失败必须 rm -rf temp dir | RAII `TempDir` guard;Drop 时自动清理 |
+
+```rust
+pub trait SoulPackageImporter: Send + Sync {
+    /// 安全 unzip + validate + 移动到 personas/user/{persona_id}
+    /// 全程在 temp dir 操作, validate 通过才落到目标目录
+    async fn import_soulpack(&self, source: &Path) -> Result<PersonaId, ImportError>;
+}
+
+pub enum ImportError {
+    SizeLimit { actual: u64, max: u64 },
+    AbsolutePath(PathBuf),
+    PathTraversal(PathBuf),
+    Symlink(PathBuf),
+    ExecutableForbidden(PathBuf),
+    ExtensionNotAllowed { path: PathBuf, ext: String },
+    ManifestNotInRoot,
+    ValidationFailed(SoulValidationError),
+    IoError(io::Error),
+}
+```
+
+**分发格式**: `.soulpack` = `.soul/` 目录的 zip 归档, 经 SoulPackageImporter 通过 10 条规则后落到 `personas/user/{persona_id}/`, 之后走相同 SoulCompiler 路径。
+
+**为什么**: 单文件 markdown 多方解析 = schema 演进瘫痪。多文件包 + compile 一次 + snapshot 锚定 = 编辑安全 / 运行高效 / 审计稳定 / 高级编辑器友好。`.soul.md` 简单模式作为 SoulCompiler 输入的特殊形式 (单文件 → 默认 `.soul/` 布局), 但 MVP 起点是 `.soul/` 目录。`.soulpack` 安全规则防真实分发攻击面。
 
 ### 2.7 Tool Grant Is Synchronous Request/Response
 
@@ -496,11 +608,11 @@ PersonaSnapshot (运行时锚, conversation 绑定, audit 锚)
 | **7. Hot Path Sync** | user → reply 全程同步 | EventBus 仅用于 post-hoc(persist / broadcast / telemetry / proactive evaluate);不在 hot path 上。**GrantBroker.request 是同步 await, 不走 EventBus** (Constitution #13) |
 | **8. MVP First / Trait Cap** | 新概念必经 MVP 必要性证明 | trait ≤ **17** (kernel 7 + subsystem 6 + soul 4);event ≤ 15;subsystem = 6 封顶,新功能挂到现有 subsystem |
 | **🆕 9. Privacy by Default** | 默认主动陪伴只用 idle + 本地 runtime state | app/window/selected text/mic/screen 必须经 PermissionService 显式授权;默认 deny;每次访问写 `context_access_log`;Soul / Initiative / Tool 任何越过 PermissionService 直接读 OS 上下文 = build fail (CI 静态扫描黑名单 `getUserMedia` / `MediaRecorder` / `GetForegroundWindow` / `GetWindowText` / `BitBlt` 等) |
-| **🆕 10. Session Persona Stability** | active persona 切换不污染历史会话 | `conversations.persona_snapshot_id NOT NULL`;hot path 必须 `ConversationStore.read(conv_id).persona_snapshot_id` → `PersonaSub.read_snapshot(id)`, 严禁 fallback 到 `PersonaSub.read_active()`;persona 编辑 → 旧会话 snapshot 不变 (要换需显式用户操作) |
+| **🆕 10. Session Persona Stability + No Silent Rebinding** | active persona 切换不污染历史会话 / runtime 不静默重绑 | `conversations.persona_snapshot_id NOT NULL`;hot path 必须 `ConversationStore.read(conv_id).persona_snapshot_id` → `PersonaSub.read_snapshot(id)`, 严禁 fallback 到 `PersonaSub.read_active()`;persona 编辑 → 旧会话 snapshot 不变 (要换需显式用户操作);**Runtime 不得因为 active persona 切换或 `.soul/` 文件变化而 UPDATE conversations.persona_snapshot_id** (CI 静态扫描禁止此 UPDATE 出现在 ConversationSub.rebind_persona_snapshot / fork_conversation 之外的任何代码) |
 | **🆕 11. Soul Cannot Grant Permissions** | Soul 文件不能扩大权限 | SoulValidator 拒绝 manifest 出现 `permissions: [...]` / `context_scopes: [...]` / `tools: [...]` 字段;Soul 输出仅 prompt 文本 + score 数值;Soul 不能让 LLM emit 触发 PermissionService 改设置的 tool_call (Tool denylist) |
 | **🆕 12. Soul Package Compile Boundary** | 运行时不散读 `.soul/` 文件 | PersonaSub.activate() 必经 SoulCompiler.compile() → PersonaSnapshot 持久化 → 之后所有 hot path 读 snapshot, 不读源文件;`.soul/` 源文件变化不会即时影响运行时, 必须显式 recompile |
 | **🆕 13. Tool Grant Is Synchronous** | GrantBroker 是 hot path | `request_tool_grant` 是 async fn 直接 await 返回 GrantDecision;**严禁**通过 EventBus 发 `tool.grant_request` 让 UI subscribe 再 publish `tool.grant_response` 这种 fake-sync 模式;ToolSub.execute 必须能在用户拒绝 / 超时后干净返 `ToolError::Denied` |
-| **🆕 14. Memory MVP First / Graceful Degradation** | MVP 不上 episodic / FTS5 / LLM 摘要 | Phase A MUST: semantic KV → prompt + recent message token window + 可选 rolling_summary;episodic + FTS5 + RetrievalRanker + LLM 压缩推 Phase C P1;EventBus publish 失败分级 (见 §7.3): 关键 owner 表写失败 fatal, observability event_log 失败 degrade 到 `error_logs` 不 panic |
+| **🆕 14. Memory MVP First / Graceful Degradation** | MVP 不上 episodic / FTS5 / **自动 LLM rolling summary** | Phase A2 MUST: semantic KV → prompt + recent message token window;**rolling_summary 默认关闭 (deterministic placeholder, 不调 LLM)**, 自动 LLM rolling summary 推 P1 (启动前必须满足 4 项前置: provider check / token budget / SafetyGuard scan / 失败 fallback);episodic + FTS5 + RetrievalRanker + LLM 压缩推 Phase C P1;EventBus publish 失败分级 (见 §7.3): 关键 owner 表写失败 fatal, observability event_log 失败 degrade 到 `error_logs` 不 panic |
 
 ---
 
@@ -868,6 +980,39 @@ v2 7-state vs 4 分支:
 | tool result content (P1) | ❌ | ✅ | Phase C, tool 输出可能含 LLM 不该 verbatim 输出的内容 |
 | memory summary content (P1) | ❌ | ✅ | Phase C, 摘要 LLM 产物也走扫 |
 
+#### 6.6.1 SafetyPrefix vs SafetyScanRules (v3 review-2 概念分离)
+
+| 名词 | 作用方向 | 内容 | 应用时机 |
+|---|---|---|---|
+| **SafetyPrefix** | **出**: prompt → LLM | ADR-006 安全前缀文本 (通用核心 + 地区补充) | `SafetyGuard.wrap_messages` 在 system message 第一位拼入 |
+| **SafetyScanRules** | **入**: 各种 content → Runtime | 黑词表 + regex + (P1) classifier | `scan_token` / `scan_final` / `scan_user_input` 分类调用 |
+
+**关键不变量**:
+- SafetyPrefix **不扫**任何东西, 它是出去的; SafetyScanRules **不拼**任何东西, 它是检查进来的
+- 两者都是 kernel-owned, subsystem / Soul 都不能修改
+- SoulValidator 拒绝 `.soul/` manifest 出现 `safety_prefix` / `safety_scan_rules` 字段 (Constitution #11)
+
+#### 6.6.2 Scan Scope Matrix (v3 review-2, 7 项)
+
+> reviewer P0: 必须明确"哪些内容在哪个阶段被扫"。下表是 SafetyScanRules 的完整 scope 矩阵。
+
+| # | Scope (被扫内容) | 来源 | scan_user_input | scan_token | scan_final | Phase | 命中处理 |
+|---|---|---|---|---|---|---|---|
+| 1 | **user input** | 任一 surface 用户输入 | ✅ | — | — | A0 | hit → ChatError::UnsafeInput, ConversationSub 拒发 LLM, UI 显示拒绝原因 |
+| 2 | **assistant stream token** | LLM 流式 token chunk | — | ✅ | — | A0 | soft hit → stream_soft_blocked (替换最近 N token 为 `[审核中…]`);hard hit → 强制 finish + scan_final |
+| 3 | **assistant final text** | LLM 流式终态全文 | — | — | ✅ | A0 | 决定 final_ok / final_redacted / final_blocked / scan_failed (§6.6 7-state FSM) |
+| 4 | **memory KV** (从 `memory` 表读出, 拼入 system message 前) | MemorySub.retrieve_kv 输出 | — | — | ✅ (Phase A2 起) | A2 | hit → 该 KV bullet 不拼入 prompt + 写 error_logs (用户曾输入违禁内容到 KV 时防再次出现) |
+| 5 | **rolling_summary** (Phase A2 占位不扫;P1 真接入时必扫) | MemorySub.maybe_roll_summary 输出 | — | — | ✅ (P1 起) | P1 | hit → 整条摘要丢弃, conversations.rolling_summary 保持 NULL / 占位 + 写 safety.violation |
+| 6 | **tool result content** | ToolSub.execute 返回 (read 文件 / grep 命中行 etc.) | — | — | ✅ | C | hit → ToolError::ResultUnsafe + 不 inject 到 LLM messages + audit log 标记 |
+| 7 | **context snapshot** (Phase A0 全 deny, P1 启用后 OS context 读取的内容) | PermissionService.read_context 输出 | — | — | ✅ (P1 起) | P1 | hit → ContextValue::Redacted + 写 context_access_log + 不 inject 到 prompt |
+
+**矩阵 hard rules**:
+- 任一 Scope 出 hit 都不允许 silent pass — 必须有显式拒绝路径
+- LLM 产物 (scope 2, 3, 5) hit 必须 publish `safety.violation` event
+- 用户输入 (scope 1) hit 仅 UI 告知, 不 publish safety.violation (避免误报骚扰)
+- Phase A0 必上 scope 1+2+3 (即原有 7-state FSM 全集);Phase A2 加 scope 4;Phase C 加 scope 6;P1+ 加 scope 5+7
+- `scan_final` 是 entry point, 内部根据 source 应用不同 SafetyScanRules 子集 (用户输入 vs LLM 产物的规则可不同)
+
 ### 6.7 Lazy 计算（read-time compute, 不持久化中间值）
 
 | Lazy 对象 | source | recompute formula | trigger |
@@ -1106,6 +1251,90 @@ pub struct ConversationService {
 - 防止"错误地从 kernel 拿到其他 owner 的 repo handle"
 - Phase A 不上, 因 Repository pattern 已经把 raw `Pool` 关在 kernel 内, 跨 ownership write 在 IDE/code review 阶段就显眼可见。
 
+#### 8.1.1 Transaction Policy (v3 review-2 新增, P0)
+
+> reviewer P0: Repository pattern 没说清 cross-owner transaction 怎么办。下面是完整契约。
+
+**4 条铁律**:
+
+1. **raw `sqlx::Pool` 仅 `kernel/db` module 可见**: 模块外不能 `use` 到 `Pool` / `Acquire` / `Transaction` 类型 (cargo deny lint + visibility 双重防护)
+2. **subsystem 不持 Pool**: subsystem 构造时拿到的是 `Arc<{Owner}Repo>` 自己那一份 + 跨 sub read 通过别人的 `Arc<dyn SomeSubsystem>` trait — 全程无 Pool / Tx
+3. **repo 只暴露强类型写方法**: `insert_message(NewMessage)` / `update_safety_status(MessageId, SafetyScanStatus)` 等;**不暴露**通用 `execute(sql: &str)` / `query<T>(sql)`
+4. **跨 owner transaction 只能经 `RuntimeUnitOfWork`** (kernel-internal):
+   - 用 case: ConversationSub fork_conversation 要同时 INSERT 新 conversation + 复制 messages + UPDATE persona_rebind_audit (跨 3 owner)
+   - subsystem 无法获得 `Transaction` 对象, 通过描述性 API 表达意图: `unit_of_work.fork_conversation(source_id, target_snapshot_id) -> Result<NewConvId>`
+   - UoW 内部用 raw `sqlx::Transaction`, 在 kernel/db 内完成
+
+**migration 是唯一 raw SQL 例外**: `kernel::db::run_migration` 持有 raw Pool 可执行任意 SQL, 但仅在 Boot.1 时跑, 之后不可用。
+
+```rust
+// kernel/db.rs (only place that touches raw Pool)
+mod kernel::db {
+    pub(crate) fn pool() -> &'static SqlitePool { ... }
+    pub(crate) async fn run_migration(...) -> Result<()> { ... }
+}
+
+// kernel/state_store.rs
+pub trait StateStore: Send + Sync {
+    // 各 owner repo (返 Arc, repo 内部用 kernel::db::pool)
+    fn conversation_repo(&self) -> Arc<ConversationRepo>;
+    fn persona_repo(&self) -> Arc<PersonaRepo>;
+    // ... 其他 owner repo ...
+
+    /// 跨 owner transaction 的唯一入口
+    fn unit_of_work(&self) -> Arc<dyn RuntimeUnitOfWork>;
+}
+
+/// 跨 owner transaction 的描述性 API
+/// 每个方法是一个 atomic operation, 内部用 raw sqlx::Transaction
+/// subsystem 不能直接构造 Transaction
+pub trait RuntimeUnitOfWork: Send + Sync {
+    /// Phase A1: fork conversation 跨 conversations + messages + persona_rebind_audit
+    async fn fork_conversation(
+        &self,
+        source_conv_id: &str,
+        target_persona_snapshot_id: &str,
+        reason: RebindReason,
+        actor: ActorId,
+    ) -> Result<ConvId, UowError>;
+
+    /// Phase A1: 显式 rebind (SamePersonaOutdated 切到最新版)
+    async fn rebind_persona_snapshot(
+        &self,
+        conv_id: &str,
+        new_snapshot_id: &str,
+        reason: RebindReason,
+        actor: ActorId,
+    ) -> Result<(), UowError>;
+
+    /// Phase A1: 加载新 .soulpack 后 commit (persona_snapshot_profiles + personas + persona_snapshot_audit)
+    async fn commit_new_snapshot(
+        &self,
+        persona_id: &str,
+        compiled: SoulRuntimeProfile,
+        actor: ActorId,
+    ) -> Result<SnapshotId, UowError>;
+
+    /// Phase C: tool 执行原子写 (tool_audit_log + tool.executed event_log)
+    #[cfg(phase_c)]
+    async fn record_tool_execution(
+        &self,
+        record: ToolExecutionRecord,
+    ) -> Result<(), UowError>;
+}
+```
+
+**为什么 UoW 不是直接暴露 Transaction**:
+- 暴露 Tx → subsystem 拿到后能 INSERT 任何表 (即破坏 Single Writer)
+- UoW 描述性 method → subsystem 只能调有限几个 atomic operation, 跨 owner 写在 kernel 内部完成
+- 每个 UoW method 在 kernel 内部就是 audit / single writer 边界审查点 (新增跨 owner operation 时强制 review)
+
+**Phase 落地节奏**:
+- A0: StateStore + ConversationRepo / PersonaRepo / MemoryRepo / KernelConfigKv (无 UoW 即可, 单 owner 写)
+- A1: 加 UoW + `fork_conversation` / `rebind_persona_snapshot` / `commit_new_snapshot` 三个 method
+- A2: 沿用 A1 UoW, 无新 method
+- C: UoW 加 `record_tool_execution`
+
 ### 8.2 Kernel 7 Traits（v2 +2 traits）
 
 ```rust
@@ -1172,22 +1401,53 @@ pub trait StateStore: Send + Sync {
 
 //═══════════════════════════════════════════════════════════════════
 // 6. PermissionService — 🆕 v2 Context Awareness 网关
+//    v3 review-2 明确: Phase A0 = DenyOnly stub, 不调任何 OS API
 //═══════════════════════════════════════════════════════════════════
 pub trait PermissionService: Send + Sync {
     /// 查询 scope 是否已授权; hot path 调用前先 check
+    /// Phase A0 实现 (DenyOnly) 永远返 false
     fn is_granted(&self, scope: ContextScope) -> bool;
 
     /// 用户授权 (设置面板触发 / GrantBroker 升级路径)
+    /// Phase A0 实现拒绝所有 grant 请求 (Err::FeatureDisabled), 设置面板显示"未启用"
     async fn grant(&self, scope: ContextScope, by_action: GrantSource) -> Result<()>;
     async fn revoke(&self, scope: ContextScope, by_action: GrantSource) -> Result<()>;
 
-    /// 实际读取上下文 (Phase P1, Phase A 仅 stub 返 None);写 context_access_log
+    /// 实际读取上下文
+    /// Phase A0 实现永远返 Err::Denied + 写 context_access_log (granted=0)
+    /// P1+ 才有真实 OS API 调用 (GetForegroundWindow / getUserMedia / etc.)
     async fn read_context(&self, scope: ContextScope, used_for: &str, actor: SubsystemId)
         -> Result<Option<ContextValue>>;
 
     fn list_scopes(&self) -> Vec<ContextScopeDescriptor>;
     fn audit_query(&self, since: DateTime, scope_filter: Option<ContextScope>) -> Vec<AuditRecord>;
 }
+
+/// Phase A0 唯一实现, 永远拒绝
+pub struct DenyOnlyPermissionService {
+    audit_repo: Arc<PermissionRepo>,   // 写 context_access_log
+}
+impl PermissionService for DenyOnlyPermissionService {
+    fn is_granted(&self, _: ContextScope) -> bool { false }
+    async fn grant(&self, _: ContextScope, _: GrantSource) -> Result<()> {
+        Err(PermissionError::FeatureDisabled)
+    }
+    async fn read_context(&self, scope, used_for, actor) -> Result<Option<ContextValue>> {
+        self.audit_repo.append_denied(scope, used_for, actor).await?;
+        Err(PermissionError::Denied { scope, reason: "Phase A0: DenyOnly".into() })
+    }
+    // ...
+}
+
+/// CI 静态扫描强制: 任何 PermissionService 实现都不能 import 下列 OS API
+/// (cargo deny + grep ban-list 双重防护)
+///   ❌ winapi::um::winuser::GetForegroundWindow
+///   ❌ winapi::um::winuser::GetWindowTextW
+///   ❌ winapi::um::winbase::GetUserGeoID  (用于地区上下文)
+///   ❌ web_sys::Navigator::media_devices  (getUserMedia, MediaRecorder)
+///   ❌ winapi::um::wingdi::BitBlt          (屏幕截图)
+///   ❌ tauri::clipboard 任何 read 操作
+/// Phase A0 这些 API 在 src-tauri 整个 crate 都不应出现 (除非 P1+ 启用并隔离到 PermissionService 内部模块)
 
 pub enum ContextScope {
     ForegroundAppName,
@@ -1207,6 +1467,8 @@ pub enum GrantSource {
 
 //═══════════════════════════════════════════════════════════════════
 // 7. GrantBroker — 🆕 v2 Tool 同步授权 request/response (Constitution #13)
+//    v3 review-2 明确: Phase A0 = trait + DenyAllGrantBroker / MockGrantBroker only
+//                       无 UI modal, 无 persistent cache, 不接 ToolSub
 //═══════════════════════════════════════════════════════════════════
 pub trait GrantBroker: Send + Sync {
     /// hot path async fn; 必须等用户决定才返回 (UI modal); 超时降级 Denied
@@ -1221,6 +1483,7 @@ pub trait GrantBroker: Send + Sync {
     ) -> Result<GrantDecision, GrantError>;
 
     /// Grant 缓存查询 (Session-scope / PersistentByTool); 命中则免 UI
+    /// Phase A0 实现永远返 None
     fn check_cached(&self, tool_id: &str, args_hash: &str) -> Option<GrantDecision>;
 }
 
@@ -1236,7 +1499,37 @@ pub enum GrantError {
     Timeout(Duration),
     UserDismissed,
     SurfaceUnavailable,  // UI 不在前台无法弹 modal
+    FeatureDisabled,     // Phase A0/A1/A2 用 DenyAllGrantBroker 时返此
 }
+
+/// Phase A 起 (A0/A1/A2/B): 默认安装的 GrantBroker
+/// ToolSub 不存在时永远不会被调用; 即使被调也立刻拒绝
+pub struct DenyAllGrantBroker;
+impl GrantBroker for DenyAllGrantBroker {
+    async fn request_tool_grant(&self, ...) -> Result<GrantDecision, GrantError> {
+        Err(GrantError::FeatureDisabled)
+    }
+    fn check_cached(&self, _: &str, _: &str) -> Option<GrantDecision> { None }
+}
+
+/// 测试用: ConversationSub Phase A 测试 / ToolSub Phase C 单测时注入
+/// 可预设固定 GrantDecision 序列
+pub struct MockGrantBroker {
+    decisions: Mutex<VecDeque<GrantDecision>>,
+}
+impl MockGrantBroker {
+    pub fn new(decisions: Vec<GrantDecision>) -> Self { ... }
+}
+impl GrantBroker for MockGrantBroker {
+    async fn request_tool_grant(&self, ...) -> Result<GrantDecision, GrantError> {
+        self.decisions.lock().pop_front()
+            .map(Ok)
+            .unwrap_or(Err(GrantError::FeatureDisabled))
+    }
+    fn check_cached(&self, _: &str, _: &str) -> Option<GrantDecision> { None }
+}
+
+/// Phase C 才实现 (RealGrantBroker), 含 UI modal + persistent cache + 接 ToolSub
 ```
 
 ### 8.3 Subsystem 6 Traits（v2 关键: PersonaSub + ConversationSub snapshot binding）
@@ -1504,19 +1797,34 @@ pub trait RetrievalRanker: Send + Sync {
 
 > v2 重大变更: 拆 **9.A MVP (Phase A 必做)** vs **9.B P1 (Phase C 推迟)**。reviewer P0: episodic+FTS5+LLM 摘要在 MVP 阶段过重 (provider 未配置 / Ollama 慢 / 摘要失败 / 隐私 / persona scope / summary 安全扫描等 5 个未解风险), Phase A 先解决真实缺口: KV 不进 prompt + history 硬切 N=10。
 
-### 9.A Memory MVP (Phase A 必做)
+### 9.A Memory MVP (Phase A2 必做)
 
 **目标**: 用最小开销实现"桌宠记得你"的功能承诺, 同时支持 token-aware history。
 
-**3 个组件**:
+**3 个组件 (Phase A2 MUST 仅前两个; 第三 default-off)**:
 
-| 组件 | 介质 | 持久性 | 写入路径 |
+| 组件 | 介质 | 持久性 | Phase A2 状态 |
 |---|---|---|---|
-| **Semantic KV** | SQLite `memory` 表 (已存在, 扩展含义) | persistent | 用户主动 set / Soul.memory_policy 提取 long-term fact (Phase A 用户手动为主) |
-| **Recent message window** | SQLite `messages` 表 (已存在) | persistent | hot path 时 token-aware 切片 |
-| **Rolling summary** (可选) | `conversations.rolling_summary` (Phase A 新加字段) | persistent | hot path 末尾或 idle 时 LLM 单 call 生成 |
+| **Semantic KV** | SQLite `memory` 表 (已存在, 扩展含义) | persistent | **MUST**, 用户主动 set / Soul.memory_policy 提取 long-term fact (Phase A 用户手动为主) |
+| **Recent message window (token-aware)** | SQLite `messages` 表 (已存在) | persistent | **MUST**, hot path 时 token-aware 切片 |
+| **Rolling summary** | `conversations.rolling_summary` (Phase A2 新加字段) | persistent | **默认关闭 (deterministic placeholder, 不调 LLM)**;自动 LLM rolling summary 推 P1 (见下方"P1 前置门槛") |
 
-**Hot path 集成** (Phase A):
+**Phase A2 rolling_summary 默认行为**:
+- column 存在 (schema 已落), 值为 `NULL` 或 deterministic 占位 `"(rolling_summary disabled in Phase A2)"`
+- PromptBuilder 拿到 `NULL` / 占位字符串 → **不拼入 prompt**, 等价于"该会话无 rolling_summary"
+- 不调 LLM, 不触发任何 provider request
+- Phase A2 不实现 `MemorySub.maybe_roll_summary` 真逻辑, 只留 trait 占位返 `Ok(None)`
+
+**自动 LLM rolling summary 推 P1 的前置门槛 (Constitution #14)**:
+
+| # | 前置 | 实施 |
+|---|---|---|
+| 1 | **Provider check**: 调用前必须确认 LLM provider 已配置且可用 | LLMProvider.probe() 失败 → 整个 rolling summary feature flag off |
+| 2 | **Token budget**: 限制 prompt token + max_tokens output, 不能因摘要拉爆用户账单 | hard cap: prompt ≤ 2000 token / output ≤ 300 token;超出 skip |
+| 3 | **SafetyGuard scan**: 摘要 LLM 产物必经 `scan_final` (Constitution #1, 摘要是 LLM 产物可能含违禁) | `SafetyGuard.scan_final(summary, snapshot_id)` 命中 → 整条摘要丢弃, 保留原占位 |
+| 4 | **失败 fallback**: 摘要失败 (provider 错 / scan 命中 / 网络断) 静默写 error_logs, **不影响**正常对话 | `Result<Option<String>>` 形式;Err 不传染 hot path |
+
+**Hot path 集成** (Phase A2):
 
 ```
 ConversationSub.handle_user_message(conv_id, input)
@@ -1526,12 +1834,11 @@ ConversationSub.handle_user_message(conv_id, input)
      例: [{key:"user_pet_name", val:"咪咪"}, {key:"user_job", val:"程序员"}]
   4. MemorySub.read_history_window(conv_id, token_budget=4000) → MessageRecord[]
      - 从最近向前累加, 直到 token_count 触顶
-     - 若 rolling_summary 存在, 拼接为最早一条 system message
-  5. PromptBuilder.build(snapshot.identity_prompt, kv_bullets, history, summary?)
+     - Phase A2: rolling_summary 默认 NULL / 占位, 不拼入
+     - P1+: 若 rolling_summary 真实存在 (P1 落地后), 拼接为最早一条 system message
+  5. PromptBuilder.build(snapshot.identity_prompt, kv_bullets, history) — Phase A2 不拼 summary
      → SafetyGuard.wrap_messages → LLMProvider
-  6. (post chat) async: MemorySub.maybe_roll_summary(conv_id)
-     - 仅当 history 超过阈值时启动单次 LLM call 生成 100-200 字摘要
-     - 失败静默写 error_logs, 下次再尝试
+  6. (post chat) Phase A2: 无任何摘要任务;P1+: async MemorySub.maybe_roll_summary(conv_id)
 ```
 
 **KV scope 设计**:
@@ -1544,11 +1851,13 @@ key 前缀作隔离:
 
 Soul `memory_policy.toml` 控制人格能 set 哪些 prefix; PromptBuilder 注入时只读当前 snapshot 可见的 KV。
 
-**MVP scope (Phase A)**:
-- ✅ KV 注入 prompt / token-aware history window / 可选 rolling_summary
+**MVP scope (Phase A2)**:
+- ✅ KV 注入 prompt / token-aware history window
 - ✅ persona-scoped KV (人格隔离 user 信息)
-- ❌ episodic memory / FTS5 / RetrievalRanker → 推 9.B
-- ❌ LLM 自动提炼 fact (Phase A 用户手动 set 为主)
+- ✅ `rolling_summary` column 落 (schema), 值默认 NULL / deterministic 占位
+- ❌ 自动 LLM rolling_summary → 推 P1 (Constitution #14 4 项前置门槛)
+- ❌ episodic memory / FTS5 / RetrievalRanker → 推 9.B (Phase C P1)
+- ❌ LLM 自动提炼 fact (Phase A2 用户手动 set 为主)
 - ❌ embeddings / vector store
 
 ### 9.B Memory P1 (Phase C 推迟)
@@ -1955,29 +2264,104 @@ ConversationSub → state transition → Conversing
 | `services/snap.rs` / `window_*` / `tray.rs` / `shortcuts.rs` | 保留独立 (Surfaces 工具) | 0% | — |
 | `services/avatars.rs` / `preferences.rs` / `nickname.rs` | nickname 归 PersonaSub | nickname 归 PersonaSub | **A: ~1 天** |
 
-### 12.2 SQLite migration plan
+### 12.2 SQLite migration plan (v3 review-2: cascade + 两步 ALTER)
 
-**migration 004 (Phase A 必走)**:
+> reviewer P0 修正: v2 `COALESCE(persona_id, 'momo')` 是 silent backfill, 违反 Constitution #10。v3 用 cascade fallback + LegacyUnknownSnapshot 兜底。
+
+**migration 004 (Phase A1 必走, conversations + persona_snapshot_id 绑定 + LegacyUnknownSnapshot 兜底)**:
+
 ```sql
--- conversations 加 persona binding
+-- ────── 步骤 1: 加 nullable column (SQLite NOT NULL ALTER 受限, 必须两步) ──────
 ALTER TABLE conversations ADD COLUMN persona_id TEXT;
 ALTER TABLE conversations ADD COLUMN persona_snapshot_id TEXT;
 ALTER TABLE conversations ADD COLUMN rolling_summary TEXT DEFAULT NULL;
--- backfill: 旧会话取当时 active persona 的 snapshot (兜底默认 momo)
-UPDATE conversations SET persona_id = COALESCE(persona_id, 'momo') WHERE persona_id IS NULL;
 
--- messages 加 safety 状态
+-- ────── 步骤 2: cascade backfill (按优先级 4 层兜底) ──────
+
+-- ① 已有 persona_id 字段不动 (理论上不该有, 但保留兼容)
+-- (skip)
+
+-- ② 从 conversations.metadata JSON 提取 (若有)
+UPDATE conversations
+   SET persona_id = json_extract(metadata, '$.persona_id')
+ WHERE persona_id IS NULL
+   AND metadata IS NOT NULL
+   AND json_extract(metadata, '$.persona_id') IS NOT NULL;
+
+-- ③ 从该 conversation 的第一条 message.metadata 提取 (若有)
+UPDATE conversations AS c
+   SET persona_id = (
+     SELECT json_extract(m.metadata, '$.persona_id')
+       FROM messages m
+      WHERE m.conversation_id = c.id
+        AND json_extract(m.metadata, '$.persona_id') IS NOT NULL
+      ORDER BY m.created_at ASC
+      LIMIT 1
+   )
+ WHERE c.persona_id IS NULL;
+
+-- ④ 仍为 NULL 的 conversation → 绑定 LegacyUnknownPersona
+-- (LegacyUnknownPersona 是预置兜底人格, 由 PersonaSub Boot 时确保存在)
+UPDATE conversations
+   SET persona_id = 'legacy_unknown'
+ WHERE persona_id IS NULL;
+
+-- ────── 步骤 3: 解 persona_snapshot_id ──────
+-- 对每个 conversation: persona_snapshot_id = 该 persona 在 conv.created_at 时刻的 latest snapshot
+-- (或 LegacyUnknownPersona 永久预置 snapshot)
+UPDATE conversations AS c
+   SET persona_snapshot_id = (
+     SELECT s.id
+       FROM persona_snapshot_profiles s
+      WHERE s.persona_id = c.persona_id
+        AND s.created_at <= c.created_at
+      ORDER BY s.created_at DESC
+      LIMIT 1
+   )
+ WHERE persona_snapshot_id IS NULL;
+
+-- 兜底: 仍无 snapshot (新装机用户老库) → 用 LegacyUnknownSnapshot
+UPDATE conversations
+   SET persona_snapshot_id = 'legacy_unknown_snapshot'
+ WHERE persona_snapshot_id IS NULL;
+
+-- ────── 步骤 4: 加 NOT NULL constraint (SQLite 路径: 重建表) ──────
+-- SQLite ALTER TABLE 不支持原地加 NOT NULL, 需走 "create new + copy + drop + rename"
+-- 此处不写完整 DDL (太冗长), 由 MigrationService 用 builder helper 实施
+
+-- messages 表加 safety 状态 (无 backfill 需求)
 ALTER TABLE messages ADD COLUMN token_count INTEGER DEFAULT NULL;
-ALTER TABLE messages ADD COLUMN safety_scan_status TEXT DEFAULT 'pending';
+ALTER TABLE messages ADD COLUMN safety_scan_status TEXT NOT NULL DEFAULT 'pending';
 
--- persona_snapshots 扩 schema (或拆子表)
-ALTER TABLE persona_snapshots ADD COLUMN source_hash TEXT;
-ALTER TABLE persona_snapshots ADD COLUMN compiled_profile_json TEXT;
-ALTER TABLE persona_snapshots ADD COLUMN schema_version TEXT;
--- 若 ALTER 复杂, 改建子表:
--- CREATE TABLE persona_snapshot_profiles (...);
+-- persona_snapshot_profiles 新建 (Phase A1 PersonaSub 落地必需)
+CREATE TABLE persona_snapshot_profiles (
+    id TEXT PRIMARY KEY,                       -- snapshot_id, ULID
+    persona_id TEXT NOT NULL,
+    source_hash TEXT NOT NULL,                 -- .soul/ 树的 hash
+    schema_version TEXT NOT NULL,
+    compiled_profile_json TEXT NOT NULL,       -- SoulRuntimeProfile JSON
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_snapshot_persona ON persona_snapshot_profiles(persona_id, created_at DESC);
 
--- 新增 context_access_log (Phase A 默认 deny 期间写 reject 记录)
+-- LegacyUnknownPersona 预置 (PersonaSub Boot 时插入若不存在)
+-- (此处不写 INSERT, 由 PersonaSub 实施)
+
+-- persona_rebind_audit 新建 (Phase A1 fork/rebind 审计)
+CREATE TABLE persona_rebind_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conv_id TEXT NOT NULL,
+    from_snapshot_id TEXT,                     -- 可空 (首次绑定无 from)
+    to_snapshot_id TEXT NOT NULL,
+    action TEXT NOT NULL,                       -- 'create'|'rebind'|'fork'
+    reason TEXT,                                -- 用户输入或系统原因
+    actor TEXT NOT NULL,                        -- 'user'|'migration'|'system'
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (conv_id) REFERENCES conversations(id)
+);
+CREATE INDEX idx_rebind_conv ON persona_rebind_audit(conv_id, created_at DESC);
+
+-- 新增 context_access_log (Phase A0 默认 deny 期间写 reject 记录)
 CREATE TABLE context_access_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scope TEXT NOT NULL,
@@ -2002,6 +2386,18 @@ CREATE TABLE IF NOT EXISTS error_logs (
     created_at TEXT NOT NULL
 );
 ```
+
+**LegacyUnknownPersona / LegacyUnknownSnapshot 兜底约定**:
+
+| 项 | 值 |
+|---|---|
+| `personas.id` | `'legacy_unknown'` |
+| `personas.name` | `'未知人格 (历史会话)'` |
+| `persona_snapshot_profiles.id` | `'legacy_unknown_snapshot'` |
+| identity_prompt | `"你是一个友善、礼貌、安全的助手。本会话来自历史数据, 人格信息无法恢复。"` |
+| style_prompt | (中性, 不带特定语气) |
+| initiative_config | proactivity=0 (不主动) |
+| memory_policy | scope=global only (不访问 persona-scoped KV) |
 
 **migration 005 (Phase B 必走)**:
 ```sql
@@ -2037,6 +2433,7 @@ CREATE TABLE tool_audit_log (...);
 ```
 
 迁移前自动 backup db (现有 MigrationService 已支持)。
+迁移失败 (任一步报错) 立即恢复 backup, runtime 拒绝启动并报错 — silent partial migration forbidden。
 
 ### 12.3 现有 264 cargo test 适配
 
@@ -2052,54 +2449,97 @@ CREATE TABLE tool_audit_log (...);
 
 **估计**: 264 test 中 Phase A ~40 个需要小幅调整, Phase B ~10 个 living_pet 测试需要重写, Phase C ~20-30 个新 Tool/Memory 测试新增。整体测试套件保持 ≥ 250 pass。
 
-### 12.4 Phase 排期（v2 三阶段，~5 周 MVP + Phase C deferred）
+### 12.4 Phase 排期（v3 review-2: Phase A 拆 A0/A1/A2, 共 ~3-3.5 周 MVP + B + C deferred）
 
 ```
-┌─ Phase A: P0 必做 (MVP foundation, ~3 周, 任何对外分发版本前阻塞) ──┐
-│                                                                       │
-│ A.1 ADR-028 Soul Package 撰写 + review               ~0.5 周          │
-│ A.2 kernel/ 基础                                     ~1 周            │
-│   ├ state_store.rs Repository pattern                3 天             │
-│   ├ safety_guard.rs ADR-006 真注入 + 7-state FSM     3 天             │
-│   ├ permission_service.rs stub + audit 表           2 天             │
-│   ├ grant_broker.rs stub                            1 天             │
-│   └ lifecycle_manager.rs FSM (5 顶层 + 4 子)        2 天             │
-│ A.3 subsystems Phase A 改造                         ~1.5 周          │
-│   ├ persona/ SoulCompiler + 3 内置人格迁移          1 周             │
-│   ├ conversation/ persona_snapshot binding + FSM    5 天             │
-│   ├ memory/ KV inject + history token window        3 天             │
-│   └ soul/prompt_builder.rs                          2 天             │
-│ A.4 lib.rs Boot 序列 10 步 + 264 test 适配          ~3 天            │
-│ A.5 DPAPI secrets 表 + CryptoService                ~3 天            │
-│                                                                       │
-└──────────────────────────────────────────────────────────────────────┘
+┌─ Phase A0: Safety & Secrets (~1 周, 任何对外分发版本前 P0 阻塞) ─────────┐
+│                                                                            │
+│ A0.1 kernel/safety_guard.rs ADR-006 真注入 + 7-state FSM + Scan Scope    │
+│       Matrix scope 1+2+3 (user input / stream / final)        ~4 天        │
+│ A0.2 kernel/state_store.rs Repository pattern + raw Pool 私有  ~2 天      │
+│ A0.3 kernel/permission_service.rs DenyOnlyPermissionService              │
+│       + context_access_log 表 + CI 黑名单 OS API           ~1 天          │
+│ A0.4 kernel/grant_broker.rs trait + DenyAllGrantBroker                  │
+│       + MockGrantBroker (测试用)                            ~0.5 天       │
+│ A0.5 DPAPI secrets 表 + CryptoService                       ~2 天         │
+│ A0.6 lib.rs Boot 1-7 改 (含新 PermissionService / GrantBroker) ~1 天    │
+│ A0.7 ChatService → ConversationSub 接 SafetyGuard.wrap_messages         │
+│       + scan FSM + StreamEvent::ReplaceMessage              ~3 天         │
+│ A0.8 264 cargo test 适配 (~10 个改)                         ~1 天         │
+│                                                                            │
+│ A0 DoD (任何对外分发版本必满足):                                          │
+│  ✅ LLM 每次调用带 ADR-006 safety prefix                                  │
+│  ✅ 7-state FSM 单测覆盖 (7 状态 + 流→终 + scan_failed 降级)            │
+│  ✅ StreamEvent::ReplaceMessage 协议前后端走通                            │
+│  ✅ DPAPI secrets 表落地, API Key 不再明文 (CryptoService 实施)         │
+│  ✅ 整个 src-tauri crate 不出现 GetForegroundWindow/getUserMedia/etc    │
+│     (CI 静态扫描通过)                                                     │
+│  ✅ DenyAllGrantBroker + DenyOnlyPermissionService 默认安装                │
+│  ✅ 264 test ≥ 250 pass                                                   │
+└──────────────────────────────────────────────────────────────────────────┘
 
-┌─ Phase B: MVP nice-to-have (主动陪伴闭环, ~2 周) ───────────────────┐
-│                                                                       │
-│ B.1 ADR-029 Context Awareness 撰写 (P1 框架, MVP 不实施) ~0.5 周    │
-│ B.2 kernel/scheduler.rs 4 触发类型                  ~3 天            │
-│ B.3 kernel/event_bus.rs 真接入 + 10 event + 失败分级 ~3 天          │
-│ B.4 subsystems/living/ lazy aging 改造               ~5 天            │
-│ B.5 subsystems/initiative/ 4 trigger + idle-only    ~5 天            │
-│ B.6 soul/ tone_shaper + initiative_weights          ~3 天            │
-│ B.7 proactive_care_log + UI 气泡                    ~2 天            │
-│                                                                       │
-└──────────────────────────────────────────────────────────────────────┘
+┌─ Phase A1: Persona Snapshot & Soul Package (~1.5 周, A0 之上) ─────────┐
+│                                                                            │
+│ A1.1 ADR-028 Soul Package Format 撰写 + review              ~0.5 周      │
+│ A1.2 subsystems/persona/soul_compiler.rs + .soul/ parse + validate      │
+│       + compile → SoulRuntimeProfile                        ~3 天         │
+│ A1.3 subsystems/persona/snapshot.rs + persona_snapshot_profiles 表 +    │
+│       Boot 时确保 LegacyUnknownPersona+Snapshot 预置          ~2 天     │
+│ A1.4 SoulPackageImporter (10 条安全规则) + .soulpack zip 解析  ~2 天    │
+│ A1.5 内置 3 人格 momo/joker/coach 迁移到 .soul/ 目录布局      ~2 天      │
+│ A1.6 ConversationSub.handle_user_message 强制 read_snapshot              │
+│       (Constitution #10) + 写 hot path                       ~2 天        │
+│ A1.7 ConversationSub.rebind_persona_snapshot + fork_conversation        │
+│       + 4 UI 状态枚举 + 判断表 + UoW 三 method               ~3 天      │
+│ A1.8 migration 004 cascade backfill + LegacyUnknownSnapshot 兜底       │
+│       + persona_rebind_audit 表                              ~2 天        │
+│ A1.9 PromptBuilder.build 接 SoulRuntimeProfile               ~1 天        │
+│                                                                            │
+│ A1 DoD:                                                                   │
+│  ✅ persona_snapshot_id NOT NULL on conversations                         │
+│  ✅ SoulCompiler 单测覆盖 (parse / validate / compile)                   │
+│  ✅ 内置 3 人格已迁移 .soul/ 目录, 现有 conversation 用 LegacyUnknownSnapshot │
+│  ✅ hot path 不读 active_persona (CI 静态扫描 + 集成测试)               │
+│  ✅ 用户切 active persona / 编辑 .soul/ → 旧 conv snapshot 不变 (集成测试) │
+│  ✅ rebind / fork 走 UoW, persona_rebind_audit 记录完整                   │
+│  ✅ .soulpack 安全导入 10 条规则单测覆盖 (含 path traversal / symlink / 大小 等 attack case) │
+└──────────────────────────────────────────────────────────────────────────┘
 
-┌─ Phase C: P1 deferred (Tool + episodic memory, scope 看 M4-M5 节奏) ┐
-│                                                                       │
-│ C.1 ADR-025 Tool Sandbox 完整决议                   ~0.5-1 周       │
-│ C.2 ADR-027 Memory Phase C 决议                     ~3 天            │
-│ C.3 subsystems/tool/ ToolSub + 3 read-only + GrantBroker 接入 ~1.5 周│
-│ C.4 subsystems/memory/episodic.rs + FTS5 + 摘要     ~2 周            │
-│ C.5 soul/retrieval_ranker.rs                        ~2 天            │
-│ C.6 ConversationSub tool_call 处理 (service.rs:338 改写) ~3 天      │
-│                                                                       │
-└──────────────────────────────────────────────────────────────────────┘
+┌─ Phase A2: Conversation Memory & History Stability (~0.5-1 周) ────────┐
+│                                                                            │
+│ A2.1 subsystems/memory/prompt_inject.rs KV → memory_bullets  ~1 天       │
+│ A2.2 subsystems/memory/history_window.rs token-aware 切片    ~2 天       │
+│ A2.3 ChatService prompt.rs build_system_message 接 MemorySub.retrieve_kv │
+│       + history_window;HISTORY_LIMIT N=10 → token budget    ~2 天       │
+│ A2.4 conversations.rolling_summary column 落 + 默认 NULL/占位 ~0.5 天   │
+│ A2.5 SafetyGuard Scan Scope Matrix scope 4 (memory KV)       ~1 天       │
+│                                                                            │
+│ A2 DoD:                                                                   │
+│  ✅ 用户 set 的 KV 出现在 prompt system message                          │
+│  ✅ 长对话不再硬切 N=10, 走 token-aware window                            │
+│  ✅ rolling_summary 字段存在但默认关闭 (不调 LLM, prompt 中不出现)       │
+│  ✅ KV scope 4 安全扫: KV 中违禁内容不进 prompt                          │
+│  ✅ persona-scoped KV 隔离 (人格 A 看不到人格 B 的私密 KV)               │
+└──────────────────────────────────────────────────────────────────────────┘
 
-合计 MVP (Phase A + B): ~5 周, 与 M3 W5-W8 对齐
-Phase C: deferred, 视 M4-M5 节奏决定; 若不上, 桌宠仍为"安全+主动陪伴+人格"完整体验, 但无 Tool 文件操作能力
+┌─ Phase B: MVP nice-to-have (主动陪伴闭环, ~2 周) ───────────────────────┐
+│ (内容同 v2, 见 §14.2)                                                   │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌─ Phase C: P1 deferred (Tool + episodic memory) ─────────────────────────┐
+│ (内容同 v2, 见 §14.3; ADR-025 阻塞前置)                                 │
+└──────────────────────────────────────────────────────────────────────────┘
+
+合计 MVP (Phase A0+A1+A2+B): ~5-5.5 周, 与 M3 W5-W8 对齐
+Phase C: deferred, 视 M4-M5 节奏决定
 ```
+
+**Phase A0/A1/A2 关键依赖**:
+- A0 完全独立 (不依赖 A1/A2), 实施后可单独发布
+- A1 依赖 A0 (用 Repository + UoW + SafetyGuard 已落)
+- A2 依赖 A1 (用 persona_snapshot_id 取 SoulRuntimeProfile)
+
+**Phase A0 是任何对外分发版本前的 hard gate** — 即使 A1/A2 推迟, A0 也必须先落 (DPAPI secrets / safety prefix / 7-state FSM 是产品发布的 P0 条件)。
 
 ---
 
@@ -2130,101 +2570,122 @@ Phase C: deferred, 视 M4-M5 节奏决定; 若不上, 桌宠仍为"安全+主动
 
 ---
 
-## 14. MVP scope summary (v2 三阶段)
+## 14. MVP scope summary (v3 四阶段)
 
-### 14.1 Phase A: P0 必做（任何对外分发版本前阻塞, ~3 周）
+### 14.1 Phase A0: Safety & Secrets（~1 周, 任何对外分发版本前 P0 阻塞）
 
-**Kernel (7 件, Phase A 子集)**:
-- SafetyGuard (ADR-006 真注入 + 7-state FSM + 流式 token scan + 终态 scan + user input scan)
-- LifecycleManager (5 状态 FSM)
-- StateStore (Repository pattern, raw Pool 私有化)
-- PermissionService (stub, 默认全 deny + audit 表 + 设置面板"未启用")
-- GrantBroker (stub, Phase A 无 Tool 不会被调)
-- EventBus (Phase A 仅占位 init, Phase B 真接入)
-- Scheduler (Phase A 仅占位 init, Phase B 真接入)
+**MUST**:
+- SafetyGuard ADR-006 真注入 (`SAFETY_PREFIX = None` → kernel 注入)
+- SafetyGuard 7-state FSM + Scan Scope Matrix scope 1+2+3 (user input + stream token + final text)
+- SafetyGuard 区分 SafetyPrefix vs SafetyScanRules (Constitution #1)
+- StreamEvent::ReplaceMessage 协议 (前端按 msg_id 覆盖)
+- DPAPI secrets 表 + CryptoService (API Key 不再明文)
+- StateStore Repository pattern + raw Pool 私有 + KernelConfigKv
+- PermissionService DenyOnlyPermissionService (default deny, 所有 ContextScope) + context_access_log 表 + 设置面板"未启用"
+- GrantBroker trait + DenyAllGrantBroker + MockGrantBroker
+- LifecycleManager FSM (5 顶层 state)
+- Boot 1-7 序列 (含新 PermissionService / GrantBroker init)
+- ConversationSub 接 SafetyGuard.wrap_messages + scan FSM
 
-**Subsystems (Phase A 子集)**:
-- PersonaSub (SoulCompiler + .soul/ 包 + PersonaSnapshot + 3 内置人格迁移)
-- ConversationSub (persona_snapshot binding + SafetyGuard FSM + KV inject + token window)
-- MemorySub (KV → prompt + history token window + 可选 rolling_summary)
+**SHOULD** (Phase A0 不强制, 但若时间允许可一起做):
+- SafetyGuard scan_user_input 简单黑词扫
+- Boot 8 subsystems 初始 (Phase A1 才完整)
 
-**Soul Overlay (Phase A 子集)**:
-- PersonaPromptBuilder (从 SoulRuntimeProfile 拼 system message)
+**MUST NOT** (Phase A0 严禁出现):
+- ❌ 调用 `GetForegroundWindow` / `GetWindowText` / `getUserMedia` / `MediaRecorder` / `BitBlt` 任何 OS context API (CI 静态扫描)
+- ❌ 真 GrantBroker UI modal (Phase C 才上)
+- ❌ Tool 实施 (Phase C 才上)
+- ❌ 用 EventBus 做 Tool grant request/response (Constitution #13 永禁)
+- ❌ SoulCompiler 实施 (Phase A1 才上)
+- ❌ episodic memory / FTS5 (Phase C 才上)
 
-**SQLite (Phase A)**:
-- conversations 加 persona_id + persona_snapshot_id + rolling_summary
-- messages 加 token_count + safety_scan_status (7-state)
-- persona_snapshots 扩 source_hash + compiled_profile_json + schema_version (或拆 persona_snapshot_profiles 子表)
-- 🆕 context_access_log (默认 deny 期间记录)
-- error_logs (若不存在)
+### 14.2 Phase A1: Persona Snapshot & Soul Package（~1.5 周, A0 之上）
 
-**ADR**:
-- 新增 ADR-026 (本 spec 归档) + ADR-027 (Memory MVP vs P1) + ADR-028 (Soul Package)
-- Updated ADR-003 / 006 / 015 / 018
+**MUST**:
+- ADR-028 Soul Package Format 撰写 + review 通过
+- SoulCompiler (parse + validate + compile → SoulRuntimeProfile)
+- SoulValidator 拒绝 manifest `permissions` / `tools` / `safety_prefix` 字段 (Constitution #11)
+- SoulPackageImporter 10 条安全规则 (`.soulpack` 解析)
+- 内置 3 人格 momo / joker / coach 迁移到 `.soul/` 目录布局
+- persona_snapshot_profiles 表 + LegacyUnknownPersona / LegacyUnknownSnapshot 预置
+- persona_rebind_audit 表
+- ConversationSub.handle_user_message 强制 `read_snapshot` (Constitution #10)
+- ConversationSub.rebind_persona_snapshot + fork_conversation (UoW)
+- ConvPersonaStatus 4 状态枚举 + 判断表 UI 实施
+- RuntimeUnitOfWork (Repository transaction policy)
+- migration 004 cascade backfill (existing persona_id → metadata → message metadata → LegacyUnknownSnapshot)
+- PromptBuilder.build 接 SoulRuntimeProfile
 
-**Phase A 成功标准**:
-- ✅ LLM 调用每次都带 ADR-006 safety prefix
-- ✅ SafetyGuard 7-state FSM 通过单测 (覆盖 7 状态 + 流式 → 终态 + scan_failed 降级)
-- ✅ DPAPI secrets 表落地, API Key 不再明文
-- ✅ 用户切换 active persona 不污染历史会话 (集成测试)
-- ✅ 桌宠在 prompt 里看到用户 KV 偏好
-- ✅ 长对话不再硬切 N=10, 走 token-aware window
-- ✅ 264 cargo test ≥ 250 pass (允许 ~10 个适配)
+**SHOULD**:
+- UI 显示 `SamePersonaOutdated` / `DifferentFromActivePersona` 提示
+- 用户手动 trigger fork / rebind 的 UX
 
-### 14.2 Phase B: MVP nice-to-have（主动陪伴闭环, ~2 周, 看时间窗）
+**MUST NOT**:
+- ❌ Runtime 静默 UPDATE conversations.persona_snapshot_id (Constitution #10 sub-rule)
+- ❌ hot path 读 active_persona (CI 静态扫描)
+- ❌ `COALESCE(persona_id, 'momo')` 类 silent backfill (reviewer P0 修正)
+- ❌ Snapshot 内冻结 nickname / safety prefix / tool whitelist / mood (carve-out 表)
 
-**Kernel**:
+### 14.3 Phase A2: Conversation Memory & History Stability（~0.5-1 周）
+
+**MUST**:
+- MemorySub.retrieve_kv (KV → memory_bullets, persona-scoped)
+- MemorySub.read_history_window (token-aware 切片)
+- ChatService prompt.rs HISTORY_LIMIT N=10 → token budget
+- conversations.rolling_summary column 落 schema, 默认 NULL / deterministic 占位
+- SafetyGuard Scan Scope Matrix scope 4 (memory KV)
+
+**SHOULD**:
+- KV scope 隔离 (人格 A 看不到 B 的私密 KV) 单测
+- token_count 字段在 messages 表 backfill 计算
+
+**MUST NOT**:
+- ❌ 自动 LLM rolling summary (推 P1, 必须满足 Constitution #14 4 项前置)
+- ❌ episodic memory / FTS5 (推 Phase C)
+- ❌ embeddings / vector store
+
+### 14.4 Phase B: MVP nice-to-have（主动陪伴闭环, ~2 周, 看时间窗）
+
+**MUST**:
 - EventBus 真接入 (10 event + 失败分级)
-- Scheduler 真接入 (4 触发类型)
+- Scheduler 4 触发类型 (cron / idle / one-shot / periodic)
+- LivingSub tick → lazy aging 改造
+- InitiativeSub 4 trigger + hard gate (含 user_disabled_context_scope) + **idle-only 默认**
+- ToneShaper + InitiativeWeights (Soul Overlay)
+- event_log 表
+- pet_runtime_state + proactive_care_log schema 扩展
+- ADR-029 Context Awareness Permission 撰写 (P1 框架, MVP 不实施)
 
-**Subsystems**:
-- LivingSub (tick → lazy aging)
-- InitiativeSub (4 trigger + hard gate + idle-only 默认)
+**SHOULD**:
+- 主动陪伴 UI 气泡 (Phase B 末)
+- proactive_care_log 含完整审计字段
 
-**Soul Overlay**:
-- ToneShaper
-- InitiativeWeights
+**MUST NOT**:
+- ❌ Initiative 读取 OS context (Constitution #9)
+- ❌ context_scopes_used 出现非空值 (Phase B 默认全 deny)
 
-**SQLite**:
-- pet_runtime_state 加 last_mood_event_at + last_energy_event_at
-- proactive_care_log 加 trigger_kind / gate_result / context_scopes_used / score_breakdown
-- 🆕 event_log
+### 14.5 Phase C: P1 deferred（Tool + episodic memory）
 
-**ADR**:
-- 新增 ADR-029 (Context Awareness Permission, P1 框架)
+**MUST** (Phase C 启动时):
+- ADR-025 Tool Sandbox 完整决议 + ADR-027 Memory Phase C 决议
+- ToolSub (3 read-only: Glob / Grep / Read)
+- RealGrantBroker (含 UI modal + persistent cache + 接 ToolSub)
+- ConversationSub.handle_user_message tool_call 处理 (`service.rs:338` 改写)
+- tool_audit_log 表
+- AwaitingGrant Live sub-state
+- SafetyGuard Scan Scope Matrix scope 6 (tool result)
+- episodic_memory + FTS5 (INTEGER rowid) + LLM 摘要压缩
+- RetrievalRanker (Soul Overlay)
 
-**Phase B 成功标准**:
-- ✅ 桌宠空闲超阈值主动起话题, hard gate 全生效
-- ✅ mood / energy lazy aging 跨 suspend/wake 一致
-- ✅ proactive_care_log 含完整审计字段 (含 context_scopes_used = [])
-- ✅ Initiative 默认 100% 不读 OS 上下文 (CI 静态扫描通过)
+**SHOULD**:
+- Phase C 启动门槛: Phase A + B 落地稳定 ≥ 4 周
 
-### 14.3 Phase C: P1 deferred（Tool + episodic memory, 视 M4-M5 节奏决定）
+**MUST NOT**:
+- ❌ Edit / Write / Bash tool (P1+)
+- ❌ WebFetch / WebSearch (隐私边界)
+- ❌ Screenshot / clipboard (走 Context Awareness 域, 不是 Tool)
 
-**Kernel**:
-- (无新增, EventBus/Scheduler 已 Phase B 上)
-
-**Subsystems**:
-- ToolSub (3 read-only + GrantBroker 真接入 + whitelist + audit)
-- MemorySub.episodic + FTS5 + 摘要压缩
-
-**Soul Overlay**:
-- RetrievalRanker
-
-**SQLite**:
-- 🆕 episodic_memory + episodic_memory_fts (INTEGER rowid)
-- 🆕 tool_audit_log
-
-**ADR**:
-- 新增 ADR-025 (Tool Sandbox 完整决议) — Phase C 阻塞前置
-
-**Phase C 进入门槛** (任一不满足则推到 P1+):
-- Phase A + B 落地稳定 ≥ 4 周
-- 至少 2 个 LLM provider (OpenAI 兼容 + Ollama 本地) 经过 1 周生产观察
-- ADR-025 + ADR-027 完整决议通过
-- M4 / M5 主线功能 (装扮 / 声音 / 游戏) 进度健康
-
-### 14.4 🟡 P1+ 推迟清单（v2 明确不进 MVP）
+### 14.6 🟡 P1+ 推迟清单（v3 明确不进 MVP）
 
 - Writable tool (Edit/Write/Bash) + 撤销机制
 - Semantic memory + embeddings + vector store
@@ -2238,10 +2699,11 @@ Phase C: deferred, 视 M4-M5 节奏决定; 若不上, 桌宠仍为"安全+主动
 - 用户自定义 tool / 自定义 path whitelist
 - Event sourcing replay / dynamic subscribe
 - Wake 时 LLM-driven "重逢问候"
-- **🆕 Context Awareness 实际启用** (foreground_app / window_title / selected_text / microphone / screen_text 任何一项的实际读取)
-- **🆕 WriterCap<T> 类型期 token** (v2 Repository pattern 已够, WriterCap 是 hardening)
+- **Context Awareness 实际启用** (foreground_app / window_title / selected_text / microphone / screen_text 任何一项的实际读取)
+- **WriterCap<T> 类型期 token** (Repository pattern 已够, WriterCap 是 hardening)
+- **自动 LLM rolling summary** (要 4 项前置满足才上)
 
-### 14.5 🔴 不做清单（MVP + P1 均不做）
+### 14.7 🔴 不做清单（MVP + P1 均不做）
 
 - 跨进程 EventBus / 分布式 runtime
 - Live config hot reload
@@ -2249,10 +2711,12 @@ Phase C: deferred, 视 M4-M5 节奏决定; 若不上, 桌宠仍为"安全+主动
 - Background long-running tool
 - Network tool 在沙盒外执行 (WebFetch 暂不做, 因隐私边界考量)
 - Persona 自动演化 (持续学习改 `.soul/` 文件, 隐私 + 用户自主权风险)
-- **🆕 Soul 启用 Context Awareness 权限** (Constitution #11 永禁)
-- **🆕 Tool grant 走 EventBus** (Constitution #13 永禁)
+- Soul 启用 Context Awareness 权限 (Constitution #11 永禁)
+- Tool grant 走 EventBus (Constitution #13 永禁)
+- **Runtime 静默 rebind conversation.persona_snapshot_id** (Constitution #10 永禁)
+- **Snapshot 内冻结 nickname / safety / tool whitelist / mood** (carve-out 表 §2.5.4 永禁)
 
-### 14.6 ~5 周 MVP timeline (Phase A + B)
+### 14.8 ~5-5.5 周 MVP timeline (Phase A0+A1+A2+B)
 
 见 §12.4 Phase 排期表。Phase C 视实施期节奏单独决定, 不阻塞 MVP 发布。
 
