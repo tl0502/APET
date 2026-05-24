@@ -479,26 +479,26 @@ ADR-006 Updated; Constitution #1 工程落地。"
 
 - [ ] **Create `src-tauri/migrations/002_phase_a0_safety_secrets.sql`**:
 
+**修订记录** (2026-05-24 Task 2 实施期发现): 001_init.sql 已建 `secrets (key, ciphertext, updated_at)` 与 `error_logs (id, level, module, message, context, created_at)`。原 spec 的 `CREATE TABLE IF NOT EXISTS` 在已有表上是 no-op, 导致 Task 5 期望的 `secrets.created_at` 不会出现。修订: `secrets` 用 ALTER 加 `created_at`; `error_logs` 沿用 001 既有 schema (module/context 列名), Task 6+ LifecycleManager 写入时按现有列名调用,不在 A0 改名。
+
 ```sql
 -- Phase A0: Safety & Secrets migration
 -- - messages: 加 token_count + safety_scan_status (7-state enum)
--- - 新增 secrets 表 (Task 5 CryptoService 用)
--- - 新增 context_access_log 表 (Task 3 PermissionService 用)
--- - 新增 error_logs 表 (kernel 失败降级用)
+-- - secrets: ALTER ADD created_at (001 已建 key/ciphertext/updated_at; Task 5 DPAPI 审计需 created_at)
+-- - context_access_log: 新表 (Task 3 PermissionService 写入)
+-- - error_logs: 001 已建 (level/module/message/context/created_at); Phase A0 不改 schema,
+--   Task 6+ LifecycleManager 用 module/context 列, 不用 source/details
 
 -- 1. messages 表加字段
 ALTER TABLE messages ADD COLUMN token_count INTEGER DEFAULT NULL;
 ALTER TABLE messages ADD COLUMN safety_scan_status TEXT NOT NULL DEFAULT 'pending';
 
--- 2. secrets 表 (Task 5 DPAPI 加密 KV)
-CREATE TABLE IF NOT EXISTS secrets (
-    key TEXT PRIMARY KEY,
-    ciphertext BLOB NOT NULL,            -- DPAPI 加密后字节流
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
+-- 2. secrets 表加 created_at (001 已有 key/ciphertext/updated_at)
+-- 注: SQLite ALTER ADD COLUMN NOT NULL 必须有常量 DEFAULT, 用空串占位;
+-- Task 5 SecretRepo::set() INSERT 时显式写真实 RFC3339 时间, ON CONFLICT 不更新 created_at。
+ALTER TABLE secrets ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
 
--- 3. context_access_log 表 (Task 3 PermissionService 写入)
+-- 3. context_access_log 表 (Task 3 PermissionService 写入) — 新表
 CREATE TABLE IF NOT EXISTS context_access_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scope TEXT NOT NULL,
@@ -514,17 +514,9 @@ CREATE TABLE IF NOT EXISTS context_access_log (
 CREATE INDEX IF NOT EXISTS idx_context_audit_scope
     ON context_access_log(scope, created_at DESC);
 
--- 4. error_logs 表 (kernel 失败降级写入)
-CREATE TABLE IF NOT EXISTS error_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    level TEXT NOT NULL,                  -- 'warn' / 'error'
-    source TEXT NOT NULL,                 -- 'kernel.safety_guard' / 'kernel.event_bus' / etc.
-    message TEXT NOT NULL,
-    details TEXT,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_error_logs_source_time
-    ON error_logs(source, created_at DESC);
+-- 4. error_logs: 001 已建 (id, level, module, message, context, created_at)
+--    Phase A0 不在此 migration 改 schema 或加索引 (避免重名 / 旧 prod DB 兼容性问题);
+--    Task 6+ 按 001 既有列名写入。
 ```
 
 - [ ] **Step 2.2: 注册 migration 到 tauri plugin-sql**
