@@ -17,6 +17,16 @@ related:
 
 ## 变更摘要
 
+### v1.2（2026-05-24）
+
+实施期 M2 W3-W4 经 ADR-020 Updated 2026-05-18/20（磁吸 partial mesh + Rust solver）+ ADR-021 Accepted + Updated 2026-05-21（砍 dockview 改三栏手写）+ Updated 2026-05-22（L 型 chrome 框）+ ADR-022（PopupSidebar）+ ADR-024（dark / light surface 阶梯）后增量更新：
+
+- §2.2 窗口模型整段重写：删 `hub` / `settings` / `workshop` 行（被 workspace shell 取代或迁入）；加 `workspace` / `pomodoro` 行；保留 `pet` / `chat` / `onboarding` / `game_room` / `tray-menu`
+- §3.1 模块清单整段重写：删 ChatPanelView2 / ChatPanelView3 / HubChatTab 三 view 行（被 ADR-021 三栏壳取代）；新增 WorkspaceShell / ChatBody / ChatThreadPane / ConversationListPane / SnapService（Rust + 前端）/ TrayService / WindowActions+State / ConsentGate / PreferencesService / AvatarsService / OnboardingReminders 等工程演化产物
+- §6.1 LLMProvider trait `impl Stream` 形态保留为字面参考，*Superseded by ADR-018*（已加跳转）
+
+未变更：§0 / §1 / §2.1 / §2.3 / §3.2 / §4 / §5 / §6.2-§16 与 v1.1 一致。
+
 ### v1.1（2026-05-02）
 
 实施期 M1 D3 经 ADR-015 Accepted 后增量更新：
@@ -214,18 +224,19 @@ WindowBuilder::new(app, "game_room", WindowUrl::App("game.html".into()))
 - **WebView 进程(Edge WebView2)**:仅 UI 渲染。
 - **不引入额外子进程**(本地小模型 P1-R3 引入时通过 Ollama HTTP 调用,不内嵌)。
 
-### 2.2 窗口
+### 2.2 窗口(v1.2 重写,ADR-021 后)
 
 | 窗口 | 类型 | 默认状态 | 备注 |
 |---|---|---|---|
-| `pet` | 透明、置顶、无边框、点击穿透除身体外区域 | 启动后常驻 | 含控制按钮区子组件(M2 W3,§3.1 ChatPanelView 共用入口) |
-| `chat` | 普通、无边框、固定在桌宠附近 | 快捷键唤起 | 形态 2 磁吸浮窗(ADR-015):吸附/断开两态;失焦收缩到控制按钮区 |
-| `hub` | 普通、独立 1024×680(v1.1 新增,M4) | 用户主动打开 | 形态 1 总面板:对话/工坊/设置/游戏 launcher 4 tab(ADR-015) |
-| `settings` | (M4 起被 hub 设置 tab 整合) | 用户主动打开 | M3 期独立窗,M4 hub 上线后内嵌 |
-| `workshop` | (M4 起被 hub 工坊 tab 整合) | 用户主动打开 | M2 期独立窗,M4 hub 上线后内嵌 |
-| `onboarding` | 普通、模态 | 仅首启 | 与 hub 解耦(ADR-015 Q2),完成销毁 |
-| `game_room` | 普通、固定 480×600 | `game.start` 后显示(ADR-012) | hub 游戏 tab 调 `game_room.launch(id)` 启动(共生不替代,ADR-015 Q1) |
-| `tray-menu` | 系统托盘(非窗口) | 常驻 | |
+| `pet` | 透明、置顶、无边框 | 启动后常驻 | 320×320;角色窗 + 控制按钮区子组件(M2 W3,模块 A 延伸);hitbox raycast(§7.1.3) |
+| `chat` | 透明、无边框、可拖磁吸 | hidden 启动 + 快捷键唤起 | 形态 2 磁吸浮窗(ADR-020 partial mesh);默认 640×480,允许 [480..1000]×[400..800] 调;`useFocusAOT` 控制 AOT |
+| `workspace` | 实色、无边框、自绘 L 型 chrome 框(ADR-021 P3) | hidden 启动 + 用户唤起 | 形态 1 主床 + 5+3 panel 内嵌(chat / settings 3 / tasks 3);1100×720 default / 800×520 min;BrandBar + MasterColumn + SashHandle + DetailColumn 三栏;Profile in-workspace popup(ADR-022);rect 跨重启持久化 |
+| `pomodoro` | 实色、无边框、phase-driven AOT | hidden 默认;`pomodoro.start` 后显 | Pomotroid 型 360×480 frameless(#31);全屏 focus / 三入口 / 位置记忆 |
+| `onboarding` | 实色、无边框 | hidden 启动;仅首启显 | 480×640;ADR-019 续接 + 5 view 流程(soul-pledge / persona-picker / shortcut-confirm / reminder-intents / summon-invite);完成销毁 |
+| `game_room` | 普通、固定 480×600 | hidden 默认;`game.start` 后显示;M5 落地 | ADR-012 独立窗;workspace 游戏 launcher panel(M5)调 `game.start(id)` 启动 |
+| `tray-menu` | 系统托盘(非窗口) | 常驻 | 左键双击 → 唤起 workspace;右键 → 菜单 |
+
+**已删除窗口**(v1.1 → v1.2):`hub`(被 workspace 取代,ADR-021)、`settings` 独立窗(panel 迁入 workspace,ADR-021 phase E)、`workshop` 独立窗(panel 迁入 workspace 或留待 M4 重做)。
 
 ### 2.3 多显示器与 DPI
 
@@ -235,41 +246,54 @@ WindowBuilder::new(app, "game_room", WindowUrl::App("game.html".into()))
 
 ## 3. 模块边界
 
-### 3.1 模块清单(完整)
+### 3.1 模块清单(v1.2 重写)
 
 | 模块 | 责任 | 主要 API | 引入版本 |
 |---|---|---|---|
-| **PetRenderer**(前端) | 桌宠状态机渲染、动作、表情、配饰叠加;含**控制按钮区子组件**(v1.1 / M2,模块 A 延伸,ADR-015) | `playMotion / setExpression / loadAccessories` | v0.1+ |
-| **ChatPanelView2**(前端,v1.1) | 形态 2 磁吸浮窗的 view 实现(独立 chat 窗;M1 极简 → M2 完整磁吸) | 通过 IPC 调 ChatService + ConversationStore | v0.1+(M1 B.3.a / M2 B.3.c) |
-| **ChatPanelView3**(前端,v1.1) | 形态 3 漫画对话气泡 view(角色窗内子组件,沉浸式) | 同上 | M5(B.3.f) |
-| **HubChatTab**(前端,v1.1) | 形态 1 hub 内对话 tab view(含 conversations 列表) | 同上 | M4(B.3.e) |
-| **ConversationStore**(主进程,v1.1) | view-agnostic 数据层,管理多 conversation + 当前活跃(ADR-015) | `conversation.list / create / rename / archive / delete / activate` | M1 D5(I.1)+ M3 完整 UI |
-| **PersonaWorkshop**(前端) | 人格工坊 GUI(M4 起内嵌于 hub 工坊 tab)| 通过 IPC 调 PersonaService | v0.1+ |
-| **WardrobeStudio**(前端) | 装扮工坊 GUI(M4 起内嵌于 hub 工坊 tab)| 通过 IPC 调 WardrobeService | M4 |
-| **GameRoom**(前端) | 游戏舱 UI(独立窗口,hub 游戏 tab 做 launcher,ADR-012+ADR-015 共生) | 通过 IPC 调 GameEngine | M5 |
-| **ChatService**(主进程) | 对话编排、prompt 拼装、流式回复 | `chat.send / cancel / history` | v0.1+ |
-| **PersonaService**(主进程) | `.soul.md` 读写、校验、热切换 | `persona.list / get / save / import / activate` | v0.1+ |
-| **MemoryService**(主进程) | 用户偏好读写、增量更新 | `memory.list / set / delete` | v0.1+ |
-| **NicknameService**(主进程) | 桌宠/用户昵称管理(MemoryService facade) | `nickname.get / set_pet / set_user / restore` | M1 |
-| **TaskService**(主进程) | 提醒/番茄/待办的状态机与持久化 | `reminder.* / pomodoro.* / todo.*` | v0.1+ |
-| **Scheduler**(主进程) | 定时器、并发优先级、休眠唤醒恢复 | 内部 | v0.1+ |
-| **LLMProvider**(主进程) | 多供应商抽象、流式接口 | `provider.chat_stream / ping` | v0.1+ |
-| **CryptoService**(主进程) | DPAPI 包装、敏感字段加解密 | `crypto.protect / unprotect` | v0.1+ |
-| **TelemetryService**(主进程) | 埋点收集、本地缓存、补发 | `telemetry.record / flush` | v0.1+ |
-| **MigrationService**(主进程) | DB schema 升级、备份、回滚 | 启动时执行 | v0.1+ |
-| **UpdaterService**(主进程) | tauri-updater 集成 | `updater.check / install` | v0.1+ |
-| **NetworkProbe**(主进程) | 网络状态探测、模式切换通知 | event: `network.changed` | v0.1+ |
-| **SecurityGuard**(主进程) | 安全前缀注入、内容过滤 | 内部,被 ChatService / LLMGameRunner 调用 | v0.1+ |
-| **IdleDetector**(主进程) | 键鼠空闲 + 键盘 burst 检测 | `current_idle_ms / subscribe` | M3(N.4 在 M2) |
-| **LivingPetService**(主进程) | mood / energy / wandering / DailySchedule | `get_state / record_interaction / force_stop / set_feature_enabled` | M1+ |
-| **ProactiveCareService**(主进程) | 主动关心调度 + 频率上限 + 文案选择 | `set_enabled / set_quiet_hours / set_idle_threshold / user_response` | M3 |
-| **BossKeyService**(主进程) | 摸鱼模式快捷键与窗口可见性 | `toggle / rebind / is_hidden` | M2 |
-| **FileDropHandler**(主进程) | 文件拖入 preflight + action | `preflight / handle_action` | M3 |
-| **MilestoneService**(主进程) | 跨日纪念日 + 用户纪念日检测 | `check_now / list_reached` | M3+(用户纪念日 M4) |
-| **InteractionRouter**(主进程) | 物理交互 hitbox → 反应路由 | `dispatch / record_drag_count / reset_drag_state` | M2 |
-| **VoiceEffectPlayer**(主进程) | 本地音效播放 + 静音时段 | `play / set_global_mute / set_quiet_hours / set_volume / list_packs` | M4 |
-| **WardrobeService**(主进程) | 配饰库 + 节气推送 + 付费预埋 | `list_inventory / equip / unequip_all / current_equipped / check_seasonal` | M4 |
-| **GameEngine**(主进程) | 小游戏会话编排 + 安全前缀 + token 上限 | `start / submit / end / list_available` | M5 |
+| **PetRenderer**(前端) | 桌宠状态机渲染、动作、表情、配饰叠加;含控制按钮区子组件(M2 W3,模块 A 延伸) | `playMotion / setExpression / loadAccessories` | M1+ |
+| **WorkspaceShell**(前端,v1.2,ADR-021) | 工作台主壳:BrandBar + MasterColumn + SashHandle + DetailColumn 三栏;L 型 chrome 框;rect 跨重启;5+3 panel 容纳(chat / settings 3 / tasks 3) | 通过 useWorkspaceLayoutStore | M2 W3-W4 |
+| **ChatBody**(前端,v1.2) | chat 业务壳层:ConversationListPane + ChatThreadPane 双 pane 组装(磁吸窗用) | 共享 ConversationStore | M2 W3-W4 |
+| **ChatThreadPane**(前端,v1.2) | chat thread 单 pane(content-header + messages + composer);workspace DetailColumn 与磁吸窗 ChatBody 同源 | 共享 ConversationStore | M2 W3-W4 |
+| **ConversationListPane**(前端,v1.2) | chat 会话列表单 pane(sidebar + 删除二次确认);workspace MasterColumn 与磁吸窗 ChatBody 同源 | 共享 ConversationStore | M2 W3-W4 |
+| **ChatBubbleView**(前端,占位) | 形态 3 漫画对话气泡 view(角色窗内子组件,沉浸式) | 共享 ConversationStore | M5(B.3.f) |
+| **ConversationStore**(前端 pinia,v1.1) | view-agnostic 数据层,管理多 conversation + 当前活跃(ADR-015) | `conversation_list / create / rename / archive / delete / activate` | M1 D5 + M3 完整 UI |
+| **PopupSidebar / UserProfilePopup**(前端,v1.2,ADR-022) | in-workspace popup 880×580 overlay + flat sidebar nav(profile / account / privacy / notifications / help / about) | 共享 useUserPopupStore | M2 W4 |
+| **PetCanvas / VrmAvatarExporter / Cropperjs Avatar**(前端) | VRM 渲染 + 头像导出(#26)+ 用户头像上传裁剪(#25) | `avatars_upload / avatars_export_vrm` | M2 W3 |
+| **PersonaWorkshop**(前端,占位) | 人格工坊 GUI(M4 视需求接入 workspace 或独立窗) | 通过 IPC 调 PersonaService | M2 W4 / M4 |
+| **GameRoom**(前端,占位) | 游戏舱 UI(独立窗口,ADR-012;workspace launcher panel M5 接入) | 通过 IPC 调 GameEngine | M5 |
+| **ChatService**(主进程) | 对话编排、prompt 拼装、流式回复(`tauri::ipc::Channel<StreamEvent>` 流式契约,ADR-018) | `chat_send / chat_cancel / chat_history` | M1+ |
+| **PersonaService**(主进程) | `.soul.md` 读写、校验、热切换 | `persona_list / get / save / import / activate` | M1+ |
+| **MemoryService**(主进程) | 用户偏好读写、增量更新 | `memory_list / set / delete` | M1+ |
+| **NicknameService**(主进程) | 桌宠/用户昵称管理(MemoryService facade)+ 跨窗广播(`nickname:changed`) | `nickname_get / set_pet / set_user / restore` | M1 |
+| **AvatarsService**(主进程,v1.2) | 用户头像 / VRM 头像导出(#25/#26);assetProtocol scope `$APPCONFIG/avatars/**` | `avatars_upload_user / avatars_export_vrm / avatars_list` | M2 W3 |
+| **ReminderService**(主进程,M2) | 提醒 CRUD + Scheduler 5s polling + OS 通知 + 桌宠气泡 | `reminder_create / list / update / delete / snooze / complete` | M2 W3 |
+| **PomodoroService**(主进程,M2) | 番茄 5 IPC + drift 校准 + Scheduler 1s + FOCUS 期协作(hard 打断 / soft 缓冲) | `pomodoro_start / pause / resume / stop / today_stats` | M2 W3 |
+| **TodoService**(主进程,M2) | 待办 CRUD + 拖排序 + priority + 批量 + 搜索 + 最小日历(#29) | `todo_create / list / update / complete / breakdown_with_ai` | M2 W3-W4 |
+| **OnboardingReminders**(主进程,v1.2) | onboarding step 4 提醒 intent → 实例化 reminders(tx 注入式,lesson §15;模板双写约束 §16) | 内部(由 setup 调) | M2 W3 |
+| **OnboardingService / ConsentGate**(主进程,v1.2) | onboarding KV `onboarding:current_step` + 续接(ADR-019);consent.granted 守卫(IPC 前过滤) | `onboarding_complete / onboarding_get_step` / `consent_check_version` | M1+ |
+| **Scheduler**(主进程,M2) | 定时器、并发优先级、休眠唤醒恢复(reminder 5s + pomodoro 1s 双引擎) | 内部 | M2 W3 |
+| **SnapService**(Rust + 前端 lib,M2,ADR-020) | 磁吸 partial mesh + Forest-Walk Solver;前端 constraint 权威 + Rust 订阅 `WindowEvent::Moved` 批量 set_position | `snap_sync_constraints` + `useSnapWindow` + `useFocusAOT` composable | M2 W3 |
+| **TrayService**(主进程,v1.2) | 系统托盘菜单 + 左键双击 toggle workspace + 右键菜单(显示/隐藏 / 设置 / 退出) | 内部(setup 注册) | M1+ |
+| **WindowActions / WindowState**(主进程,v1.2) | 多窗显隐 + boss-key 全 hide + rect 跨重启持久化(pet / chat / pomodoro / workspace)+ `window:visibility-changed` 主动 emit(lesson §11) | `window_show / hide / toggle / get_rect / set_rect` | M1+(rect 跨重启 M2 W4) |
+| **PreferencesService**(主进程,v1.2) | 通用配置 KV facade(config 表 27 表零迁移原则,lesson §2)+ theme / shortcut 等高频项 | `preferences_get / set / delete / list_by_prefix` | M1+ |
+| **LLMProvider**(主进程) | 多供应商抽象、流式接口(callback 取代 Stream,ADR-018) | `provider.chat_stream / ping` | M1+ |
+| **LLMProviderConfig**(主进程,v1.2) | 6 preset(OpenAI / DeepSeek / Moonshot / Qwen / Ollama / Custom)+ API Key DPAPI 加密(M3 G 前明文 KV,ADR-018) | `llm_providers_list / get / save / set_api_key / test` | M2 |
+| **CryptoService**(主进程,占位) | DPAPI 包装、敏感字段加解密 | `crypto.protect / unprotect` | M3 G |
+| **TelemetryService**(主进程,占位) | 埋点收集、本地缓存、补发 | `telemetry.record / flush` | M5 自测期 |
+| **MigrationService**(主进程) | DB schema 升级、备份、回滚(plugin-sql migrations preload,lesson §3) | 启动时执行 | M1+ |
+| **UpdaterService**(主进程,占位) | tauri-updater 集成 | `updater.check / install` | M3 |
+| **NetworkProbe**(主进程,占位) | 网络状态探测、模式切换通知 | event: `network:changed` | M3 |
+| **SecurityGuard**(主进程,占位) | 安全前缀注入、内容过滤(M1 占位,M3 G 真注入,ADR-006) | 内部,被 ChatService / LLMGameRunner 调用 | M3 G |
+| **IdleDetector**(主进程,占位) | 键鼠空闲 + 键盘 burst 检测 | `current_idle_ms / subscribe` | M3(N.4 在 M2) |
+| **LivingPetService**(主进程,M1+) | mood / energy / wandering / DailySchedule + reminder hook + FOCUS / REMIND 期 wander 跳过 | `living_pet_get_state / record_interaction / force_stop / set_feature_enabled` | M1+(mood / energy / DailySchedule 待 M2-M3) |
+| **ProactiveCareService**(主进程,占位) | 主动关心调度 + 频率上限 + 文案选择 | `set_enabled / set_quiet_hours / set_idle_threshold / user_response` | M3 |
+| **BossKeyService**(主进程,占位) | 摸鱼模式快捷键与窗口可见性(全 hide 含 workspace) | `toggle / rebind / is_hidden` | M2 W4 |
+| **FileDropHandler**(主进程,占位) | 文件拖入 preflight + action | `preflight / handle_action` | M3 |
+| **MilestoneService**(主进程,占位) | 跨日纪念日 + 用户纪念日检测 | `check_now / list_reached` | M3+(用户纪念日 M4) |
+| **InteractionRouter**(主进程,占位) | 物理交互 hitbox → 反应路由 | `dispatch / record_drag_count / reset_drag_state` | M2 W4 |
+| **VoiceEffectPlayer**(主进程,占位) | 本地音效播放 + 静音时段 | `play / set_global_mute / set_quiet_hours / set_volume / list_packs` | M4 |
+| **WardrobeService**(主进程,占位) | 配饰库 + 节气推送 + 付费预埋 | `list_inventory / equip / unequip_all / current_equipped / check_seasonal` | M4 |
+| **GameEngine**(主进程,占位) | 小游戏会话编排 + 安全前缀 + token 上限 | `start / submit / end / list_available` | M5 |
 
 ### 3.2 严格依赖方向
 

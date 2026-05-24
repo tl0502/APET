@@ -19,6 +19,16 @@ related:
 
 ## 变更摘要
 
+### v1.2（2026-05-24）
+
+实施期 M2 W3-W4 经 ADR-021《Single-window workspace + dockable panel》Accepted + Updated 2026-05-21（砍 dockview 改三栏手写）+ Updated 2026-05-22（L 型 chrome 框）后增量更新：
+
+- §7.2 模块 B 整段重写为 **主床（workspace 内 chat 类别）+ 磁吸浮窗 + 漫画气泡** 三形态共存；原 v1.1 "形态 1 hub 独立 1024×680 4 tab" 被 workspace shell 取代
+- §7.2.1 形态 2 磁吸浮窗默认尺寸由 380×480 改为 640×480（实测多会话列表 + composer 输入区共需要的下方空间）
+- §7.2.3 物理阈值 Q4 TBD 标 *Resolved by ADR-020 Updated*（partial mesh + ATTACH 10 / DETACH 18 / FIELD 20）
+
+未变更：§1-§6 / §7.1 / §7.3-§7.18 / §8-§14 与 v1.1 一致。
+
 ### v1.1（2026-05-02）
 
 实施期 M1 D3 经 ADR-015《对话面板三形态架构》Accepted 后增量更新：
@@ -98,7 +108,7 @@ AI 桌宠定位在三者交集:**形态拉新、自主人格塑造留存、轻�
 
 ### 2.6 M0 ADR 决策(21-34)
 
-21. **前端框架(ADR-001)**:Vue 3 + TypeScript + Pinia + Vite。组件库 Naive UI 或 Element Plus(M1 第一天 spike 后定)。
+21. **前端框架(ADR-001 + ADR-017)**:Vue 3 + TypeScript + Pinia + Vite + Element Plus 全量 import(ADR-017 *Supersedes* 原"Naive UI 或 Element Plus,M1 第一天 spike 后定"悬而未决项)。
 22. **桌宠资源管线(ADR-002,Superseded)**:**VRM 3D**(Three.js + `@pixiv/three-vrm`)。原 Live2D Cubism 4 路线 M0 末废止(Cubism Core 6 ABI 不兼容 + 上游停更)。M1 spike:配饰附着点(humanoid bone)可行;启动/内存预算推到 M5 自测期统一压测(详 §10 性能预算)。
 23. **配饰美术管线(ADR-003,Superseded)**:VRM humanoid bone attach + VRMC_node_constraint。每个 VRM 模型预留 head / neck / leftEye 等标准 bone 作为配饰挂载点;配饰为独立 .glb 节点(含 transform / scale / 父骨骼字段)。切换 < 500ms。
 24. **物理交互动作清单(ADR-004)**:12 个核心动作 ID — `head_pat / tilt_head / tail_wiggle / lean_in / surprised / fall_asleep / stretch / yawn / dizzy / protest / cheer / rub_eyes`。默认 reaction_table 详见 ADR-004,`.soul.md` 的 `# 反应配置` 区段可覆盖。
@@ -310,15 +320,15 @@ AI 桌宠定位在三者交集:**形态拉新、自主人格塑造留存、轻�
 
 切换路径:3 号按钮 / 托盘"鼠标穿透"项,二者等价;状态持久化到 `config.mouse_through=true|false`。
 
-#### 7.1.2 控制按钮区(M2 W3 上线)
+#### 7.1.2 控制按钮区(M2 W3+,**Updated 2026-05-24**)
 
-依 ADR-015,2 号容器位置作为多功能入口。M2 W3 起按钮按需扩充,**M2 W3 首版仅一个按钮**:
+依 ADR-015,角色窗 2 号容器位置作为多功能入口。**Updated 2026-05-24**:`置于顶层` 切换的主入口已迁至**系统托盘菜单**(`tray.rs::MENU_ID_AOT`,ADR-021 phase E 桌面 UI 简化延伸 + 托盘左键双击 → workspace 同期落地的语义聚合),角色窗内"控制按钮区"作为多按钮容器的承诺**降级**为按需启用 — 当 M2 W4+ 有真实多按钮需求(摸鱼模式 / 形态 3 漫画气泡入口 / 多个工具型快捷)时再决定是否实装容器 UI。
 
 | # | 按钮 | 功能 | 上线时点 |
 |---|---|---|---|
-| 1 | 置于顶层 | 切换 `config.always_on_top` | M2 W3 |
+| 1 | 置于顶层(已迁托盘) | 托盘菜单 `✓ 置于顶层` 切换 `config:window:pet:always_on_top` | M2 W3(托盘形式) |
 
-后续按钮(chat 唤起 / 摸鱼 / 形态 3 激活 / hub 入口 / 设置等)按 ADR-015 切片排期增补;横向滚动容器无最大数量约束。
+后续按钮(chat 唤起 / 摸鱼 / 形态 3 激活 / 设置等)按各模块上线时点判断:① 单按钮 → 走托盘菜单或全局快捷键;② 多按钮聚合 → 再实装角色窗内控制按钮区容器。横向滚动容器无最大数量约束(若启用)。
 
 #### 7.1.3 Hitbox 几何(Bone Proxy 方案)
 
@@ -352,62 +362,70 @@ AI 桌宠定位在三者交集:**形态拉新、自主人格塑造留存、轻�
 7. 控制按钮区与穿透开关:默认隐形,鼠标悬停才显示;2 / 3 容器不参与拖动;角色透明像素区域可拖动整窗。
 8. 状态叠加态 `IN_GAME` / `BOSS_KEY_HIDDEN` 时模块 A 行为按 [flows.md §21](./flows.md#21-状态机总图)(不重复定义)。
 
-### 7.2 模块 B:对话与唤起(v1.1 重写)
+### 7.2 模块 B:对话与唤起(v1.2 重写)
 
-**M 阶段**:M1 W1-2(B.3.a 形态 2 极简);M2 W3-4(B.3.c 形态 2 磁吸完整);M3(B.3.d 多 conversation);M4(B.3.e 形态 1 hub);M5(B.3.f 形态 3 漫画气泡)
-**关键依赖**:ConversationStore(共享数据层);Tauri 多窗口 API;ADR-015;模块 H 人格(prompt 拼装);模块 L 文件接收(§7.12 多接收源)
+**M 阶段**:M1 W1-2(B.3.a 形态 2 极简);M2 W3-4(B.3.c 形态 2 完整磁吸 + ADR-021 P2/P3 形态 1 主床落地);M3(B.3.d 多 conversation UI 完整);M5(B.3.f 形态 3 漫画气泡)
+**关键依赖**:ConversationStore(共享数据层);ADR-015 三形态;ADR-020 磁吸 partial mesh;ADR-021 workspace shell;模块 H 人格(prompt 拼装);模块 L 文件接收(§7.12 多接收源)
 **设计状态**:✅ 已详细化
 
-依 ADR-015,对话面板采用 **3 形态共存 + 共享 ConversationStore** 架构,而非原 v1.0 单一对话面板。三形态共享同一 conversation 数据,仅视图(View)不同。
+依 ADR-015 + ADR-021,对话面板采用 **3 形态共存 + 共享 ConversationStore** 架构,而非单一对话面板。三形态共享同一 conversation 数据,仅视图(View)不同。
 
 #### 7.2.1 三形态规范
 
-| 形态 | 窗口 | 默认入口 | M 阶段 |
+| 形态 | 容器 | 默认入口 | M 阶段 |
 |---|---|---|---|
-| **1 hub 总面板** | 独立 Tauri 窗口 `hub`(1024×680,4 tab:对话/工坊/设置/游戏 launcher)| 托盘菜单 / 各 tab 入口 | M4(B.3.e) |
-| **2 磁吸浮窗** | 独立 Tauri 窗口 `chat`(默认 380×480)| `Ctrl+Alt+Space` / 点击桌宠 | M1 极简(B.3.a)→ M2 完整(B.3.c) |
+| **1 主床** | 工作台 `workspace` `chat` 类别(MasterColumn 会话列 + DetailColumn 对话流) | 托盘左键双击 / `Ctrl+Alt+W` / 托盘菜单"打开工作台" | M2 W3-W4(ADR-021 P2/P3 落地) |
+| **2 磁吸浮窗** | 独立 Tauri 窗 `chat`(默认 640×480,允许 [480..1000]×[400..800] 调,可拖磁吸到 pet 旁) | 全局快捷键 `Ctrl+Alt+Space` / 点击桌宠 | M1 极简(B.3.a)→ M2 完整磁吸(B.3.c,ADR-020 partial mesh) |
 | **3 漫画气泡** | 角色窗内子组件(非独立窗) | 控制按钮区某按钮 | M5(B.3.f) |
 
-形态 2 是默认形态;形态 1 是统一控制台(整合工坊+设置+对话+游戏 launcher);形态 3 是沉浸式漫画对话气泡。
+- **形态 1 主床**是 chat 的核心入口,深度阅读 / 多会话切换 / 长文输入走这里;workspace 整体作为多 panel 工作台同时容纳 chat 与其他工具型 panel(详见 ADR-021)
+- **形态 2 磁吸浮窗**是"快速唤起"入口,按 `Ctrl+Alt+Space` 弹小窗磁吸到桌宠旁,问一句话立即收
+- **形态 3 漫画气泡** M5 上线,沉浸式贴在角色头上(B.3.f)
 
 #### 7.2.2 共享行为(所有形态)
 
-- **唤起**:全局快捷键 `Ctrl + Alt + Space`(可改),或点击桌宠;默认开形态 2
+- **唤起**:`Ctrl+Alt+Space`(可改)→ 默认开形态 2;`Ctrl+Alt+W` / 托盘双击 / 托盘菜单 → 形态 1 主床
 - **首 token 延迟**:p50 ≤ 1.5s
 - **流式渲染**:LLM 回复 token-by-token 流式展示
 - **离线降级**:无网络时使用人格离线模板池抽样回复
-- **会话存储**:消息文本、时间戳、当时人格 ID、`conversation_id`(v1.1 新增);默认本地保留 90 天,可清除
-- **多 conversation**:用户可创建/切换/重命名/归档/删除多个 conversation(M3 B.3.d 上线)
-- **形态切换语义**:同一 `conversation_id` 跨形态切换数据保留,view 切换不丢消息
+- **会话存储**:消息文本、时间戳、当时人格 ID、`conversation_id`;默认本地保留 90 天,可清除
+- **多 conversation**:用户可创建/切换/重命名/归档/删除多个 conversation(M3 B.3.d 完整 UI)
+- **形态切换语义**:同一 `conversation_id` 跨形态切换数据保留,view 切换不丢消息(ConversationStore 单一真相源)
 
-#### 7.2.3 形态 2 磁吸细则(M2 B.3.c)
+#### 7.2.3 形态 2 磁吸细则(M2 B.3.c,ADR-020 Updated 落地)
 
-- 状态 A 吸附:黏在角色窗右/下/左/上,大小由角色窗决定
-- 状态 B 断开:用户拖动 > 阈值后脱离,自由大小(min size 约束),自由位置;持久化坐标
-- 状态切换:拖动 > 阈值 → 断开;拖回 < 阈值 → 自动吸附(异磁极感)
-- 失焦:收缩到 §7.1.1 控制按钮区;再唤起恢复失焦前状态(吸附/断开位)
-- 物理阈值 Q4 TBD,M2 W3 启动 B.3.c 前拍板
+依 ADR-020 Updated 2026-05-18(constraint-based partial mesh + Forest-Walk Solver)+ Updated 2026-05-20(角色模型 + 反向吸引 + Rust solver):
 
-#### 7.2.4 hub 与 GameRoom 关系(ADR-015 + ADR-012 共生)
+- **拓扑**:Partial mesh + 5 不变量(I1 每窗 ≤ 1 constraint / I2 commit 前环检测 / I3 drag 期间挂起 / I4 onMoved 走 `solve(roots)` / I5 角色拓扑平等)
+- **角色守卫**:pet 硬编码 primary,chat / tasks / pomodoro 等 secondary;primary 拖动且无 dependents 时反向吸引附近 secondary;secondary 拖动走 source 路径,首帧 detachAll;不变量 I3':`constraint.sourceId` 永远不是 primary
+- **物理参数**(原 PRD §7.2.3 "Q4 TBD",*Resolved by ADR-020 Updated*):trigger zone 24px / corner dead zone 24×24 / projection overlap 阈值 `max(72, edge × 0.25)` / ATTACH 10px / DETACH 18px / FIELD_RADIUS 20 / candidate score = `distance × 0.6 + overlapPenalty × 0.2 + (1 − memoryBias) × 0.2`
+- **escape hatch**:Shift 或 Ctrl 拖动跳过本次吸附
+- **失焦 AOT**:工具窗(chat / pomodoro)平时 AOT=false,被 focus 时升 topmost,失焦降回(`useFocusAOT` composable);pet 始终 topmost
+- **关窗清理**:`window:visibility-changed` Rust 主动 emit → 前端 listen 清 registry(WebView2 不触发 DOM visibilitychange,详见 [lessons.md §11](../lessons.md))
+- **持久化**:单 KV `snap:constraints` JSON 数组,启动 load + solve;anchor 缺失自动 downgrade free
+- **跨进程同步**:前端是 constraint 权威源,Rust solver 只读(`snap.rs` 订阅 `WindowEvent::Moved` + 批量 `set_position`);防死循环用 `internal_until` guard
 
-hub 的"游戏" tab 是游戏列表 + 启动按钮,点击调 `game_room.launch(id)` 创建独立 GameRoom 窗口;hub 仅做 launcher,GameRoom 沉浸感保留(沿用 ADR-012)。
+#### 7.2.4 workspace 与 GameRoom 关系(ADR-012 + ADR-021)
 
-#### 7.2.5 hub 与 Onboarding 关系
+GameRoom(ADR-012 独立 480×600 Tauri 窗)与 workspace 并列存在,**不内嵌**;workspace 中的"游戏" launcher panel(M5)调 `game.start(id)` 创建 GameRoom 窗。沉浸感保留(沿用 ADR-012)。
 
-Onboarding 保持独立窗口(`onboarding`),完成后销毁;hub 不掺和。生命周期不同(一次性 vs 常驻)。
+#### 7.2.5 workspace 与 Onboarding 关系(ADR-019 + ADR-021)
+
+Onboarding 保持独立窗口 `onboarding`(ADR-019 续接 + 5 view 流程:`soul-pledge` / `persona-picker` / `shortcut-confirm` / `reminder-intents` / `summon-invite`;原 PRD §5.1 "6 步" 中"Step 5 番茄演示"经 #21 拍板跳过,M2 真番茄上线前不假演示),完成后销毁。workspace 不掺和,生命周期不同(一次性 vs 常驻)。Onboarding 完成时弹一次性 tooltip 引导用户认识 workspace(KV `onboarding:workspace_intro_seen`,ADR-021)。
 
 #### 7.2.6 验收
 
 1. 三形态切换同一 `conversation_id` 数据保留,view 切换不丢消息。
 2. 全局快捷键 `Ctrl+Alt+Space` / 点击桌宠默认开形态 2;唤起延迟 < 200ms。
-3. 首 token 延迟 p50 ≤ 1.5s;LLM 回复 token-by-token 流式渲染(与 §10.1 一致)。
-4. 离线时启用人格离线模板池抽样回复;联网恢复后自动切回云模型,对话连续。
-5. 形态 2 磁吸:状态 A 吸附四向(右/下/左/上)、状态 B 自由位置切换正确;断开/吸附阈值生效;失焦收缩到 §7.1.1 控制按钮区,再唤起恢复失焦前状态。
-6. 形态 1 hub 的"游戏" tab 调用 `game_room.launch(id)` 创建独立 GameRoom 窗口(沿用 ADR-012),hub 仅做 launcher。
-7. 多 conversation 完整 CRUD(创建/切换/重命名/归档/删除,M3 B.3.d 上线后)。
-8. 形态 3 漫画气泡叠加在角色窗内,不开新 Tauri 窗口。
-9. 会话存储字段完整:消息文本 / 时间戳 / 当时人格 ID / `conversation_id`;默认本地保留 90 天可清除。
-10. Onboarding 窗口完成后销毁,与 hub 互不干扰。
+3. workspace 入口三件套(`Ctrl+Alt+W` / 托盘左键双击 / 托盘菜单"打开工作台")默认开形态 1 主床。
+4. 首 token 延迟 p50 ≤ 1.5s;LLM 回复 token-by-token 流式渲染(与 §10.1 一致)。
+5. 离线时启用人格离线模板池抽样回复;联网恢复后自动切回云模型,对话连续。
+6. 形态 2 磁吸:partial mesh 拓扑(I1-I5 不变量);ATTACH/DETACH/FIELD/projection 参数(§7.2.3)生效;Shift/Ctrl escape hatch;关窗清理 registry。
+7. 形态 1 主床:workspace chat 类别下 master 列显 conversation 列表,detail 列显 thread + composer;切类别回 chat 状态保留(streaming / scroll / textarea 不丢)。
+8. 多 conversation 完整 CRUD(创建/切换/重命名/归档/删除,M3 B.3.d 完整 UI 上线后)。
+9. 形态 3 漫画气泡叠加在角色窗内,不开新 Tauri 窗口(M5)。
+10. 会话存储字段完整:消息文本 / 时间戳 / 当时人格 ID / `conversation_id`;默认本地保留 90 天可清除。
+11. Onboarding 窗口完成后销毁,与 workspace 互不干扰;首次完成时弹一次性 tooltip 引导认识 workspace(KV `onboarding:workspace_intro_seen`)。
 
 ### 7.3 模块 C:提醒系统
 
