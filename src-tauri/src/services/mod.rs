@@ -68,6 +68,12 @@ pub mod window_state;
 // 不存在，改 tick 方案；详 idle.rs 头注）。
 pub mod idle;
 
+// #23-d K BossKey (#42)：摸鱼模式 — Ctrl+Shift+B 一键隐藏 4 窗（pet/chat/workspace/pomodoro）+
+// 缓冲提醒 KV（boss_key_pending_reminders）+ 恢复合并通知 + 崩溃恢复 KV（bosskey:pending）。
+// onboarding 期 consent_gate=false 静默忽略（flows §12.4 Updated 2026-05-24 + ADR-019）。
+// reminder.rs::fire 是缓冲生产方（在 in_focus 检查前查询 is_hidden）。
+pub mod bosskey;
+
 // #6 系统托盘 + 窗口动作 helper（M1 W2 主态可达交付物）。
 // window_actions 的 show_pet / hide_pet 在 #6 范围内未消费，#7 shortcuts task
 // 接入 Ctrl+Alt+Space 全局快捷键时启用；mod 级 #[allow(dead_code)] 屏蔽 dead_code warning，
