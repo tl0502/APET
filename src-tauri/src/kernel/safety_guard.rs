@@ -11,6 +11,7 @@ pub enum SafetyError {
     #[error("safety prefix asset missing: {0}")]
     PrefixMissing(String),
     #[error("scan rule load failed: {0}")]
+    #[allow(dead_code)] // Phase A0: forward hook for P1 dynamic rule loading
     ScanRuleLoad(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -20,6 +21,11 @@ pub enum SafetyError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanTokenResult {
     Pass,
+    /// soft hit: 替换最近 N 个**字符**(非字节) 为占位, stream 继续。
+    /// `replace_last_n` 是 char 数 (不是 byte / grapheme),
+    /// 调用方按 `s.chars().rev().take(n)` 计算定位再切片回写。
+    /// Phase A0 占位串为 `[审核中…]`, 6 chars = `['[', '审', '核', '中', '…', ']']`
+    /// (UTF-8 ≈ 14 bytes), `replace_last_n=8` 是粗略上下文窗口非精确长度。
     SoftBlock {
         replace_last_n: usize,
         placeholder: String,
@@ -53,6 +59,17 @@ pub trait SafetyGuard: Send + Sync {
     fn wrap_messages(&self, messages: Vec<ChatMessage>, locale: Locale) -> Vec<ChatMessage>;
 
     /// 入方向: 流式 token chunk 增量扫 (Scope #2)。
+    ///
+    /// **Phase A0 约定**: 实现使用 substring 匹配整个 `accumulated`,
+    /// 同一规则在一次流中会重复命中。调用方 (ChatService) 必须按 `rule_id`
+    /// 去重: 同 stream 同 rule_id 已 SoftBlock/HardEnd 过, 不再触发 FSM 转换,
+    /// 否则会在重复 token 上震荡。
+    ///
+    /// `partial` 是本次 token chunk, `accumulated` 是流到目前为止的全文,
+    /// `finished` 标识是否是流终态 token; Phase A0 行为同 false,
+    /// P1 评估是否分流端 token 与流终 token 不同 rule 集。
+    ///
+    // TODO(P1): 切换为 trailing-window 扫 (仅扫尾部 N chars), 避开线性增长。
     fn scan_token(&self, partial: &str, accumulated: &str, finished: bool) -> ScanTokenResult;
 
     /// 入方向: 流终态全文扫 (Scope #3 LLM final)。
@@ -96,6 +113,7 @@ impl SafetyGuardImpl {
 
 impl SafetyGuard for SafetyGuardImpl {
     fn wrap_messages(&self, mut messages: Vec<ChatMessage>, _locale: Locale) -> Vec<ChatMessage> {
+        // Phase A0: locale 暂未分流; P1 评估 zh-CN / en-US 切不同 prefix 文件 (asset 多语言)。
         match messages.first_mut() {
             Some(first) if first.role == Role::System => {
                 let prefix_part = ContentPart::Text {
@@ -265,6 +283,26 @@ mod tests {
             guard.scan_user_input("自杀"),
             ScanFinalResult::Blocked { .. }
         ));
+    }
+
+    #[test]
+    fn scan_final_prefers_hard_block_when_both_hit() {
+        let guard = make_guard();
+        let result = guard.scan_final("自杀和违禁混合", "snap_1");
+        match result {
+            ScanFinalResult::Blocked { rule_ids, .. } => {
+                assert!(rule_ids.contains(&"自杀".to_string()));
+            }
+            other => panic!("expected Blocked (hard precedence), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn scan_token_finished_flag_currently_does_not_change_outcome() {
+        let guard = make_guard();
+        let a = guard.scan_token("", "hello", false);
+        let b = guard.scan_token("", "hello", true);
+        assert_eq!(a, b);
     }
 
     #[test]
