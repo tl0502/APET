@@ -317,6 +317,18 @@ pub fn run() {
             // 启动期一次性调用 reminder.rs:631），改 tick 心跳方案；详 services/idle.rs 头注。
             app.manage(crate::services::idle::IdleState::default());
             crate::services::idle::start_watchdog(app.handle().clone());
+            // #23-d K BossKey (#42)：manage state + 崩溃恢复（清 `bosskey:pending` KV +
+            // flush pending reminders）+ 注册 Ctrl+Shift+B 全局快捷键。
+            // 顺序要求：必须在 ConsentGate manage 后（toggle 入口要 query gate）+ 在
+            // tauri_plugin_global_shortcut plugin init 后（已在 Builder 链顶部）。
+            app.manage(crate::services::bosskey::BossKeyState::default());
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::block_on(async move {
+                    crate::services::bosskey::recover_from_crash(&app_handle).await;
+                });
+            }
+            crate::services::bosskey::register_bosskey_on_startup(app.handle());
             Ok(())
         })
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
@@ -575,6 +587,11 @@ pub fn run() {
             crate::commands::interaction::interaction_dispatch,
             crate::commands::interaction::interaction_record_drag_count,
             crate::commands::interaction::interaction_reset_drag_state,
+
+            // #23-d K BossKey (#42) — 3 IPC（toggle / rebind / is_hidden）；摸鱼模式 + 缓冲提醒
+            crate::commands::bosskey::bosskey_toggle,
+            crate::commands::bosskey::bosskey_rebind,
+            crate::commands::bosskey::bosskey_is_hidden,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

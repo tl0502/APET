@@ -27,7 +27,7 @@
 use chrono::{DateTime, Datelike, Local, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Sqlite, SqliteConnection, Transaction};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_notification::NotificationExt;
 use thiserror::Error;
 use ulid::Ulid;
@@ -558,6 +558,30 @@ pub(crate) async fn fire<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(),
 
     tx.commit().await?;
     conn.close().await?;
+
+    // #42 BossKey 协作（flows §12.2 + Updated 2026-05-24）：摸鱼期所有 reminder 都入缓冲队列，
+    // 不 emit / 不 OS 通知 / 不打断 focus。即便 hard 也走缓冲（用户"现在不能见人"语义优先于
+    // 硬中断 UI）。注意：DB tx 已 commit、history.action='ignored' 已写入，安排再触发的
+    // anchor 已推进 —— 与正常 fire 在 DB 层面没有区别，只是 UI 层延后展示。
+    // 顺序考量：BossKey 在 pomodoro in_focus 检查之前 —— 隐藏窗集合含 pomodoro 窗，焦点
+    // hard 中断也无窗可显示；走 BossKey 缓冲让 show 时合并展示更自然。
+    let bosskey_hidden = app
+        .try_state::<crate::services::bosskey::BossKeyState>()
+        .map(|s| s.is_hidden())
+        .unwrap_or(false);
+    if bosskey_hidden {
+        if let Err(e) = crate::services::bosskey::push_pending_reminder(
+            app,
+            id.to_string(),
+            r.title.clone(),
+            r.priority.clone(),
+        )
+        .await
+        {
+            eprintln!("[reminder] bosskey push_pending_reminder failed: {e}");
+        }
+        return Ok(());
+    }
 
     // #28 协作：FOCUS 期 reminder 处理分支。
     // - hard：调 pomodoro::cancel_by_hard_interrupt 写 cancelled 行 + 清 active KV，

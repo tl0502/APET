@@ -34,3 +34,5 @@ pub mod window;
 pub mod avatars;
 // #23-a IdleDetector IPC (#39) — idle_get_state 单命令返回 {idleMs, isIdle, recentlyWoke}
 pub mod idle;
+// #23-d K BossKey IPC (#42) — 3 命令：toggle / rebind / is_hidden（摸鱼模式 + 缓冲提醒）
+pub mod bosskey;
