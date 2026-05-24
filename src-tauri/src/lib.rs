@@ -38,13 +38,21 @@ const HIDE_ON_CLOSE_LABELS: &[&str] = &[
 /// 历史：002 (persona_snapshots unique idx) 在 2026-05-06 code-review #7
 /// 合并回 001（同一 PR 引入，从未对外发布；保留两个 migration 是无意义历史负担）。
 fn migrations() -> Vec<Migration> {
-    vec![Migration {
-        version: 1,
-        description:
-            "init schema v1 per architecture v1.1 §4 (ADR-015 三形态共享 ConversationStore)",
-        sql: include_str!("../migrations/001_init.sql"),
-        kind: MigrationKind::Up,
-    }]
+    vec![
+        Migration {
+            version: 1,
+            description:
+                "init schema v1 per architecture v1.1 §4 (ADR-015 三形态共享 ConversationStore)",
+            sql: include_str!("../migrations/001_init.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "Phase A0 safety + secrets",
+            sql: include_str!("../migrations/002_phase_a0_safety_secrets.sql"),
+            kind: MigrationKind::Up,
+        },
+    ]
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
