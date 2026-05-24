@@ -4,6 +4,7 @@
 //
 // Phase A0 不上 EventBus / Scheduler / 完整 SubsystemRegistry。
 
+pub mod crypto;
 pub mod grant_broker;
 pub mod permission_service;
 pub mod repos;
