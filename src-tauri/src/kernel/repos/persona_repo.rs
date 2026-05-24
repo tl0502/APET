@@ -1,7 +1,7 @@
 // PersonaRepo — owner of `personas` + `persona_snapshots` + `persona_snapshot_profiles` tables.
 // Phase A0: 极简 stub, Phase A1 SoulCompiler 落地时扩接口。
 
-use super::conversation_repo::RepoError;
+use super::RepoError;
 use sqlx::SqliteConnection;
 
 pub struct PersonaRepo {}

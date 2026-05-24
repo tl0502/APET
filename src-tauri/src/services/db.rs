@@ -73,3 +73,16 @@ pub async fn enforce_pragmas(conn: &mut SqliteConnection) -> Result<(), DbError>
     conn.execute("PRAGMA busy_timeout = 5000").await?;
     Ok(())
 }
+
+/// 内部使用: 按显式 path 打开 (kernel PermissionService 用)。
+/// 与 `open_app_db` 区别: 不走 AppHandle, 而是接受调用方持有的 path。
+/// Phase A0 临时方案; Phase A1 kernel/db 模块完整收口后 deprecate。
+pub async fn connect_at(db_path: &std::path::Path) -> Result<SqliteConnection, DbError> {
+    let mut conn = SqliteConnectOptions::new()
+        .filename(db_path)
+        .create_if_missing(false)
+        .connect()
+        .await?;
+    enforce_pragmas(&mut conn).await?;
+    Ok(conn)
+}

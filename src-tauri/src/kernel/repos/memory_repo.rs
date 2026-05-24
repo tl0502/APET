@@ -1,6 +1,6 @@
 // MemoryRepo — owner of `memory` table (KV). Phase A2 扩接口。
 
-use super::conversation_repo::RepoError;
+use super::RepoError;
 use sqlx::SqliteConnection;
 
 pub struct MemoryRepo {}

@@ -3,16 +3,8 @@
 //
 // Spec: §8.1 Repository Pattern; §6.6 SafetyGuard FSM 写 messages.safety_scan_status
 
+use super::RepoError;
 use sqlx::SqliteConnection;
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum RepoError {
-    #[error("sqlx: {0}")]
-    Sqlx(#[from] sqlx::Error),
-    #[error("not found: {0}")]
-    NotFound(String),
-}
 
 /// messages.safety_scan_status 7 状态枚举 (Spec §6.6)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
