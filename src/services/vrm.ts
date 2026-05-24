@@ -254,6 +254,12 @@ export class VRMRuntime {
       throw new Error('VRM runtime not initialized')
     }
 
+    // #40 (ADR-025) per-model hitbox manifest hook 点：检测 <model>_hitbox.json 同名 sibling。
+    // M2 不消费 manifest 内容（4 hitbox + Bone Proxy 推迟 M3+），仅留 console.info 留痕
+    // 证明 hook 已 wired up，未来 M3+ 接入时只需替换内部解析逻辑。
+    // 命名约定：avatar.vrm → avatar_hitbox.json（ADR-025 per-model manifest 设计原则 #2）
+    void this.probeHitboxManifest(url)
+
     const loader = new GLTFLoader()
     loader.register((parser) => new VRMLoaderPlugin(parser))
 
@@ -626,6 +632,44 @@ export class VRMRuntime {
       }
       requestAnimationFrame(tick)
     })
+  }
+
+  /**
+   * #40 (ADR-025) per-model hitbox manifest 检测 hook 点。
+   *
+   * 约定（ADR-025 per-model manifest 设计原则）：
+   * - 命名：`<model_basename>_hitbox.json`（与模型同目录，如 `/avatar/avatar.vrm` → `/avatar/avatar_hitbox.json`）
+   * - manifest 是 **optional capability**：用户可自主切换 / 上传模型；缺失 → 自动 AABB 单 body 降级
+   * - M2 期：本方法**不消费** manifest 内容（仅 HEAD probe + console.info 留痕）
+   * - M3+ 期：本方法替换为真实 parse + attach Bone Proxy 4 hitbox 到 humanoid bone
+   *
+   * 失败降级：HEAD 请求失败 / 网络异常 / model URL 非 .vrm → 静默走默认 AABB 路径（不阻塞 loadModel）。
+   * fire-and-forget：不让 manifest probe 阻塞 VRM 加载（probe 耗时 < manifest 解析 ≪ VRM 加载）。
+   */
+  private async probeHitboxManifest(modelUrl: string): Promise<void> {
+    if (!modelUrl.toLowerCase().endsWith('.vrm')) {
+      console.info('[vrm] hitbox manifest hook skipped: model url is not .vrm')
+      return
+    }
+    const manifestUrl = modelUrl.replace(/\.vrm$/i, '_hitbox.json')
+    try {
+      // HEAD 不读 body；Vite static serve / Tauri asset protocol 都接 HEAD。
+      // 404 / network err → 走 AABB 降级（M2 默认路径）。
+      const res = await fetch(manifestUrl, { method: 'HEAD' })
+      if (res.ok) {
+        console.info(
+          `[vrm] hitbox manifest hook checked: ${manifestUrl} found → AABB fallback (parse path lands in M3+)`,
+        )
+      } else {
+        console.info(
+          `[vrm] hitbox manifest hook checked: ${manifestUrl} missing (HTTP ${res.status}) → AABB fallback`,
+        )
+      }
+    } catch (e) {
+      console.info(
+        `[vrm] hitbox manifest hook checked: ${manifestUrl} probe failed (${(e as Error).message}) → AABB fallback`,
+      )
+    }
   }
 
   destroy(): void {

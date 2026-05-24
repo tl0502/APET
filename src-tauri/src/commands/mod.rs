@@ -24,6 +24,9 @@ pub mod reminder;
 pub mod todo;
 // #28 pomodoro IPC（6 命令：start/pause/resume/stop/active/today_stats）。
 pub mod pomodoro;
+// #23-b interaction IPC（#40，3 命令：dispatch / record_drag_count / reset_drag_state）。
+// ADR-025 锁定 M2 AABB 单 body 降级 + 2a-lite 反馈。
+pub mod interaction;
 pub mod shortcuts;
 pub mod system;
 pub mod window;
