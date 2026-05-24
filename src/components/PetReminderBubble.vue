@@ -206,6 +206,12 @@ onBeforeUnmount(() => {
     if (b.timer !== null) window.clearTimeout(b.timer)
   })
 })
+
+// 跨窗协作（pet-reminder overlay 迁移）：让父级 overlay App watch bubbleCount → emit
+// Tauri 全局事件，由 Rust services/pet_overlay.rs 控 overlay window 的 show/hide。
+defineExpose({
+  bubbleCount: computed(() => reminders.value.length),
+})
 </script>
 
 <template>
