@@ -60,6 +60,9 @@ pub mod shortcuts;
 // 修复链式 group-drag 抖动：Rust 端直接 set_position 替代前端 N 次 IPC（μs vs ms 数量级差）。
 // 前端是 constraint 权威源，通过 snap_sync_constraints IPC 全量推到 Rust state。
 pub mod snap;
+// #23-b InteractionRouter（#40，模块 N 主干）：物理交互 5 事件路由 + reaction_table + 抗议滑窗。
+// ADR-025 锁定：M2 AABB 单 body 降级；2a-lite 路由 + emit + 最少可见反馈；mood transient 不持久。
+pub mod interaction;
 pub mod window_state;
 
 // #6 系统托盘 + 窗口动作 helper（M1 W2 主态可达交付物）。

@@ -253,6 +253,10 @@ pub fn run() {
             // #30 follow-up I：磁吸 solver state。前端 commit / detach 后 invoke snap_sync_constraints
             // 同步全量 constraint；Moved 事件触发 Rust 端 BFS solver + 批量 set_position 替代前端 IPC。
             app.manage(crate::services::snap::SnapState::default());
+            // #23-b InteractionRouter state（#40，ADR-025 lock）：drag 滑窗 + 抗议 5s revert
+            // + 当前 active persona 反应表缓存。**全部内存**：进程退出即失（PRD line 1089 lock：
+            // mood transient 不持久；决策 20：抗议 5s revert 不写 pet_runtime_state.mood 表）。
+            app.manage(crate::services::interaction::InteractionState::default());
             // #31 follow-up：alwaysOnTop 全局同步（pet + chat 两窗）
             // 启动期读 KV → 应用到两窗（覆盖 tauri.conf 默认值 pet:true / chat:false）。
             // 默认 KV 不存在时取 DEFAULT_ALWAYS_ON_TOP = true（pet 主体在主视角应用之上不被遮挡）。
@@ -557,6 +561,11 @@ pub fn run() {
             crate::commands::todo::todo_complete,
             crate::commands::todo::todo_breakdown,
             crate::commands::todo::todo_reorder,
+
+            // #23-b N InteractionRouter（#40，ADR-025 lock：M2 AABB body 降级 + 2a-lite 反馈）
+            crate::commands::interaction::interaction_dispatch,
+            crate::commands::interaction::interaction_record_drag_count,
+            crate::commands::interaction::interaction_reset_drag_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
