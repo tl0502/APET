@@ -26,6 +26,7 @@ import {
 } from '@/composables/useInteractionRaycaster'
 import { usePetInteractionFeedback } from '@/composables/usePetInteractionFeedback'
 import PetContextMenu from '@/components/PetContextMenu.vue'
+import MoodIcon from '@/components/MoodIcon.vue'
 import { cancelWander } from '@/services/livingPet'
 import type { AvatarView } from '@/services/vrm'
 
@@ -78,25 +79,13 @@ const { contextMenu, closeContextMenu } = useInteractionRaycaster(stageRef, {
   enabled: () => interactionEnabled.value,
 })
 
-// #40 反馈消费（shake / nod / mood icon / 气泡）：与状态机解耦，监听 Rust emit。
+// #40 反馈消费（shake / nod / 气泡）：与状态机解耦，监听 Rust emit。
+// #41 拆分：mood 显示职责移到 MoodIcon.vue（polling mood_get），本 composable 仅保
+// shake + bubble 这类"动作即时反馈"，不再返 mood ref。
 const {
-  mood: feedbackMood,
   bubble: feedbackBubble,
   shaking,
 } = usePetInteractionFeedback(runtime, () => interactionEnabled.value)
-
-const moodIcon = computed(() => {
-  switch (feedbackMood.value) {
-    case 'happy':
-      return '😺'
-    case 'annoyed':
-      return '😾'
-    case 'calm':
-      return '🌙'
-    default:
-      return ''
-  }
-})
 
 // 右键菜单事件出口：父组件可监听以做额外副作用（关闭其它 popover 等）。
 watch(contextMenu, (v) => {
@@ -190,8 +179,9 @@ function onPointerLeave() {
       VRM 加载失败：{{ errorMessage }}<br />
       请把一个 .vrm 文件放在 <code>public/avatar/avatar.vrm</code>
     </div>
-    <!-- #40 mood icon transient overlay：左上角小图标闪烁 1.5s（抗议态 5s）。 -->
-    <div v-if="moodIcon" class="pet-mood-icon" aria-hidden="true">{{ moodIcon }}</div>
+    <!-- #41 mood icon：1s polling mood_get，6 mood emoji 浮层；disabled_features 含
+         'mood_icon' 时 v-if 内部隐藏。替换原 #40 stub（feedbackMood emit-driven 仅 3 态）。 -->
+    <MoodIcon v-if="interactionEnabled" />
     <!-- #40 反应气泡：reaction_table.template flash 2s，自动消失。 -->
     <div v-if="feedbackBubble" class="pet-feedback-bubble" role="status">{{ feedbackBubble }}</div>
     <!-- #40 右键自绘菜单：anchor 到 pointer 位置；点击外部 / Esc 关闭。 -->
@@ -272,24 +262,7 @@ function onPointerLeave() {
   100% { transform: translateX(0); }
 }
 
-/* mood icon：左上角 transient 图标，1.5s 闪烁（抗议态由 composable 拉到 5s）。 */
-.pet-mood-icon {
-  position: absolute;
-  top: 4px;
-  left: 6px;
-  font-size: 18px;
-  line-height: 1;
-  pointer-events: none;
-  user-select: none;
-  /* fade-in 80ms 让出现不突兀；离开由 v-if 直接卸载 */
-  animation: pet-mood-fade-in 120ms var(--aipet-ease-standard);
-  z-index: 4;
-}
-
-@keyframes pet-mood-fade-in {
-  from { opacity: 0; transform: translateY(-2px) scale(0.85); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
+/* #41 mood icon CSS 已迁到 MoodIcon.vue 内 scoped */
 
 /* 反应气泡：reaction_table.template 文案，居中底部浮层 2s 自动消失。
    与 PetReminderBubble 区分：reminder 走顶部 stack，本气泡走底部，避免同时叠加遮挡。 */

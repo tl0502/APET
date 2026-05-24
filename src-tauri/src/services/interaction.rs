@@ -36,6 +36,8 @@ use tauri::{AppHandle, Emitter, Runtime};
 use thiserror::Error;
 
 use crate::services::db::open_app_db;
+use crate::services::energy::EnergyState;
+use crate::services::mood::MoodState;
 use crate::services::persona::load_active_persona_with_conn;
 
 /// 30s 滑窗：超过此窗的 drag 事件被丢弃。
@@ -235,6 +237,8 @@ pub struct ProtestRevertPayload {
 pub async fn dispatch<R: Runtime>(
     app: &AppHandle<R>,
     state: &InteractionState,
+    mood_state: &MoodState,
+    energy_state: &EnergyState,
     event: &str,
     hitbox: &str,
 ) -> Result<ReactionEntry, InteractionError> {
@@ -255,6 +259,13 @@ pub async fn dispatch<R: Runtime>(
     if let Err(e) = app.emit(INTERACTION_REACTED_EVENT, &payload) {
         eprintln!("[interaction] emit {INTERACTION_REACTED_EVENT} failed: {e}");
     }
+    // #41 mood / energy 联动：emit 之后调，mood/energy 失败不影响 IPC 返 entry（全 transient）。
+    // - mood_delta 非 None 时 push transient（"happy" → 10min，"annoyed" → 5s；其他 no-op）
+    // - 任何成功 dispatch 都 boost +5（互动 = 给桌宠 input，PRD §7.9.3 "用户主动互动 → 能量回复"）
+    if let Some(delta) = entry.mood_delta.as_deref() {
+        mood_state.apply_delta(delta);
+    }
+    energy_state.boost();
     Ok(entry)
 }
 
@@ -272,6 +283,7 @@ pub async fn dispatch<R: Runtime>(
 pub fn record_drag_count<R: Runtime>(
     app: &AppHandle<R>,
     state: &InteractionState,
+    mood_state: &MoodState,
     window: &str,
     count: u32,
 ) -> usize {
@@ -326,6 +338,11 @@ pub fn record_drag_count<R: Runtime>(
         };
         if let Err(e) = app.emit(PROTEST_TRIGGERED_EVENT, &payload) {
             eprintln!("[interaction] emit {PROTEST_TRIGGERED_EVENT} failed: {e}");
+        }
+        // #41 mood 联动：抗议触发 → push annoyed transient（5s，与 PROTEST_REVERT_AFTER 同源）。
+        // 不在 record_drag_count 路径调 energy.boost —— 拖累抗议不应奖励能量（语义对齐）。
+        if let Some(delta) = entry.mood_delta.as_deref() {
+            mood_state.apply_delta(delta);
         }
         // 5s revert：spawn 后立即返；不 await，不写表。drop 重启即失（PRD line 1089）。
         let app_clone = app.clone();

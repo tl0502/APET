@@ -18,6 +18,7 @@
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useToast } from '@/composables/useToast'
+import { bosskeyToggle } from '@/services/bosskey'
 import { setUserNickname } from '@/services/nickname'
 import { showWorkspace } from '@/services/window'
 
@@ -88,13 +89,24 @@ function onNicknameCancel() {
   nicknameInput.value = ''
 }
 
-function onQuiet() {
-  // #42 BossKey 短超时（5min）—— 本 worktree 内 #42 未合，stub toast 提示。
-  // 落地路径：调 bosskey_toggle({ ttl_ms: 5 * 60_000 }) 让 4 窗 hide。
-  toast.info('「静一会儿」需要等 #42 BossKey 上线（5min 短超时摸鱼态）。', {
-    duration: 3500,
-  })
-  close()
+async function onQuiet() {
+  // #41 接入：调 bosskey_toggle 隐藏 4 窗（pet/chat/workspace/pomodoro），用户按
+  // Ctrl+Shift+B 恢复（与 #42 boss key 快捷键复用）。
+  // M3 follow-up：bosskey_toggle 增 ttl_ms 参数实现"5min 自动恢复"，本期不实现以免改动 #42 已合 service。
+  try {
+    const hidden = await bosskeyToggle()
+    if (hidden) {
+      toast.info('已静音，按 Ctrl+Shift+B 恢复显示。', { duration: 3000 })
+    } else {
+      // 罕见路径：用户已经在隐藏态时点了"静一会儿" → toggle 反向 = 显示出来
+      toast.info('已恢复显示。', { duration: 2000 })
+    }
+  } catch (e) {
+    console.error('[ctx-menu] bosskeyToggle failed:', e)
+    toast.error(`「静一会儿」失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    close()
+  }
 }
 
 async function onSettings() {

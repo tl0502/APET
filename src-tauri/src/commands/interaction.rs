@@ -8,32 +8,45 @@
 
 use tauri::{AppHandle, State};
 
+use crate::services::energy::EnergyState;
 use crate::services::interaction::{
     self, InteractionState, ReactionEntry,
 };
+use crate::services::mood::MoodState;
 
 #[tauri::command]
 pub async fn interaction_dispatch(
     app: AppHandle,
     state: State<'_, InteractionState>,
+    mood_state: State<'_, MoodState>,
+    energy_state: State<'_, EnergyState>,
     event: String,
     hitbox: String,
 ) -> Result<ReactionEntry, String> {
-    interaction::dispatch(&app, state.inner(), &event, &hitbox)
-        .await
-        .map_err(|e| e.to_string())
+    interaction::dispatch(
+        &app,
+        state.inner(),
+        mood_state.inner(),
+        energy_state.inner(),
+        &event,
+        &hitbox,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn interaction_record_drag_count(
     app: AppHandle,
     state: State<'_, InteractionState>,
+    mood_state: State<'_, MoodState>,
     window: String,
     count: u32,
 ) -> Result<usize, String> {
     Ok(interaction::record_drag_count(
         &app,
         state.inner(),
+        mood_state.inner(),
         &window,
         count,
     ))

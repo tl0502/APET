@@ -11,7 +11,7 @@ use services::window_actions::{
     POMODORO_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
 };
 use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer, WorkspaceSaveDebouncer};
-use tauri::Manager;
+use tauri::{Listener, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
@@ -317,6 +317,49 @@ pub fn run() {
             // 启动期一次性调用 reminder.rs:631），改 tick 心跳方案；详 services/idle.rs 头注。
             app.manage(crate::services::idle::IdleState::default());
             crate::services::idle::start_watchdog(app.handle().clone());
+
+            // #23-c I mood/energy (#41)：manage state（全 transient 不持久，启动 reset；
+            // PRD line 1073/1089 lock）+ spawn 1min tick task 调 mood/energy::tick +
+            // pomodoro:focus_started/ended listener 切 mood::set_focused。
+            // 注意：mood::tick_periodic 内部 chrono::Local::now() 取本地时间（cozy 时段判定）。
+            app.manage(crate::services::mood::MoodState::default());
+            app.manage(crate::services::energy::EnergyState::default());
+            // 1min tick 不耦合 scheduler.rs（issue body 字面"分频 60 步"实测可独立 spawn 更
+            // 清晰；mood/energy 失败不影响 reminder/pomodoro tick）。
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        interval.tick().await;
+                        let energy = app_handle.state::<crate::services::energy::EnergyState>();
+                        let mood = app_handle.state::<crate::services::mood::MoodState>();
+                        let idle_ms = crate::services::idle::last_input_ms();
+                        energy.tick_decay(idle_ms);
+                        mood.tick_periodic(energy.get());
+                    }
+                });
+            }
+            // pomodoro listener：FOCUS 进入/退出时切 mood::set_focused（避免 mood 内部
+            // listen 增加 service 间耦合；lib.rs 是 orchestration 层挂 listener 合理）。
+            // Tauri 2.x：App 的全局事件用 `listen`（已替代 1.x `listen_global`/`listen_any`）。
+            {
+                let app_handle = app.handle().clone();
+                app.listen("pomodoro:focus_started", move |_| {
+                    let mood =
+                        app_handle.state::<crate::services::mood::MoodState>();
+                    mood.set_focused(true);
+                });
+            }
+            {
+                let app_handle = app.handle().clone();
+                app.listen("pomodoro:focus_ended", move |_| {
+                    let mood =
+                        app_handle.state::<crate::services::mood::MoodState>();
+                    mood.set_focused(false);
+                });
+            }
             // #23-d K BossKey (#42)：manage state + 崩溃恢复（清 `bosskey:pending` KV +
             // flush pending reminders）+ 注册 Ctrl+Shift+B 全局快捷键。
             // 顺序要求：必须在 ConsentGate manage 后（toggle 入口要 query gate）+ 在
@@ -592,6 +635,12 @@ pub fn run() {
             crate::commands::bosskey::bosskey_toggle,
             crate::commands::bosskey::bosskey_rebind,
             crate::commands::bosskey::bosskey_is_hidden,
+
+            // #23-c I mood/energy (#41) — mood_get / disabled_features get/set / energy_get
+            crate::commands::mood::mood_get,
+            crate::commands::mood::mood_get_disabled_features,
+            crate::commands::mood::mood_set_disabled_features,
+            crate::commands::energy::energy_get,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

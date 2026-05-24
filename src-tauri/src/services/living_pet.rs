@@ -263,9 +263,23 @@ pub fn start_scheduler<R: Runtime>(app: AppHandle<R>) {
                 continue;
             }
 
-            // #28 协作：FOCUS 期跳过 wander —— 番茄专注时桌宠停止自由活动。
-            // mood='focused' 推到 M3 R.2 呼吸动画一起做（M1 mood 不持久化，详 plan 决策 #13）。
-            if crate::services::pomodoro::is_focus_active(&app).await {
+            // #28 + #41 协作 gating（mood/energy 高层判定，替换原 pomodoro::is_focus_active 直查）：
+            // - mood = Focused（pomodoro:focus_started listener 已切；未来其他 Focus 源同此通道）
+            //   → 跳 wander。比直查 pomodoro::is_focus_active 更解耦：FocusService 的状态变化
+            //   只通过 mood::set_focused 这一通道暴露给 LivingPet，不需要每个消费者各自查 pomodoro。
+            // - energy < 30（疲劳）→ 跳 wander。让桌宠"看起来累了"，符合 PRD §7.9.3 节能语义。
+            //   不读 mood::Sleepy 是因为 mood 受 cozy/annoyed 等覆盖，但 energy 数值是 ground truth。
+            // - disabled_features 含 'free_movement'（用户偏好）→ 跳 wander。KV 直查 ~10ms vs
+            //   5-15min interval 可忽略，换取"切换即时生效"的 UX（不等 5-15min 下次 schedule）。
+            let mood = app.state::<crate::services::mood::MoodState>();
+            let energy = app.state::<crate::services::energy::EnergyState>();
+            if matches!(mood.compute_current(), crate::services::mood::Mood::Focused) {
+                continue;
+            }
+            if energy.get() < 30 {
+                continue;
+            }
+            if is_free_movement_disabled(&app).await {
                 continue;
             }
 
@@ -320,6 +334,25 @@ fn next_interval_sec() -> u64 {
         }
     }
     rand_range_u64(INTERVAL_MIN_SEC, INTERVAL_MAX_SEC)
+}
+
+/// 查 `pet:disabled_features` KV 是否含 'free_movement'。
+/// 失败（DB 错 / JSON parse 错）按"未禁用"处理 —— 让默认行为生效，不因 KV 状态阻塞调度。
+async fn is_free_movement_disabled<R: Runtime>(app: &AppHandle<R>) -> bool {
+    match crate::services::config::get(app, "pet:disabled_features").await {
+        Ok(Some(raw)) => match serde_json::from_str::<Vec<String>>(&raw) {
+            Ok(list) => list.iter().any(|s| s == "free_movement"),
+            Err(e) => {
+                eprintln!("[living_pet] disabled_features parse failed, default to enabled: {e}");
+                false
+            }
+        },
+        Ok(None) => false,
+        Err(e) => {
+            eprintln!("[living_pet] disabled_features KV read failed, default to enabled: {e}");
+            false
+        }
+    }
 }
 
 /// dev 实测模式判定（与 next_interval_sec 共享同一 env 解析规则）。

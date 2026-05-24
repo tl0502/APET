@@ -36,3 +36,6 @@ pub mod avatars;
 pub mod idle;
 // #23-d K BossKey IPC (#42) — 3 命令：toggle / rebind / is_hidden（摸鱼模式 + 缓冲提醒）
 pub mod bosskey;
+// #23-c I mood/energy IPC (#41) — mood_get / mood_get_disabled_features / mood_set_disabled_features / energy_get
+pub mod mood;
+pub mod energy;

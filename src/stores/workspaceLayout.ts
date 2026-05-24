@@ -18,6 +18,7 @@ import {
   ChatLineRound,
   Connection,
   MagicStick,
+  Mouse,
   Stopwatch,
   User,
 } from '@element-plus/icons-vue'
@@ -80,6 +81,7 @@ const BRAND_BAR_ITEMS: BrandBarItem[] = [
     icon: Brush,
     masterItems: [
       { id: 'SettingsTheme', title: '外观', icon: Brush },
+      { id: 'SettingsPet', title: '桌宠', icon: Mouse },
       { id: 'SettingsProvider', title: 'LLM Provider', icon: Connection },
     ],
     defaultItemId: 'SettingsTheme',

@@ -77,6 +77,13 @@ pub mod idle;
 // reminder.rs::fire 是缓冲生产方（在 in_focus 检查前查询 is_hidden）。
 pub mod bosskey;
 
+// #23-c I mood/energy (#41)：mood 状态机 (transient/不持久) + energy 衰减 (idle-driven)。
+// PRD line 1073/1089 lock：mood/energy 全 transient，不写 pet_runtime_state.mood 表。
+// 接入：#40 interaction 透传 mood_delta + boost energy；#28 pomodoro state_changed 切 Focused；
+// scheduler 1min 分频 tick 调 mood::tick_periodic + energy::tick_decay。
+pub mod mood;
+pub mod energy;
+
 // #6 系统托盘 + 窗口动作 helper（M1 W2 主态可达交付物）。
 // window_actions 的 show_pet / hide_pet 在 #6 范围内未消费，#7 shortcuts task
 // 接入 Ctrl+Alt+Space 全局快捷键时启用；mod 级 #[allow(dead_code)] 屏蔽 dead_code warning，
