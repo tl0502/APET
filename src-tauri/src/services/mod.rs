@@ -62,6 +62,12 @@ pub mod shortcuts;
 pub mod snap;
 pub mod window_state;
 
+// #23-a IdleDetector (#39)：Windows GetLastInputInfo 公共依赖（#23-b N 抗议 / #23-c I energy
+// 衰减 / M3 J 主动关心三处共用）。隐私边界：永远不读按键内容（PRD §7.6 / ADR-006）。
+// 休眠唤醒过滤走 5s watchdog tick 心跳（issue body 字面 #22 WM_POWERBROADCAST hook 实测
+// 不存在，改 tick 方案；详 idle.rs 头注）。
+pub mod idle;
+
 // #6 系统托盘 + 窗口动作 helper（M1 W2 主态可达交付物）。
 // window_actions 的 show_pet / hide_pet 在 #6 范围内未消费，#7 shortcuts task
 // 接入 Ctrl+Alt+Space 全局快捷键时启用；mod 级 #[allow(dead_code)] 屏蔽 dead_code warning，
