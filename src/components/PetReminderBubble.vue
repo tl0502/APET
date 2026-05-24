@@ -1,17 +1,24 @@
 <script setup lang="ts">
-// PetReminderBubble：桌宠头顶气泡 overlay（issue #22）。
+// PetReminderBubble：桌宠头顶气泡 overlay（issue #22；2026-05-24 UI 重构）。
 //
-// 设计要点：
-// - listen `reminder:fired` event → 推一条气泡到 stack（最多 3 条，超过推掉最旧的）
-// - 气泡位置：absolute top:6px 居中；不溢出 pet 窗 320×320 边界
-// - 自动消失：8 秒淡出（除非 hover 或展开稍后子菜单）
-// - 按钮区 `[data-no-drag]` 隔离拖动（PetCanvas 整窗 startDragging）
-// - snooze_count >= MAX_SNOOZE_COUNT 时隐藏「稍后」按钮（与 ReminderList 同款屏蔽）
+// 行为模型变更（与原 cap=3 截断方案差异）：
+// - 数据结构：reminders newest-first，旧条目永不因容量被丢弃
+// - 展示规则：
+//   - count = 0：不显示
+//   - count = 1：单气泡（普通形态，无 badge）
+//   - count = 2 且未进入 collapsed：两气泡（template reverse 让旧上新下）
+//   - count > 2：进入 collapsed 翻页模式，只显示 reminders[0]（最新）+ 左上 count badge
+// - 一旦 collapsed，count 回落到 2 仍保持 collapsed；count 回落到 1 → 重置 expanded
+// - 同 reminderId 去重：更新内容 + 移到 newest 头部 + 重置 auto-dismiss
 //
-// 与 PetCanvas 的协作：
-// - 挂在 App.vue 内 PetCanvas 同级 overlay；transparent 窗体内画在 VRM 头顶上方
-// - 不与 PetCanvas pointerdown(startDragging) 冲突：data-no-drag 让按钮事件不冒泡到拖动
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+// 与 PetCommandTray 的避让：
+// - props.trayOpen=true 时强制 isCollapsed=true + 整体 opacity 40%
+// - tray 关闭后恢复（不强制保持 collapsed）
+//
+// auto-dismiss：保留 8s + hover/snoozeOpen 暂停 + 只移除当前
+// collapsed mode 下不可见 bubble 暂停 timer（防 reminders[0] 被换走后又 fire 一次）
+
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { completeReminder, snoozeReminder } from '@/services/reminder'
 import {
@@ -22,23 +29,48 @@ import {
   type SnoozeMinutes,
 } from '@/types/reminder'
 
-const MAX_BUBBLES = 3
+const MAX_EXPANDED = 2
 const AUTO_DISMISS_MS = 8000
 
+interface Props {
+  /** App.vue 透传：command tray 打开时强制 collapsed + 整体降透明度 */
+  trayOpen?: boolean
+}
+
+const props = withDefaults(defineProps<Props>(), { trayOpen: false })
+
+type DisplayMode = 'expanded' | 'collapsed'
+
 interface BubbleState {
-  /** local 唯一 id（reminderId + 触发时戳）— 防多次触发同 reminder 时 v-for key 冲突 */
   key: string
   payload: ReminderFiredPayload
   snoozeOpen: boolean
   busy: boolean
   hover: boolean
   timer: number | null
-  /** 本地 snoozeCount 复制（snooze action 成功后会更新；payload 来自首次 fire 时刻） */
   snoozeCount: number
 }
 
-const bubbles = ref<BubbleState[]>([])
+const reminders = ref<BubbleState[]>([])
+const displayMode = ref<DisplayMode>('expanded')
 let unlistenFired: UnlistenFn | null = null
+
+const isCollapsed = computed(() => {
+  if (props.trayOpen && reminders.value.length >= 1) return true
+  return (
+    reminders.value.length > MAX_EXPANDED ||
+    (displayMode.value === 'collapsed' && reminders.value.length > 1)
+  )
+})
+
+const visibleReminders = computed<BubbleState[]>(() => {
+  if (reminders.value.length === 0) return []
+  if (isCollapsed.value) return reminders.value.slice(0, 1)
+  // expanded：旧上新下 = reverse(newest-first.slice(0,2))
+  return reminders.value.slice(0, 2).slice().reverse()
+})
+
+const collapsedCount = computed(() => reminders.value.length)
 
 function createBubble(payload: ReminderFiredPayload): BubbleState {
   return {
@@ -53,28 +85,35 @@ function createBubble(payload: ReminderFiredPayload): BubbleState {
 }
 
 function pushBubble(payload: ReminderFiredPayload) {
-  // 同 reminderId 已在 stack → 更新而非追加（避免重复堆叠）
-  const existing = bubbles.value.find((b) => b.payload.reminderId === payload.reminderId)
-  if (existing) {
+  const existingIdx = reminders.value.findIndex(
+    (b) => b.payload.reminderId === payload.reminderId,
+  )
+  if (existingIdx >= 0) {
+    // 去重 + 移到 newest 头部 + 更新 payload
+    const [existing] = reminders.value.splice(existingIdx, 1)
     existing.payload = payload
     existing.snoozeCount = payload.snoozeCount
+    reminders.value.unshift(existing)
     startAutoDismiss(existing)
-    return
+  } else {
+    const b = createBubble(payload)
+    reminders.value.unshift(b)
+    startAutoDismiss(b)
   }
-  // 容量 cap 3：超过推掉最旧的
-  if (bubbles.value.length >= MAX_BUBBLES) {
-    const oldest = bubbles.value[0]
-    if (oldest) removeBubble(oldest)
+  if (reminders.value.length > MAX_EXPANDED) {
+    displayMode.value = 'collapsed'
   }
-  const b = createBubble(payload)
-  bubbles.value.push(b)
-  startAutoDismiss(b)
 }
 
 function startAutoDismiss(b: BubbleState) {
   if (b.timer !== null) {
     window.clearTimeout(b.timer)
+    b.timer = null
   }
+  // collapsed mode 下只有 reminders[0] 可见；不可见的暂停 timer 防止被换走后才到期。
+  // trayOpen=true 也强制 collapsed，同款逻辑生效。
+  const willBeVisible = !isCollapsed.value || b === reminders.value[0]
+  if (!willBeVisible) return
   b.timer = window.setTimeout(() => {
     if (!b.hover && !b.snoozeOpen) {
       removeBubble(b)
@@ -87,8 +126,17 @@ function removeBubble(b: BubbleState) {
     window.clearTimeout(b.timer)
     b.timer = null
   }
-  const idx = bubbles.value.indexOf(b)
-  if (idx >= 0) bubbles.value.splice(idx, 1)
+  const idx = reminders.value.indexOf(b)
+  if (idx >= 0) reminders.value.splice(idx, 1)
+  // count 回落到 ≤1 → 重置 expanded（让单卡用普通气泡形态）。
+  // count 仍 ≥ 2 时不动 displayMode（一旦 collapsed 不自动展开）。
+  if (reminders.value.length <= 1) {
+    displayMode.value = 'expanded'
+  }
+  // collapsed 翻页：新的 reminders[0] 现在变可见，启动它的 auto-dismiss。
+  if (reminders.value.length > 0 && isCollapsed.value) {
+    startAutoDismiss(reminders.value[0])
+  }
 }
 
 function onMouseEnter(b: BubbleState) {
@@ -97,7 +145,6 @@ function onMouseEnter(b: BubbleState) {
 
 function onMouseLeave(b: BubbleState) {
   b.hover = false
-  // 离开后重置 auto-dismiss 倒计时（避免离开瞬间立刻消失）
   startAutoDismiss(b)
 }
 
@@ -130,9 +177,18 @@ function canSnooze(b: BubbleState): boolean {
 }
 
 function iconOf(b: BubbleState): string {
-  // hard 用 🔔（强提醒），soft 用 💭（温和）；可后续做主题切换
   return b.payload.priority === 'hard' ? '🔔' : '💭'
 }
+
+// trayOpen 变化：可能切换 isCollapsed → 重算 timer 起停
+watch(
+  () => props.trayOpen,
+  () => {
+    for (const b of reminders.value) {
+      startAutoDismiss(b)
+    }
+  },
+)
 
 onMounted(async () => {
   try {
@@ -146,24 +202,35 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   unlistenFired?.()
-  bubbles.value.forEach((b) => {
+  reminders.value.forEach((b) => {
     if (b.timer !== null) window.clearTimeout(b.timer)
   })
 })
 </script>
 
 <template>
-  <TransitionGroup name="bubble" tag="div" class="reminder-bubble-stack">
+  <TransitionGroup
+    name="bubble"
+    tag="div"
+    class="reminder-bubble-stack"
+    :class="{ 'reminder-bubble-stack--dimmed': trayOpen }"
+  >
     <div
-      v-for="b in bubbles"
+      v-for="b in visibleReminders"
       :key="b.key"
       class="reminder-bubble"
       :class="{
         'reminder-bubble--hard': b.payload.priority === 'hard',
+        'reminder-bubble--collapsed': isCollapsed,
       }"
       @mouseenter="onMouseEnter(b)"
       @mouseleave="onMouseLeave(b)"
     >
+      <!-- collapsed mode 左上 count badge：仅最新一张显示（visibleReminders.length=1） -->
+      <div v-if="isCollapsed" class="reminder-bubble__count-badge" aria-label="未处理提醒数">
+        {{ collapsedCount }}
+      </div>
+
       <div class="reminder-bubble__body">
         <span class="reminder-bubble__icon">{{ iconOf(b) }}</span>
         <div class="reminder-bubble__text">
@@ -222,8 +289,6 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .reminder-bubble-stack {
-  /* fixed 相对 webview 视口；pet 窗 320×320 透明，气泡浮在顶部居中。
-     用 absolute 需要给 ancestor 加 position:relative；fixed 更简洁。 */
   position: fixed;
   top: 6px;
   left: 50%;
@@ -232,12 +297,17 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   pointer-events: none;
-  /* 大于 PetCanvas 默认 cursor 视觉层级 */
   z-index: 5;
+  transition: opacity 140ms var(--aipet-ease-standard);
+}
+
+.reminder-bubble-stack--dimmed {
+  opacity: 0.4;
 }
 
 .reminder-bubble {
   pointer-events: auto;
+  position: relative;
   min-width: 220px;
   max-width: 296px;
   padding: 8px 10px;
@@ -255,6 +325,29 @@ onBeforeUnmount(() => {
   border-color: color-mix(in srgb, var(--aipet-color-primary) 60%, var(--aipet-color-border));
   box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--aipet-color-primary) 30%, transparent),
     0 2px 6px -2px rgba(0, 0, 0, 0.08);
+}
+
+.reminder-bubble--collapsed .reminder-bubble__body {
+  padding-left: 18px; /* 留位给 badge */
+}
+
+.reminder-bubble__count-badge {
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  background: var(--aipet-color-primary);
+  color: #fff;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  z-index: 1;
 }
 
 .reminder-bubble__body {
@@ -351,7 +444,6 @@ onBeforeUnmount(() => {
   border-color: var(--aipet-color-border);
 }
 
-/* TransitionGroup 淡入淡出 + 上滑 */
 .bubble-enter-active,
 .bubble-leave-active {
   transition: opacity 220ms var(--aipet-ease-standard),
