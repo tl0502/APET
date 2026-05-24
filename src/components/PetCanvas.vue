@@ -1,12 +1,16 @@
 <script setup lang="ts">
 // PetCanvas：透明角色窗主画面（PRD §7.2 角色窗）。
-// M1 spike 阶段仅渲染 VRM；hitbox 上报推到后续 task（A.6）。
-// #10 拖动：pointerdown → getCurrentWindow().startDragging()（系统级拖动，OS 接管 mouse）。
-// 整窗 100% 可拖（无按钮容器 / 穿透按钮，M2 W3 控制按钮区上线时再加 [data-no-drag] 隔离）。
+// M1 spike 阶段仅渲染 VRM；#40（ADR-025）接入物理交互状态机后整窗 = AABB 单 body hitbox。
 //
-// #16：复用到 onboarding 窗时通过 `:draggable="false"` 关掉拖动（onboarding 窗用系统 decorations
-// 标题栏拖动，且窗口固定不应被 webview 内 startDragging 移动）；并 emit `loaded`/`error` 让
-// SoulPledgeView 在 VRM 就绪 / 失败后再开播文案（用户拍板：等 isLoaded === true 再开播）。
+// #40 交互模型变更（draggable=true 时）：
+// - **不再**在 pointerdown 立即 startDragging（会让 OS 立即接管 mouse → click/longpress 检测失效）
+// - 改由 useInteractionRaycaster 状态机 ① pointermove 跨 5px 阈值时调 startDragging
+//                                       ② click/dblclick/longpress/rclick/drag 5 事件路由
+// - drag 起点同步 invoke interaction_record_drag_count → 30s 滑窗 ≥3 触发 Rust emit 抗议
+// draggable=false（onboarding 复用）则关闭交互状态机，PetCanvas 仅作为 VRM 渲染表面。
+//
+// #16：复用到 onboarding 窗时通过 `:draggable="false"` 关掉拖动 + 物理交互；并 emit `loaded`/`error`
+// 让 SoulPledgeView 在 VRM 就绪 / 失败后再开播文案（用户拍板：等 isLoaded === true 再开播）。
 //
 // #24：尺寸不再硬编码 320×320。`size` prop 决定 canvas + container 实际像素；`view` prop
 // 决定相机取景。两者都由父级单一驱动（pet 主窗 App.vue 负责 listen `pet:view-changed` 改 ref，
@@ -16,6 +20,12 @@ import { computed, ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useVRMModel } from '@/composables/useVRMModel'
 import { usePetReaction } from '@/composables/usePetReaction'
+import {
+  useInteractionRaycaster,
+  type InteractionContextMenuEvent,
+} from '@/composables/useInteractionRaycaster'
+import { usePetInteractionFeedback } from '@/composables/usePetInteractionFeedback'
+import PetContextMenu from '@/components/PetContextMenu.vue'
 import { cancelWander } from '@/services/livingPet'
 import type { AvatarView } from '@/services/vrm'
 
@@ -27,6 +37,10 @@ interface Props {
   size?: { width: number; height: number }
   /** #29 是否对 reminder:fired 事件作出反应（点头）。onboarding 场景应传 false。 */
   enableReaction?: boolean
+  /** #40 是否启用物理交互状态机（5 事件路由 + 右键菜单）。默认与 draggable 同步。 */
+  enableInteraction?: boolean
+  /** #40 当前 webview window label，用于 recordDragCount 多窗维度。 */
+  windowLabel?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -34,14 +48,18 @@ const props = withDefaults(defineProps<Props>(), {
   view: 'half',
   size: () => ({ width: 320, height: 320 }),
   enableReaction: true,
+  enableInteraction: undefined,
+  windowLabel: 'pet',
 })
 
 const emit = defineEmits<{
   loaded: []
   error: [string]
+  contextmenu: [InteractionContextMenuEvent]
 }>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const stageRef = ref<HTMLElement | null>(null)
 
 // public/avatar/avatar.vrm 由 Vite static serve；用户私有，.gitignore 已忽略。
 const MODEL_URL = '/avatar/avatar.vrm'
@@ -50,6 +68,40 @@ const { isLoaded, errorMessage, runtime } = useVRMModel(canvasRef, MODEL_URL, pr
 
 // #29 桌宠对 reminder:fired 的反应（点头）。onboarding 场景传 enable-reaction="false" 跳过。
 usePetReaction(runtime, () => props.enableReaction)
+
+// #40 物理交互：默认与 draggable 同步（onboarding draggable=false → 关交互）。
+const interactionEnabled = computed(
+  () => props.enableInteraction ?? props.draggable,
+)
+const { contextMenu, closeContextMenu } = useInteractionRaycaster(stageRef, {
+  windowLabel: props.windowLabel,
+  enabled: () => interactionEnabled.value,
+})
+
+// #40 反馈消费（shake / nod / mood icon / 气泡）：与状态机解耦，监听 Rust emit。
+const {
+  mood: feedbackMood,
+  bubble: feedbackBubble,
+  shaking,
+} = usePetInteractionFeedback(runtime, () => interactionEnabled.value)
+
+const moodIcon = computed(() => {
+  switch (feedbackMood.value) {
+    case 'happy':
+      return '😺'
+    case 'annoyed':
+      return '😾'
+    case 'calm':
+      return '🌙'
+    default:
+      return ''
+  }
+})
+
+// 右键菜单事件出口：父组件可监听以做额外副作用（关闭其它 popover 等）。
+watch(contextMenu, (v) => {
+  if (v) emit('contextmenu', v)
+})
 
 const stageStyle = computed(() => ({
   width: `${props.size.width}px`,
@@ -79,32 +131,21 @@ watch(errorMessage, (v) => {
   if (v) emit('error', v)
 })
 
-async function onPointerDown(event: PointerEvent) {
-  if (!props.draggable) return
-  // 主键 (button=0) 才触发拖动，避免与 M2 后续右键菜单冲突。
+/**
+ * onboarding 兜底路径：interactionEnabled=false 但 draggable=true 时，
+ * 仍走老的"pointerdown 即 startDragging" —— 不进入 click/longpress 状态机。
+ * 当前 onboarding (draggable=false) + pet 主窗 (interactionEnabled=true) 都覆盖了，
+ * 留这段做"draggable + 关交互"的极端组合兜底（M3+ 可能用到，如 wardrobe room 内的预览）。
+ */
+async function onLegacyPointerDown(event: PointerEvent) {
+  if (!props.draggable || interactionEnabled.value) return
   if (event.button !== 0) return
-  // closest('[data-no-drag]') 兜底：M2 控制按钮容器上线后只需在该元素加 attr 即可隔离，无需改本处。
   if ((event.target as HTMLElement | null)?.closest('[data-no-drag]')) return
-  // dev 期诊断：若 handler 都没跑，问题在 pointer event 传递；若跑到但 startDragging 抛错，看 catch
-  if (import.meta.env.DEV) {
-    console.log('[PetCanvas] pointerdown @', event.clientX, event.clientY, 'target=', event.target)
-  }
-  // #21 收尾 L1：拖动前先取消正在进行的 wander tween。fire-and-forget 不 await
-  // 避免 IPC 往返延迟 startDragging（IPC <5ms 但保守起见不等）。无 wander 时是 no-op。
-  void cancelWander().catch((e) => {
-    console.warn('[PetCanvas] cancelWander failed (non-fatal):', e)
-  })
+  void cancelWander().catch(() => {})
   try {
-    // ⚠️ 隐式契约（A3 注释 2026-05-19）：
-    // useSnapWindow.onPointerDown 已在 capture 阶段先跑（registered with capture:true 在 window 上），
-    // arm 了 dragSession。本处必须调 startDragging() 让 OS 接管拖动，否则：
-    //   - 没有 OS-level move → 没有 tauri://move 事件 → useSnapWindow 的 onMoved 路径不触发
-    //   - dragSession 永远卡在 armed 态，1s 后 ARMED_TIMEOUT_MS 自动回 idle
-    //   - 表现：用户拖 pet 完全无反应，无错误日志
-    // 替代方案（M3 follow-up）：把 startDragging 移到 useSnapWindow 内部，让 composable 自给自足。
     await getCurrentWindow().startDragging()
   } catch (e) {
-    console.error('[PetCanvas] startDragging failed:', e)
+    console.error('[PetCanvas] startDragging failed (legacy path):', e)
   }
 }
 
@@ -130,13 +171,16 @@ function onPointerLeave() {
   <!-- T4 (#31)：data-snap-drag-trigger 让 useSnapWindow.onPointerDown 把 pet 整窗 VRM 区
        识别为 drag 起点，arm dragSession + forest snapshot；
        这样拖 pet 也走 preview / ESC cancel / commit tween 流程，与拖 chat 一致。
-       原来 PetCanvas 用 startDragging 直接交给 OS，不挂 useSnapWindow listener。 -->
+       原来 PetCanvas 用 startDragging 直接交给 OS，不挂 useSnapWindow listener。
+       #40：startDragging 改由 useInteractionRaycaster 在跨阈值时调，data-snap-drag-trigger
+       属性保留（useSnapWindow 仍按 capture-phase 在该元素 arm dragSession）。 -->
   <div
+    ref="stageRef"
     class="pet-stage"
-    :class="{ 'pet-stage--draggable': draggable }"
+    :class="{ 'pet-stage--draggable': draggable, 'pet-stage--shake': shaking }"
     :style="stageStyle"
     data-snap-drag-trigger
-    @pointerdown="onPointerDown"
+    @pointerdown="onLegacyPointerDown"
     @pointermove="onPointerMove"
     @pointerleave="onPointerLeave"
   >
@@ -146,6 +190,17 @@ function onPointerLeave() {
       VRM 加载失败：{{ errorMessage }}<br />
       请把一个 .vrm 文件放在 <code>public/avatar/avatar.vrm</code>
     </div>
+    <!-- #40 mood icon transient overlay：左上角小图标闪烁 1.5s（抗议态 5s）。 -->
+    <div v-if="moodIcon" class="pet-mood-icon" aria-hidden="true">{{ moodIcon }}</div>
+    <!-- #40 反应气泡：reaction_table.template flash 2s，自动消失。 -->
+    <div v-if="feedbackBubble" class="pet-feedback-bubble" role="status">{{ feedbackBubble }}</div>
+    <!-- #40 右键自绘菜单：anchor 到 pointer 位置；点击外部 / Esc 关闭。 -->
+    <PetContextMenu
+      v-if="contextMenu"
+      :x="contextMenu.x"
+      :y="contextMenu.y"
+      @close="closeContextMenu"
+    />
   </div>
 </template>
 
@@ -200,5 +255,66 @@ function onPointerLeave() {
   padding: 1px var(--aipet-space-1);
   border-radius: var(--aipet-radius-sm);
   font-family: var(--aipet-font-family-mono);
+}
+
+/* #40 物理交互最少可见反馈（ADR-025 2a-lite） */
+
+/* shake：200ms 三段位移 keyframe，幅度小（±4px）避免桌宠跑出窗口边界。 */
+.pet-stage--shake {
+  animation: pet-shake 220ms var(--aipet-ease-standard);
+}
+
+@keyframes pet-shake {
+  0% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  50% { transform: translateX(4px); }
+  75% { transform: translateX(-2px); }
+  100% { transform: translateX(0); }
+}
+
+/* mood icon：左上角 transient 图标，1.5s 闪烁（抗议态由 composable 拉到 5s）。 */
+.pet-mood-icon {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 18px;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  /* fade-in 80ms 让出现不突兀；离开由 v-if 直接卸载 */
+  animation: pet-mood-fade-in 120ms var(--aipet-ease-standard);
+  z-index: 4;
+}
+
+@keyframes pet-mood-fade-in {
+  from { opacity: 0; transform: translateY(-2px) scale(0.85); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 反应气泡：reaction_table.template 文案，居中底部浮层 2s 自动消失。
+   与 PetReminderBubble 区分：reminder 走顶部 stack，本气泡走底部，避免同时叠加遮挡。 */
+.pet-feedback-bubble {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 6px 12px;
+  background: var(--aipet-color-surface-raised, var(--aipet-color-surface));
+  border: 1px solid var(--aipet-color-border-strong, var(--aipet-color-border));
+  border-radius: 12px;
+  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  color: var(--aipet-color-text-1);
+  line-height: 1.4;
+  text-align: center;
+  pointer-events: none;
+  animation: pet-bubble-pop 160ms var(--aipet-ease-standard);
+  z-index: 4;
+}
+
+@keyframes pet-bubble-pop {
+  from { opacity: 0; transform: translate(-50%, 4px) scale(0.92); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
 }
 </style>
