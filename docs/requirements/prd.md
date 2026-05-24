@@ -362,6 +362,34 @@ AI 桌宠定位在三者交集:**形态拉新、自主人格塑造留存、轻�
 7. 控制按钮区与穿透开关:默认隐形,鼠标悬停才显示;2 / 3 容器不参与拖动;角色透明像素区域可拖动整窗。
 8. 状态叠加态 `IN_GAME` / `BOSS_KEY_HIDDEN` 时模块 A 行为按 [flows.md §21](./flows.md#21-状态机总图)(不重复定义)。
 
+#### 7.1.6 Updated 2026-05-24（M2 W4 实施期对照）
+
+> 本节记录 §7.1 设计目标与 M2 W4 当前实施的偏离，避免后续 session 凭 §7.1 文字误判已实现项。详细决策见 [ADR-025](../decisions.md#adr-025-物理交互-hitbox--动作表现的-m2-降级与-per-model-manifest-预留)。
+
+**已实施（M2 W4 截至 2026-05-24）**：
+
+- §7.1 桌宠常驻桌面 / 透明无边框 / 整窗接收事件
+- §7.1 多屏与位置持久化（[#10](https://github.com/tl0502/APET/issues/10) / [#24](https://github.com/tl0502/APET/issues/24) view_preset 两档 half/full）
+- §7.1 关闭语义（hide-to-tray + 仅托盘"退出"项，[#6](https://github.com/tl0502/APET/issues/6)）
+- §7.1 系统托盘菜单基础项（显示/隐藏 / 设置 / 退出）
+- §7.1.4 主状态机核心态（IDLE / FOCUS / REST / ONBOARDING / BOOTING）
+
+**已偏离 / 未实施**：
+
+| 子节 | 设计 | 当前实际 | 原因 / 计划 |
+|---|---|---|---|
+| §7.1（窗口 3 分区）| 角色窗 + 功能按钮容器(隐形悬停) + 鼠标穿透开关(隐形悬停) | 仅角色窗，整窗 100% 可拖（[PetCanvas.vue:5](../../src/components/PetCanvas.vue#L5) 注释 "无按钮容器 / 穿透按钮"）| M2 W3 控制按钮区延迟未做；功能并入 workspace（ADR-021）|
+| §7.1.1（鼠标穿透模式）| 开关切换 + 3 号区保留 | **未实现**（grep `mouse_through` 0 结果）| 单人桌宠场景实际需求弱；推迟到用户反馈"想穿透但不能"再做 |
+| §7.1.2（控制按钮区）| M2 W3 上线置于顶层按钮 | **未实现**（功能被 workspace BrandBar/MasterColumn 替代，见 ADR-021）| "角色窗内按钮区"被 workspace 三栏改造覆盖 |
+| §7.1.3（Hitbox manifest + Bone Proxy）| 每 hitbox bone proxy mesh + manifest `<vrm>_hitbox.json` + 12 动作差异化反应 | M2 走 AABB 单 body 降级；manifest 机制 ADR-025 预留 per-model optional capability | M2 KPI 改为 "AABB 交互触发率 ≥ 95%"；4 hitbox + Bone Proxy + 12 动作完整表现推迟到 M3+ |
+| §7.1.5 验收 4 | 4 hitbox 命中率 ≥ 95% / 播 stretch yawn 期间不下降 | **不可验收**（4 hitbox + 12 动作均未落地）| 验收 4 推迟，由 ADR-025 的 "AABB 触发率 ≥ 95%" 替代 |
+| §7.1.5 验收 5-7 | 鼠标穿透模式 / 首启提示 / 控制按钮区悬停显示 | **不可验收**（§7.1.1 §7.1.2 未实现）| 一并由 ADR-025 推迟 |
+
+**新增（实施期补充，原 §7.1 无此设计）**：
+
+- **view_preset 两档**（[#24](https://github.com/tl0502/APET/issues/24)）：half 320×320 默认 / full 320×512 全身。KV `window:pet:view_preset` 持久化；相机取景由 [PetCanvas](../../src/components/PetCanvas.vue) `view` prop 切换。
+  - 半身模式下角色窗只可见头 + 上半身 → ADR-004 中 `tail_wiggle` 类下半身动作在半身模式下不可视；全身模式才完整可见。
+
 ### 7.2 模块 B:对话与唤起(v1.2 重写)
 
 **M 阶段**:M1 W1-2(B.3.a 形态 2 极简);M2 W3-4(B.3.c 形态 2 完整磁吸 + ADR-021 P2/P3 形态 1 主床落地);M3(B.3.d 多 conversation UI 完整);M5(B.3.f 形态 3 漫画气泡)
@@ -675,7 +703,7 @@ Onboarding 保持独立窗口 `onboarding`(ADR-019 续接 + 5 view 流程:`soul-
 桌宠"被感知存在"的视觉/行为机制:自由活动 + 心情图标 + 生理节律 + 日常时段表;非养成,无喂养/流失。
 
 **M 阶段**:M1 W2(I.1 自由活动初版);M2 W3(I.2 心情);M2 W4(I.3 精力);M3 W6(R.3 桌宠日常时段表)
-**关键依赖**:LivingPetService(调度自由活动 + 日常时段);模块 A 状态机(IDLE 才允许触发);ADR-024 12 核心动作;`.soul.md` 反应配置
+**关键依赖**:LivingPetService(调度自由活动 + 日常时段);模块 A 状态机(IDLE 才允许触发);ADR-004 12 核心动作;`.soul.md` 反应配置
 **设计状态**:🚧 半占位(子节结构已具,验收待编号化与元字段)
 
 #### 7.9.1 自由活动(I.1)
@@ -902,10 +930,10 @@ M3 起接受多个接收口,所有接收口走同一 `file_drop.preflight` + `fi
 
 ### 7.14 模块 N:物理交互响应
 
-桌宠对鼠标交互(点击 / 双击 / 长按 / 右键 / 拖拽)与键盘节奏(N.4)的人格化反应;依 §7.1.3 hitbox 几何 + ADR-024 12 核心动作。
+桌宠对鼠标交互(点击 / 双击 / 长按 / 右键 / 拖拽)与键盘节奏(N.4)的人格化反应;依 §7.1.3 hitbox 几何 + ADR-004 12 核心动作。
 
 **M 阶段**:M2 W4(含 RAWINPUT spike)
-**关键依赖**:§7.1.3 hitbox(Bone Proxy 方案);ADR-024 12 核心动作 ID;ADR-004 默认 reaction_table;`.soul.md` `# 反应配置` 区段;IdleDetector(N.4 与模块 J 共享);RAWINPUT(降级方案:快速 idle 切换)
+**关键依赖**:§7.1.3 hitbox(Bone Proxy 方案);ADR-004 12 核心动作 ID;ADR-004 默认 reaction_table;`.soul.md` `# 反应配置` 区段;IdleDetector(N.4 与模块 J 共享);RAWINPUT(降级方案:快速 idle 切换)
 **设计状态**:🚧 半占位(子节结构已具,验收待编号化与元字段)
 
 #### 7.14.1 点击差异化(N.1)
@@ -934,7 +962,7 @@ M3 起接受多个接收口,所有接收口走同一 `file_drop.preflight` + `fi
 
 #### 7.14.5 动作清单与反应配置
 
-**12 个核心动作 ID**(ADR-024):`head_pat / tilt_head / tail_wiggle / lean_in / surprised / fall_asleep / stretch / yawn / dizzy / protest / cheer / rub_eyes`。默认 reaction_table 定义在 ADR-004,`.soul.md` 的 `# 反应配置` 区段可覆盖。
+**12 个核心动作 ID**(ADR-004):`head_pat / tilt_head / tail_wiggle / lean_in / surprised / fall_asleep / stretch / yawn / dizzy / protest / cheer / rub_eyes`。默认 reaction_table 定义在 ADR-004,`.soul.md` 的 `# 反应配置` 区段可覆盖。
 
 #### 7.14.6 验收
 

@@ -267,8 +267,27 @@ related:
 
 ---
 
+### ADR-025 物理交互 hitbox + 动作表现的 M2 降级与 per-model manifest 预留
+
+- **为什么**：[#23](https://github.com/tl0502/APET/issues/23) 物理交互拆分（[#39](https://github.com/tl0502/APET/issues/39)-[#43](https://github.com/tl0502/APET/issues/43)）实施前实证审计发现：① [`public/avatar/avatar.vrm`](../public/avatar/avatar.vrm) 无伴生 hitbox manifest，PRD §7.1.3 Bone Proxy 4 hitbox 不可达；② ADR-004 12 动作美术资源 0 实现，M2 简化 6-8 个 VRMA 动画从 0 起步工时严重溢出；③ §7.1.5 验收 "4 hitbox ≥ 95%" 在缺失 manifest + 动画前提下无法验收；④ 未来用户可切换 / 上传自己的 VRM 模型，不能把 momo/joker/coach 共享一个 `avatar.vrm` 当长期假设写入实现。
+- **选了什么**：**M2 AABB 降级 + per-model optional manifest 预留 + 2a-lite 最少可见反馈**：
+  - **hitbox 方案（M2）**：M2 走 AABB 单 body 降级（[PetCanvas](../src/components/PetCanvas.vue) 整窗 raycast 作为 hitbox=body）。同时设计 **per-model optional manifest** —— 按 model asset 维度绑定（`avatar.vrm` ↔ `avatar_hitbox.json`），加载 VRM 时检测同名 manifest：存在 → 走 Bone Proxy 4 hitbox 路径（M3+ 实施）；缺失 → 自动降级 AABB 单 body。manifest schema 在 M3+ 落地 hitbox manifest 时正式定义；M2 仅在 vrmLoader 留 hook 点。
+  - **per-model manifest 设计原则**（M3+ 实施时遵守）：
+    1. 用户可自主切换 / 上传模型 → manifest 是 optional capability，不强制
+    2. 命名约定 `<model_basename>_hitbox.json`（如 `avatar.vrm` → `avatar_hitbox.json`，与模型同目录）
+    3. manifest 缺失 / 解析失败 / 引用不存在 bone → 全自动 AABB 降级，不报错不阻塞模型加载
+    4. manifest schema 含 head/tail/body/edge 各 hitbox 的 bone name + 几何形状(capsule/box) + size，加载时 attach 到 humanoid bone
+    5. momo/joker/coach 当前共享 `avatar.vrm` 是实现细节，未来 personas 各自 own model 时 manifest 自然跟随
+  - **动作表现（2a-lite）**：M2 不做 6-8 个 VRMA 动画，也不追求 ADR-004 的 12 动作完整实现；但需要保证：① interaction router + emit `pet:interaction_reacted` + reaction_table 数据流完整；② **最少可见反馈**（shake / nod / mood icon 切换 / 气泡反馈）让用户能感知物理交互存在。完整 VRMA / 12 动作完整表现推迟到 M3+。
+  - **M2 KPI 调整**：原 §7.1.5 验收 4 "4 hitbox 命中率 ≥ 95%" → 修订为 "**AABB 交互触发率 ≥ 95%**"（整窗作为单 hitbox=body 的命中率）；M2 物理交互密度 KPI ≥ 1.5 次/天保留，密度统计来自 emit `pet:interaction_reacted` 计数。
+- **代价**：① M2 视觉上桌宠对鼠标交互的反应较弱（仅 shake / nod / mood icon 级，无 stretch / yawn 等丰富动作），用户感知"物理交互"的存在但不丰富；② §7.1.5 验收 4-7 在 M2 实质性推迟到 M3+，PRD §7.1.6 Updated 段已记录；③ M3+ 落地 hitbox manifest 时需要重做"4 hitbox 触发率"验收路径（UAT 自动化点击每区 100 次），单人项目需要再 ~0.5d 工时；④ 未来用户上传自己模型时无 manifest → 永远走 AABB（仅整窗 hit），需要文档明示"想要差异化反应请伴生 hitbox manifest"。
+- **关联**：epic [#23](https://github.com/tl0502/APET/issues/23) 及其 sub-issue [#39](https://github.com/tl0502/APET/issues/39) [#40](https://github.com/tl0502/APET/issues/40) [#41](https://github.com/tl0502/APET/issues/41) [#42](https://github.com/tl0502/APET/issues/42) [#43](https://github.com/tl0502/APET/issues/43)；PRD §7.1.6 Updated 段（"已偏离/未实施"对照）；flows §12.1 / §12.4 Updated 2026-05-24（BossKey 窗口集合修订 + onboarding 期禁用）；[[ADR-004]]（12 动作清单 lock，本 ADR 不改写其内容，只调整 M2 实施期范围）；PRD line 1073 / 1089 "mood/energy transient 不持久" lock 项保持。
+- **Supersedes**：PRD §7.1.5 验收 4「4 hitbox ≥ 95%」M2 验收口径（不删除 PRD 原文，但 M2 期改为 "AABB 触发率 ≥ 95%" 路径）；M3+ 接入 Bone Proxy + manifest 后恢复原 4 hitbox 口径。
+
+---
+
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-025**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-026**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。

@@ -536,17 +536,23 @@ FOCUS 期间 `mood = focused`(覆盖其他);自由活动 / 日常时段表 / 主
 
 ### 12.1 切换为隐藏
 
+> Updated 2026-05-24: 隐藏对象集合按当前实际窗口 (pet / chat / workspace / pomodoro) 修订；原"workshop / settings / game_room"已于 ADR-021 workspace 三栏改造后并入 workspace。onboarding 期 (consent_gate=false) 禁用 BossKey，避免用户跳过宣誓走"摸鱼"路径绕过同意流程。
+
 ```
 [Global Shortcut] Ctrl+Shift+B  ↓
-[BossKeyService::toggle] 当前是显示态  ↓
+[BossKeyService::toggle] 前置检查
+ ├── consent_gate=false (onboarding 进行中) → 静默忽略,不切换  ↓ 返回
+ └── consent_gate=open → 继续  ↓
+[当前是显示态]  ↓
 [拍快照]
  - 当前各窗口位置 / 可见性
  - 桌宠当前 mood / energy / wandering 状态  ↓
 [force_stop_wandering] (如果在逛)  ↓
 [依次 hide]
  - pet 窗口
- - chat 面板(如打开)
- - workshop / settings / game_room 窗口(如打开)  ↓
+ - chat 浮窗 (如打开)
+ - workspace 工作台 (如打开)
+ - pomodoro 独立窗 (如打开)  ↓
 [托盘图标变更]"摸鱼中"  ↓
 [BossKeyState.hidden = true]  ↓
 emit 'boss_key:toggled' { hidden: true }
@@ -587,6 +593,7 @@ emit 'boss_key:toggled' { hidden: false }
 | 快捷键注册失败 | 启动期提示用户改键,允许从托盘菜单手动切换 |
 | 隐藏过程中桌宠窗口已被外力关闭 | hide 命令静默忽略,恢复期跳过该窗口 |
 | 摸鱼期间应用崩溃重启 | 启动期检测到上次未正常关闭且 `bosskey_pending=true` → 默认恢复显示态 |
+| onboarding 进行中触发 (consent_gate=false) | BossKey 静默忽略,**不切换状态**;ADR-019 onboarding 路径不被绕过 (Updated 2026-05-24) |
 
 ## 13. 文件拖入流(模块 L)
 
