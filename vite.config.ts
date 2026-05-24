@@ -58,6 +58,8 @@ export default defineConfig(({ command }) => ({
         onboarding: path.resolve(projectRoot, 'onboarding.html'),
         pomodoro: path.resolve(projectRoot, 'pomodoro.html'),
         workspace: path.resolve(projectRoot, 'workspace.html'),
+        'pet-reminder': path.resolve(projectRoot, 'pet-reminder.html'),
+        'pet-command': path.resolve(projectRoot, 'pet-command.html'),
       },
     },
   },

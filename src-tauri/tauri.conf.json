@@ -88,6 +88,36 @@
         "resizable": true,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "pet-reminder",
+        "title": "提醒浮层 — AI 桌宠",
+        "url": "pet-reminder.html",
+        "width": 320,
+        "height": 280,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "focus": false
+      },
+      {
+        "label": "pet-command",
+        "title": "指令托盘 — AI 桌宠",
+        "url": "pet-command.html",
+        "width": 160,
+        "height": 220,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "focus": false
       }
     ],
     "security": {
