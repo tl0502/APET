@@ -29,3 +29,5 @@ pub mod system;
 pub mod window;
 // #25/#26 头像 IPC（user 上传 + persona VRM 导出）
 pub mod avatars;
+// #23-a IdleDetector IPC (#39) — idle_get_state 单命令返回 {idleMs, isIdle, recentlyWoke}
+pub mod idle;

@@ -306,6 +306,13 @@ pub fn run() {
                 });
             }
             crate::services::scheduler::start(app.handle().clone());
+            // #23-a IdleDetector (#39)：manage state + spawn 5s watchdog tick task。
+            // watchdog 自检测两次相邻 tick wall-clock 间隔 > 5min 视系统休眠过 → mark wake_at；
+            // 唤醒后 30s 内 is_idle 强制返 false（防 LASTINPUTINFO 残留休眠前旧 tick 被误判）。
+            // issue body 字面"复用 #22 WM_POWERBROADCAST hook"实测不存在（#22 catch-up 是
+            // 启动期一次性调用 reminder.rs:631），改 tick 心跳方案；详 services/idle.rs 头注。
+            app.manage(crate::services::idle::IdleState::default());
+            crate::services::idle::start_watchdog(app.handle().clone());
             Ok(())
         })
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
@@ -557,6 +564,8 @@ pub fn run() {
             crate::commands::todo::todo_complete,
             crate::commands::todo::todo_breakdown,
             crate::commands::todo::todo_reorder,
+            // #23-a IdleDetector (#39) — 单 IPC，无写类 OS API（lesson #1 read-only 默认覆盖）
+            crate::commands::idle::idle_get_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
