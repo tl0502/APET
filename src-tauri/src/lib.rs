@@ -381,6 +381,9 @@ pub fn run() {
                 });
             }
             crate::services::bosskey::register_bosskey_on_startup(app.handle());
+            // 2026-05-24 pet UI 重构第二轮：pet-reminder / pet-command 双 overlay 协作。
+            // listen 4 个全局事件（reminder active/idle + contextmenu open/close）+ manage state。
+            crate::services::pet_overlay::setup(app.handle());
             Ok(())
         })
         // #6 关闭语义：Alt+F4 / 系统命令关闭主窗口时不退出进程，改 hide。
@@ -485,6 +488,8 @@ pub fn run() {
                             let debouncer = app.state::<SaveDebouncer>();
                             debouncer.schedule(pet);
                         }
+                        // 2026-05-24：pet 移动期立即 hide 两个 overlay，200ms settled 后重算 anchor + show
+                        crate::services::pet_overlay::on_pet_moved(app);
                     } else if label == POMODORO_WINDOW_LABEL {
                         if let Some(pom) = app.get_webview_window(POMODORO_WINDOW_LABEL) {
                             let debouncer = app.state::<PomodoroSaveDebouncer>();
