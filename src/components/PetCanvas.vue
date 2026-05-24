@@ -25,7 +25,6 @@ import {
   type InteractionContextMenuEvent,
 } from '@/composables/useInteractionRaycaster'
 import { usePetInteractionFeedback } from '@/composables/usePetInteractionFeedback'
-import PetContextMenu from '@/components/PetContextMenu.vue'
 import MoodIcon from '@/components/MoodIcon.vue'
 import { cancelWander } from '@/services/livingPet'
 import type { AvatarView } from '@/services/vrm'
@@ -56,7 +55,9 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   loaded: []
   error: [string]
-  contextmenu: [InteractionContextMenuEvent]
+  /** 右键打开命令托盘事件；payload 含 close 闭包让父级可以从外部关闭。
+   *  事件名仍叫 contextmenu 是为了向后兼容（语义上是"请求打开命令托盘"）。 */
+  contextmenu: [InteractionContextMenuEvent & { close: () => void }]
 }>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -88,8 +89,9 @@ const {
 } = usePetInteractionFeedback(runtime, () => interactionEnabled.value)
 
 // 右键菜单事件出口：父组件可监听以做额外副作用（关闭其它 popover 等）。
+// payload 含 close 闭包让父级可以在外部触发关闭（同步 useInteractionRaycaster 内部 contextMenu ref）。
 watch(contextMenu, (v) => {
-  if (v) emit('contextmenu', v)
+  if (v) emit('contextmenu', { x: v.x, y: v.y, reaction: v.reaction, close: closeContextMenu })
 })
 
 const stageStyle = computed(() => ({
@@ -184,13 +186,8 @@ function onPointerLeave() {
     <MoodIcon v-if="interactionEnabled" />
     <!-- #40 反应气泡：reaction_table.template flash 2s，自动消失。 -->
     <div v-if="feedbackBubble" class="pet-feedback-bubble" role="status">{{ feedbackBubble }}</div>
-    <!-- #40 右键自绘菜单：anchor 到 pointer 位置；点击外部 / Esc 关闭。 -->
-    <PetContextMenu
-      v-if="contextMenu"
-      :x="contextMenu.x"
-      :y="contextMenu.y"
-      @close="closeContextMenu"
-    />
+    <!-- #40 右键菜单已由 App.vue 渲染 PetCommandTray 接管（2026-05-24 UI 重构）；
+         本组件仅 emit contextmenu 事件，不再内嵌菜单浮层。 -->
   </div>
 </template>
 
