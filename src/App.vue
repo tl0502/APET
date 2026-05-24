@@ -14,10 +14,12 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import AppShell from '@/components/layouts/AppShell.vue'
 import PetCanvas from '@/components/PetCanvas.vue'
+import PetCommandTray from '@/components/PetCommandTray.vue'
 import PetOnboardingBubble from '@/components/PetOnboardingBubble.vue'
 import PetReminderBubble from '@/components/PetReminderBubble.vue'
 import { useToast } from '@/composables/useToast'
 import { useSnapWindow } from '@/composables/useSnapWindow'
+import type { InteractionContextMenuEvent } from '@/composables/useInteractionRaycaster'
 import { getChatRegisterStatus } from '@/services/shortcut'
 import {
   PET_VIEW_CHANGED_EVENT,
@@ -72,6 +74,22 @@ const snapPreviewStyle = computed(() => ({
 
 const view = ref<AvatarView>('half')
 const size = computed(() => PET_VIEW_SIZES[view.value])
+
+// PetCommandTray (2026-05-24 UI 重构) 状态提升：commandTrayContext 非 null = tray 打开。
+// 同时透传 commandTrayOpen 给 PetReminderBubble，让它强制 collapsed + 降透明度避让。
+const commandTrayContext = ref<(InteractionContextMenuEvent & { close: () => void }) | null>(
+  null,
+)
+const commandTrayOpen = computed(() => commandTrayContext.value !== null)
+
+function onPetContextmenu(ctx: InteractionContextMenuEvent & { close: () => void }) {
+  commandTrayContext.value = ctx
+}
+
+function closeCommandTray() {
+  commandTrayContext.value?.close()
+  commandTrayContext.value = null
+}
 
 function asPreset(payload: unknown): PetViewPreset {
   return payload === 'full' ? 'full' : 'half'
@@ -168,9 +186,16 @@ onBeforeUnmount(() => {
 
 <template>
   <AppShell variant="transparent" :class="snapPreviewClass" :style="snapPreviewStyle">
-    <PetCanvas :view="view" :size="size" />
-    <PetReminderBubble />
+    <PetCanvas :view="view" :size="size" @contextmenu="onPetContextmenu" />
+    <PetReminderBubble :tray-open="commandTrayOpen" />
     <PetOnboardingBubble />
+    <PetCommandTray
+      v-if="commandTrayContext"
+      :x="commandTrayContext.x"
+      :y="commandTrayContext.y"
+      :pet-size="size"
+      @close="closeCommandTray"
+    />
   </AppShell>
 </template>
 
