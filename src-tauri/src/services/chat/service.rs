@@ -41,6 +41,7 @@ use crate::services::chat::conversation::{
 };
 use crate::services::chat::prompt::build_messages;
 use crate::services::chat::ChatError;
+use crate::kernel::safety_guard::SafetyGuard;
 use crate::services::db::open_app_db;
 use crate::services::llm::{
     ChatMessage, ChatOptions, FinishReason, LLMError, LLMProvider, OpenAIProvider, StreamDelta,
@@ -100,6 +101,35 @@ pub enum StreamEvent {
         error_kind: String,
         message: String,
     },
+    /// Phase A0: SafetyGuard 命中, 前端按 message_id 覆盖现有 assistant 显示内容 (Spec §6.6)。
+    ///
+    /// 触发时机:
+    /// - scan_final → Redacted / Blocked / ScanFailed (Scope #3, A0 已接入)
+    /// - scan_token → SoftBlock (Scope #2 mid-stream, A1 wire)
+    ///
+    /// 前端契约: 收到此事件后用 new_content 覆盖该 message_id 的累积 Delta 缓冲,
+    /// 紧接着的 Done 事件正常处理。reason 字段供 UI 提示分支。
+    #[serde(rename_all = "camelCase")]
+    ReplaceMessage {
+        message_id: String,
+        new_content: String,
+        reason: ReplaceReason,
+    },
+}
+
+/// 替换原因, 前端按需调整 UI 提示 (Spec §6.6)。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplaceReason {
+    /// stream_soft_blocked 流式中的局部替换 (Phase A0 暂未触发, Phase A1 wire mid-stream scan_token)
+    #[allow(dead_code)]
+    SoftBlockToken,
+    /// scan_final → Redacted
+    FinalRedacted,
+    /// scan_final → Blocked
+    FinalBlocked,
+    /// SafetyGuard 自身异常, 保守降级
+    ScanFailed,
 }
 
 /// prepare 阶段产出，run_stream 消费。
@@ -117,16 +147,30 @@ pub struct PreparedSend {
     pub cancel_token: CancellationToken,
 }
 
-#[derive(Default, Clone)]
+/// ChatService — chat 业务编排, 持 SafetyGuard 引用以注入 ADR-006 prefix 和扫输入/输出。
+///
+/// Phase A0.7 重要变更: `safety_guard: Arc<dyn SafetyGuard>` 必填字段, `new` 改为
+/// `new(safety_guard)`。原 `Default` impl 被移除 —— ChatService 永远必须有 SafetyGuard,
+/// 与 Constitution #1 "ADR-006 prefix 不可禁用" 一致 (Spec §6.6)。
+///
+/// `Clone` 保留: `active_streams` 是 `Arc<Mutex<...>>`, `safety_guard` 是 `Arc<dyn ...>`,
+/// clone 仅增加引用计数, 不复制状态; spawn 出去的 task 共享同一 token map 与 guard 实例。
+#[derive(Clone)]
 pub struct ChatService {
     /// 在飞 chat_stream 的 cancel token map（key = assistant message_id ULID）。
     /// 用 Arc<Mutex<...>> 让 ChatService 可 Clone 进 spawn 出去的 task。
     active_streams: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// SafetyGuard 注入点 (Phase A0.7, Spec §6.6 / Constitution #1)。
+    /// 来源: Kernel::boot 时 Arc 构造, 经 lib.rs setup 传入此 ChatService::new。
+    safety_guard: Arc<dyn SafetyGuard>,
 }
 
 impl ChatService {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(safety_guard: Arc<dyn SafetyGuard>) -> Self {
+        Self {
+            active_streams: Arc::new(Mutex::new(HashMap::new())),
+            safety_guard,
+        }
     }
 
     /// chat_send 同步阶段：解析 conv / 拼 prompt / 现建 provider / 写 user msg /
@@ -147,6 +191,28 @@ impl ChatService {
         conversation_id: Option<String>,
     ) -> Result<PreparedSend, ChatError> {
         let mut conn = open_app_db(app).await?;
+
+        // Phase A0.7: Scan Scope #1 — user input pre-flight (Spec §6.6.2)。
+        // Redacted 用脱敏文本继续 (用户照常拿到回复, DB user 行内容也是脱敏后),
+        // Blocked → 直接 UnsafeInput 错误抛回 IPC; ScanFailed → 保守 Safety 错误。
+        let input = match self.safety_guard.scan_user_input(&input) {
+            crate::kernel::safety_guard::ScanFinalResult::Ok => input,
+            crate::kernel::safety_guard::ScanFinalResult::Redacted { redacted_text, .. } => {
+                redacted_text
+            }
+            crate::kernel::safety_guard::ScanFinalResult::Blocked { rule_ids, .. } => {
+                return Err(ChatError::UnsafeInput(format!(
+                    "blocked by rules: {:?}",
+                    rule_ids
+                )));
+            }
+            crate::kernel::safety_guard::ScanFinalResult::ScanFailed { reason, .. } => {
+                return Err(ChatError::Safety(format!(
+                    "user input scan failed: {}",
+                    reason
+                )));
+            }
+        };
 
         // 1. 加载 active persona + 解析或建 conversation
         let active_persona = load_active_persona_with_conn(&mut conn).await?;
@@ -197,6 +263,14 @@ impl ChatService {
             &history_filtered,
             &input,
         )?;
+
+        // Phase A0.7: SafetyGuard.wrap_messages 强制注入 ADR-006 prefix (Spec §6.6 / Constitution #1)。
+        // 注入点在 build_messages 之后, 保证 prefix 永远是 system message 第一位,
+        // 不可被人格 4 节或用户 history 顶掉 (Spec 不可禁用语义)。
+        let messages = self.safety_guard.wrap_messages(
+            messages,
+            crate::kernel::safety_guard::Locale::ZhCn,
+        );
 
         // 4. 现建 OpenAIProvider（与 #12 chat_send_test 同模式）。同样在 INSERT 之前。
         let provider = build_provider_with_conn(&mut conn).await?;
@@ -350,7 +424,25 @@ impl ChatService {
         // A4 修复：assistant 行已在 prepare 期 INSERT；这里只做 UPDATE / DELETE。
         match stream_result {
             Ok(finish) => {
-                if let Err(e) = update_assistant_msg(app, &assistant_id, &collected, "online").await
+                // Phase A0.7: Scan Scope #3 — 流终 final scan (Spec §6.6.2)。
+                // 4 路径: Ok 直透; Redacted/Blocked/ScanFailed → 改写最终内容 +
+                // emit ReplaceMessage 让前端覆盖累积 Delta。DB 写入用改写后的 final_text。
+                use crate::kernel::safety_guard::ScanFinalResult;
+                let scan = self.safety_guard.scan_final(&collected, &persona.id);
+                let (final_text, replace_reason): (String, Option<ReplaceReason>) = match scan {
+                    ScanFinalResult::Ok => (collected.clone(), None),
+                    ScanFinalResult::Redacted { redacted_text, .. } => {
+                        (redacted_text, Some(ReplaceReason::FinalRedacted))
+                    }
+                    ScanFinalResult::Blocked { fallback, .. } => {
+                        (fallback, Some(ReplaceReason::FinalBlocked))
+                    }
+                    ScanFinalResult::ScanFailed { fallback, .. } => {
+                        (fallback, Some(ReplaceReason::ScanFailed))
+                    }
+                };
+                if let Err(e) =
+                    update_assistant_msg(app, &assistant_id, &final_text, "online").await
                 {
                     let _ = channel.send(StreamEvent::Error {
                         error_kind: "DbError".to_string(),
@@ -360,6 +452,15 @@ impl ChatService {
                 }
                 if let Err(e) = update_last_activity(app, &conv_id).await {
                     eprintln!("[chat] update_last_activity failed: {e}");
+                }
+                // SafetyGuard 改写了 content → 先 emit ReplaceMessage 让前端覆盖累积显示,
+                // 再 emit Done 让前端走正常收尾路径 (清 currentStreamId)。
+                if let Some(reason) = replace_reason {
+                    let _ = channel.send(StreamEvent::ReplaceMessage {
+                        message_id: assistant_id.clone(),
+                        new_content: final_text,
+                        reason,
+                    });
                 }
                 let _ = channel.send(StreamEvent::Done {
                     total_tokens: finish.usage.map(|u| u.total_tokens).unwrap_or(0),
@@ -660,6 +761,16 @@ mod tests {
 
     const MOMO_RAW: &str = include_str!("../../../personas/_builtin/momo.soul.md");
 
+    /// Phase A0.7 test-only 构造: 用 inline test prefix 起一个 SafetyGuardImpl,
+    /// 替代旧 `ChatService::new()` 空构造。Default 已与 Constitution #1 不兼容移除,
+    /// 测试需要显式注入一个最小可用 guard 才能构造 ChatService。
+    fn test_chat_service() -> ChatService {
+        use crate::kernel::safety_guard::{SafetyGuard, SafetyGuardImpl};
+        let guard: Arc<dyn SafetyGuard> =
+            Arc::new(SafetyGuardImpl::from_text("TEST_GUARD_PREFIX").unwrap());
+        ChatService::new(guard)
+    }
+
     #[test]
     fn extract_refusal_from_momo_returns_three_items() {
         // momo.soul.md ## 拒答 / Refusal 池有 3 条
@@ -805,14 +916,14 @@ mod tests {
 
     #[test]
     fn cancel_unknown_message_id_is_noop() {
-        let svc = ChatService::new();
+        let svc = test_chat_service();
         let result = svc.cancel("non-existent");
         assert!(result.is_ok(), "cancel on unknown id must be no-op");
     }
 
     #[test]
     fn cancel_existing_token_triggers_it() {
-        let svc = ChatService::new();
+        let svc = test_chat_service();
         let token = CancellationToken::new();
         {
             let mut map = svc.active_streams.lock();
@@ -861,7 +972,7 @@ mod tests {
     fn service_clone_shares_active_streams() {
         // ChatService 必须可 Clone 且共享 active_streams（spawn 出去的 task 通过 cancel 路径
         // 找到同一个 token map）
-        let svc = ChatService::new();
+        let svc = test_chat_service();
         let svc2 = svc.clone();
         let token = CancellationToken::new();
         {
@@ -871,5 +982,34 @@ mod tests {
         // svc2 应能 cancel 到同一个 token
         svc2.cancel("shared-id").unwrap();
         assert!(token.is_cancelled());
+    }
+
+    /// Phase A0.7 集成 smoke test: pin ChatService 持 SafetyGuard +
+    /// wrap_messages 注入 prefix 的 shape (`[system(prefix), user(...)]`)。
+    /// 完整 FSM 路径 (prepare → scan → wrap → build → run_stream → scan_final → ReplaceMessage)
+    /// 留 Task 8 集成测试覆盖 (本 test 仅 pin 构造契约)。
+    #[test]
+    fn chat_service_holds_safety_guard_and_wraps_messages() {
+        use crate::kernel::safety_guard::{Locale, SafetyGuard, SafetyGuardImpl};
+        use crate::services::llm::{ChatMessage, Role};
+        use std::sync::Arc;
+
+        let guard = Arc::new(
+            SafetyGuardImpl::from_text("INJECTED_TEST_PREFIX_FOR_CHAT_INTEGRATION").unwrap(),
+        ) as Arc<dyn SafetyGuard>;
+        let _svc = ChatService::new(Arc::clone(&guard));
+
+        // 同样调一遍 wrap_messages 确认 prefix 注入 ([user] → [system(prefix), user])
+        let wrapped = guard.wrap_messages(
+            vec![ChatMessage::text(Role::User, "hi")],
+            Locale::ZhCn,
+        );
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].role, Role::System);
+        if let crate::services::llm::ContentPart::Text { text } = &wrapped[0].content[0] {
+            assert!(text.contains("INJECTED_TEST_PREFIX_FOR_CHAT_INTEGRATION"));
+        } else {
+            panic!("expected Text part as first system content");
+        }
     }
 }

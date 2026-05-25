@@ -46,6 +46,19 @@ pub enum ChatError {
     AppConfigDir(String),
     #[error("LLM error: {0}")]
     Llm(String),
+    /// Phase A0: SafetyGuard.scan_user_input → Blocked 路径 (Spec §6.6.2 Scope #1)。
+    /// 与 Safety(_) 区分: UnsafeInput 是用户输入命中黑词 (前端可提示用户改写),
+    /// Safety(_) 是 SafetyGuard 自身异常或 scan_final 路径 (内部故障保守降级)。
+    #[error("unsafe input: {0}")]
+    UnsafeInput(String),
+    #[error("safety scan failed: {0}")]
+    Safety(String),
+}
+
+impl From<crate::kernel::safety_guard::SafetyError> for ChatError {
+    fn from(e: crate::kernel::safety_guard::SafetyError) -> Self {
+        ChatError::Safety(e.to_string())
+    }
 }
 
 impl From<sqlx::Error> for ChatError {

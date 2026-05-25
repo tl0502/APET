@@ -6,6 +6,8 @@ mod commands;
 mod kernel;
 mod services;
 
+use std::sync::Arc;
+
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
     emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL,
@@ -90,7 +92,13 @@ pub fn run() {
                     .expect("[setup] app_config_dir resolution failed (FATAL)");
                 let db_path = app_config.join("aipet.db");
                 let kernel = Kernel::boot(db_path).expect("[setup] Phase A0 Kernel::boot failed (FATAL)");
+                // Phase A0.7: ChatService 必须在 Kernel boot 之后构造, 因为它持 SafetyGuard。
+                // safety_guard 是 Arc<dyn ...>, clone 仅增 RC 不复制; kernel 自己也保留一份引用。
+                let chat_service = crate::services::chat::service::ChatService::new(
+                    Arc::clone(&kernel.safety_guard),
+                );
                 app.manage(kernel);
+                app.manage(chat_service);
                 eprintln!("[setup] Phase A0 Kernel booted → Live");
             }
 
@@ -99,8 +107,7 @@ pub fn run() {
             // 用户增补 LLM Providers：测试连通用的活跃 CancellationToken 槽（llm_test_provider
             // ↔ 同时仅 1 个；新调用抢占旧的）。原 #12 单 namespace setup 已退役。
             crate::commands::llm_providers::setup(app.handle());
-            // #13 ChatService 业务编排（chat_send / chat_cancel / chat_history）
-            app.manage(crate::services::chat::service::ChatService::new());
+            // #13 ChatService 已在上方 Kernel boot 块内 manage (持 safety_guard)。
             // #6 启动期 GC：清理上次进程退出时 detached spawn 没收尾留下的孤儿 assistant
             // placeholder（content='' 在 chat_history 视图里渲染为空气泡）。cutoff = 启动
             // 时间快照；新进程启动后 prepare 写的 placeholder created_at >= cutoff 不会被

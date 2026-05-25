@@ -29,9 +29,9 @@ use crate::services::llm::{ChatMessage, Role};
 use crate::services::memory::MessageRecord;
 use crate::services::persona::PersonaSummary;
 
-/// M1 安全前缀占位。M3 G ADR-006 真注入时改 `Some(...)` 即可。
-/// C2：用 Option 避免空字符串 push 后 `parts.join("\n\n")` 在开头多出双换行。
-const SAFETY_PREFIX: Option<&str> = None;
+// SAFETY_PREFIX 已由 SafetyGuard.wrap_messages 在 build_messages 调用方 (chat::service)
+// 集中注入到 system message 第一位 (Phase A0.1, Spec §6.6, ADR-006);
+// 本模块不再持有 prefix const。
 
 /// 单 section 字符上限（中文 1 字符 ≈ 1.5 token，4000 字符 ≈ 6000 token，4 节合计 ≤ ~24K token）。
 /// 防恶意人格 / 用户写超长 # 性格 把 LLM context 吃光。
@@ -213,10 +213,8 @@ pub fn build_system_message(
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
 
-    // 1. 安全前缀（M1 None；非 None 才输出）
-    if let Some(prefix) = SAFETY_PREFIX {
-        parts.push(prefix.to_string());
-    }
+    // 1. 安全前缀: 由 SafetyGuard.wrap_messages 在 ChatService 集中注入 (Phase A0.1, Spec §6.6)
+    //    此处不再 push, 避免与 prefix 注入路径冲突。
 
     // 2. 角色身份
     parts.push("你是一个 AI 桌面伙伴。以下是你扮演的角色定义：".to_string());
