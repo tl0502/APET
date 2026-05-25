@@ -33,3 +33,15 @@ watch(
     <PetReminderBubble ref="bubbleRef" />
   </AppShell>
 </template>
+
+<style scoped>
+/* 第三轮（2026-05-24）：透明 overlay 窗 — stack 自身 pointer-events: none 让透明区
+   不拦截下层 pet / desktop；.reminder-bubble 自己 pointer-events: auto 接 hover/click。
+   AppShell variant=transparent 已 transparent 背景，无需另加 background reset。 */
+:deep(.reminder-bubble-stack) {
+  pointer-events: none;
+}
+:deep(.reminder-bubble) {
+  pointer-events: auto;
+}
+</style>

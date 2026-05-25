@@ -295,10 +295,16 @@ defineExpose({
 
 <style scoped>
 .reminder-bubble-stack {
-  position: fixed;
-  top: 6px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* 2026-05-24 第三轮：absolute + top:0 + left:0 + fit-content，让 overlay 窗内 stack 起
+     点对齐 Rust 端算的 anchor。原 fixed + top:6 + left:50% + translateX(-50%) 在
+     overlay 窗内会再做一次居中 → 视觉锚点错位 + 容器感染整窗。stack 自身
+     pointer-events: none，透明区不拦下层 pet/desktop 操作；.reminder-bubble 自己
+     pointer-events: auto 接 hover/click。 */
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: fit-content;
+  max-width: 280px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -314,17 +320,17 @@ defineExpose({
 .reminder-bubble {
   pointer-events: auto;
   position: relative;
-  min-width: 220px;
-  max-width: 296px;
-  padding: 8px 10px;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 7px 9px;
   background: var(--aipet-color-surface-raised, var(--aipet-color-surface));
   border: 1px solid var(--aipet-color-border-strong, var(--aipet-color-border));
-  border-radius: 14px;
+  border-radius: 16px;
   box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.18), 0 2px 6px -2px rgba(0, 0, 0, 0.08);
   backdrop-filter: blur(8px);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .reminder-bubble--hard {
@@ -339,15 +345,15 @@ defineExpose({
 
 .reminder-bubble__count-badge {
   position: absolute;
-  top: -6px;
-  left: -6px;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 7px;
+  top: -5px;
+  left: -5px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
   background: var(--aipet-color-primary);
   color: #fff;
-  border-radius: 11px;
-  font-size: 11px;
+  border-radius: 10px;
+  font-size: 10px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -404,9 +410,9 @@ defineExpose({
   background: var(--aipet-color-bg);
   color: var(--aipet-color-text-2);
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
-  padding: 3px 8px;
+  padding: 2px 7px;
   border-radius: 6px;
   cursor: pointer;
   transition: background-color var(--aipet-duration-fast) var(--aipet-ease-standard),
