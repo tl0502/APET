@@ -55,6 +55,41 @@ const reminders = ref<BubbleState[]>([])
 const displayMode = ref<DisplayMode>('expanded')
 let unlistenFired: UnlistenFn | null = null
 
+// 2026-05-24 第三轮：动画语义区分（reason → TransitionGroup 套 class 前缀）。
+// 每次 stack 变化由 pushBubble / removeBubble 显式设置，250ms 后自动 reset 回 'fired'
+// （避免下一次 enter/leave 用错套 class）。
+type TransitionReason = 'fired' | 'badge-bump' | 'collapse-merge' | 'page-next' | 'single-restore'
+const currentReason = ref<TransitionReason>('fired')
+let reasonResetTimer: number | null = null
+function setReason(r: TransitionReason) {
+  if (reasonResetTimer !== null) {
+    window.clearTimeout(reasonResetTimer)
+    reasonResetTimer = null
+  }
+  currentReason.value = r
+  reasonResetTimer = window.setTimeout(() => {
+    currentReason.value = 'fired'
+    reasonResetTimer = null
+  }, 250) as unknown as number
+}
+const transitionName = computed(() => `bubble-${currentReason.value}`)
+
+// badge-pop：collapsedCount 增长时（不论 reason） badge 数字短暂 scale 1.25 后回 1。
+// 与 transition reason 解耦 —— badge-bump reason 下 bubble 整张不 enter，但 badge 数字仍 pop。
+const badgePopActive = ref(false)
+let badgePopTimer: number | null = null
+function triggerBadgePop() {
+  if (badgePopTimer !== null) {
+    window.clearTimeout(badgePopTimer)
+    badgePopTimer = null
+  }
+  badgePopActive.value = true
+  badgePopTimer = window.setTimeout(() => {
+    badgePopActive.value = false
+    badgePopTimer = null
+  }, 180) as unknown as number
+}
+
 const isCollapsed = computed(() => {
   if (props.trayOpen && reminders.value.length >= 1) return true
   return (
@@ -89,19 +124,34 @@ function pushBubble(payload: ReminderFiredPayload) {
     (b) => b.payload.reminderId === payload.reminderId,
   )
   if (existingIdx >= 0) {
-    // 去重 + 移到 newest 头部 + 更新 payload
+    // 去重 + 移到 newest 头部 + 更新 payload。
+    // 同 id 重 fire：visible bubble 的 key 不变（createBubble 才生成新 key），
+    // Vue TransitionGroup 不触发 enter → 不需要 setReason。
     const [existing] = reminders.value.splice(existingIdx, 1)
     existing.payload = payload
     existing.snoozeCount = payload.snoozeCount
     reminders.value.unshift(existing)
     startAutoDismiss(existing)
-  } else {
-    const b = createBubble(payload)
-    reminders.value.unshift(b)
-    startAutoDismiss(b)
+    return
   }
+  const lenBefore = reminders.value.length
+  const b = createBubble(payload)
+  reminders.value.unshift(b)
+  startAutoDismiss(b)
   if (reminders.value.length > MAX_EXPANDED) {
     displayMode.value = 'collapsed'
+  }
+  // 动画 reason：
+  // - 进入 collapsed 的临界点（lenBefore = MAX_EXPANDED = 2 → push 后 3）→ collapse-merge
+  // - 已经 collapsed（lenBefore >= MAX_EXPANDED + 1 = 3）→ badge-bump（bubble 不重 enter）
+  // - 否则（expanded 内 1 → 2 / 0 → 1）→ fired（标准 enter）
+  if (lenBefore === MAX_EXPANDED) {
+    setReason('collapse-merge')
+  } else if (lenBefore > MAX_EXPANDED) {
+    setReason('badge-bump')
+    triggerBadgePop()
+  } else {
+    setReason('fired')
   }
 }
 
@@ -126,6 +176,7 @@ function removeBubble(b: BubbleState) {
     window.clearTimeout(b.timer)
     b.timer = null
   }
+  const wasCollapsed = isCollapsed.value
   const idx = reminders.value.indexOf(b)
   if (idx >= 0) reminders.value.splice(idx, 1)
   // count 回落到 ≤1 → 重置 expanded（让单卡用普通气泡形态）。
@@ -136,6 +187,19 @@ function removeBubble(b: BubbleState) {
   // collapsed 翻页：新的 reminders[0] 现在变可见，启动它的 auto-dismiss。
   if (reminders.value.length > 0 && isCollapsed.value) {
     startAutoDismiss(reminders.value[0])
+  }
+  // 动画 reason：
+  // - wasCollapsed && 剩余 >= 1 → page-next（visible bubble 切到下一条）
+  // - wasCollapsed && 剩余 === 1 → 但上面 displayMode 已 reset，已经走 single-restore 分支
+  // - 不在 collapsed → 标准 leave（fired）
+  if (wasCollapsed && reminders.value.length === 1) {
+    setReason('single-restore')
+  } else if (wasCollapsed && reminders.value.length > 1) {
+    setReason('page-next')
+  } else if (wasCollapsed && reminders.value.length === 0) {
+    setReason('fired')
+  } else {
+    setReason('fired')
   }
 }
 
@@ -205,6 +269,8 @@ onBeforeUnmount(() => {
   reminders.value.forEach((b) => {
     if (b.timer !== null) window.clearTimeout(b.timer)
   })
+  if (reasonResetTimer !== null) window.clearTimeout(reasonResetTimer)
+  if (badgePopTimer !== null) window.clearTimeout(badgePopTimer)
 })
 
 // 跨窗协作（pet-reminder overlay 迁移）：让父级 overlay App watch bubbleCount → emit
@@ -216,7 +282,7 @@ defineExpose({
 
 <template>
   <TransitionGroup
-    name="bubble"
+    :name="transitionName"
     tag="div"
     class="reminder-bubble-stack"
     :class="{ 'reminder-bubble-stack--dimmed': trayOpen }"
@@ -233,7 +299,12 @@ defineExpose({
       @mouseleave="onMouseLeave(b)"
     >
       <!-- collapsed mode 左上 count badge：仅最新一张显示（visibleReminders.length=1） -->
-      <div v-if="isCollapsed" class="reminder-bubble__count-badge" aria-label="未处理提醒数">
+      <div
+        v-if="isCollapsed"
+        class="reminder-bubble__count-badge"
+        :class="{ 'badge-pop': badgePopActive }"
+        aria-label="未处理提醒数"
+      >
         {{ collapsedCount }}
       </div>
 
@@ -456,19 +527,106 @@ defineExpose({
   border-color: var(--aipet-color-border);
 }
 
-.bubble-enter-active,
-.bubble-leave-active {
+.bubble-fired-enter-active,
+.bubble-fired-leave-active {
   transition: opacity 220ms var(--aipet-ease-standard),
     transform 220ms var(--aipet-ease-standard);
 }
 
-.bubble-enter-from,
-.bubble-leave-to {
+.bubble-fired-enter-from,
+.bubble-fired-leave-to {
   opacity: 0;
   transform: translateY(-8px);
 }
 
-.bubble-move {
+.bubble-fired-move {
   transition: transform 220ms var(--aipet-ease-standard);
+}
+
+/* collapse-merge：从 expanded 双卡进入 collapsed 单卡的过渡。
+   新 bubble 用 scale 0.92→1 + fade，营造"两卡合并成一摞"的感觉。
+   旧 bubble (被换走的) 走标准 leave。 */
+.bubble-collapse-merge-enter-active {
+  transition: opacity 220ms var(--aipet-ease-standard),
+    transform 220ms var(--aipet-ease-standard);
+}
+.bubble-collapse-merge-enter-from {
+  opacity: 0;
+  transform: scale(0.92);
+}
+.bubble-collapse-merge-leave-active {
+  transition: opacity 180ms var(--aipet-ease-standard);
+}
+.bubble-collapse-merge-leave-to {
+  opacity: 0;
+}
+.bubble-collapse-merge-move {
+  transition: transform 200ms var(--aipet-ease-standard);
+}
+
+/* page-next：collapsed 内"翻页"动画。旧 bubble 向右滑出，新 reminders[0] 从左滑入。 */
+.bubble-page-next-leave-active {
+  transition: opacity 200ms, transform 200ms var(--aipet-ease-standard);
+}
+.bubble-page-next-leave-to {
+  opacity: 0;
+  transform: translateX(12px);
+}
+.bubble-page-next-enter-active {
+  transition: opacity 200ms, transform 200ms var(--aipet-ease-standard);
+}
+.bubble-page-next-enter-from {
+  opacity: 0;
+  transform: translateX(-12px);
+}
+.bubble-page-next-move {
+  transition: transform 200ms var(--aipet-ease-standard);
+}
+
+/* single-restore：collapsed 回到单卡。剩余 bubble 用 scale 1.05→1（脱掉"摞"的厚度感）。 */
+.bubble-single-restore-enter-active {
+  transition: opacity 220ms var(--aipet-ease-standard),
+    transform 220ms var(--aipet-ease-standard);
+}
+.bubble-single-restore-enter-from {
+  opacity: 0;
+  transform: scale(1.05);
+}
+.bubble-single-restore-leave-active {
+  transition: opacity 180ms var(--aipet-ease-standard);
+}
+.bubble-single-restore-leave-to {
+  opacity: 0;
+}
+
+/* badge-bump：bubble 整张 NOT re-enter（empty enter class → instant render）。
+   仅靠 .badge-pop class 让 count 数字 scale 1.25。reminder 数据更新但 visible bubble 内容
+   只是 title 文本变化（同 key 不触发 transition），用户视觉看到的只是"badge 数字蹦了一下"。 */
+.bubble-badge-bump-enter-active,
+.bubble-badge-bump-leave-active {
+  transition: none;
+}
+.bubble-badge-bump-enter-from,
+.bubble-badge-bump-leave-to {
+  opacity: 1;
+}
+.bubble-badge-bump-move {
+  transition: transform 0ms;
+}
+
+/* count badge 数字 pop 动画 —— 与 transition reason 独立。 */
+.reminder-bubble__count-badge.badge-pop {
+  animation: badge-pop 180ms var(--aipet-ease-standard);
+}
+@keyframes badge-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 </style>
