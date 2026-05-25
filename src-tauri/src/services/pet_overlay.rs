@@ -158,20 +158,31 @@ pub fn reposition_overlay<R: Runtime>(app: &AppHandle<R>, label: &str) {
         (COMMAND_W, COMMAND_H)
     };
 
-    let (x, y) = if label == PET_REMINDER_OVERLAY_LABEL {
-        compute_reminder_anchor(
+    let (x, y, placement_opt) = if label == PET_REMINDER_OVERLAY_LABEL {
+        let (x, y, placement) = compute_reminder_anchor(
             pet_pos.x, pet_pos.y, pet_size.width, pet_size.height,
             mon_pos.x, mon_pos.y, mon_size.width, mon_size.height, w, h,
-        )
+        );
+        (x, y, Some(placement))
     } else {
-        compute_command_anchor(
+        let (x, y) = compute_command_anchor(
             pet_pos.x, pet_pos.y, pet_size.width, pet_size.height,
             mon_pos.x, mon_pos.y, mon_size.width, mon_size.height, w, h,
-        )
+        );
+        (x, y, None)
     };
 
-    if let Err(e) = overlay.set_position(LogicalPosition::new(x, y)) {
-        eprintln!("[pet_overlay] set_position {label} failed: {e}");
+    match overlay.set_position(LogicalPosition::new(x, y)) {
+        Ok(()) => {
+            // reminder overlay 定位成功后通知 pet 窗口当前 placement 方向（spec 2026-05-25-pet-reminder-card-stack §5）。
+            // command overlay 不发，pet glance 只跟 reminder 联动。
+            if let Some(placement) = placement_opt {
+                emit_reminder_placement(app, placement);
+            }
+        }
+        Err(e) => {
+            eprintln!("[pet_overlay] set_position {label} failed: {e}");
+        }
     }
 }
 
@@ -179,15 +190,16 @@ fn compute_reminder_anchor(
     pet_x: f64, pet_y: f64, pet_w: f64, pet_h: f64,
     mon_x: f64, mon_y: f64, mon_w: f64, mon_h: f64,
     w: f64, h: f64,
-) -> (f64, f64) {
+) -> (f64, f64, &'static str) {
     let target_x = pet_x + pet_w / 2.0 - w / 2.0;
     let target_y_above = pet_y - h - GAP;
-    let target_y = if target_y_above < mon_y + SCREEN_MARGIN {
-        pet_y + pet_h + GAP
+    let (target_y, placement) = if target_y_above < mon_y + SCREEN_MARGIN {
+        (pet_y + pet_h + GAP, "below")
     } else {
-        target_y_above
+        (target_y_above, "above")
     };
-    clamp_to_monitor(target_x, target_y, w, h, mon_x, mon_y, mon_w, mon_h)
+    let (x, y) = clamp_to_monitor(target_x, target_y, w, h, mon_x, mon_y, mon_w, mon_h);
+    (x, y, placement)
 }
 
 fn compute_command_anchor(
@@ -241,13 +253,27 @@ fn emit_visibility_changed_generic<R: Runtime>(app: &AppHandle<R>, label: &str, 
     }
 }
 
+/// 把 reminder overlay 当前 placement（`"above"` / `"below"`）通知 pet 窗口；
+/// 前端 usePetGlance 监听此事件，决定下一次 reminder:fired 时 head bone 抬头还是低头
+/// （spec 2026-05-25-pet-reminder-card-stack §5）。
+fn emit_reminder_placement<R: Runtime>(app: &AppHandle<R>, placement: &'static str) {
+    use tauri::Emitter;
+    if let Err(e) = app.emit_to(
+        PET_WINDOW_LABEL,
+        "pet-reminder:placement",
+        serde_json::json!({ "direction": placement }),
+    ) {
+        eprintln!("[pet_overlay] emit pet-reminder:placement={placement} failed: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn reminder_anchor_default_above() {
-        let (x, y) = compute_reminder_anchor(
+        let (x, y, placement) = compute_reminder_anchor(
             500.0, 400.0, 320.0, 320.0,
             0.0, 0.0, 1920.0, 1080.0,
             REMINDER_W, REMINDER_H,
@@ -256,17 +282,19 @@ mod tests {
         assert!((x - 500.0).abs() < 0.1, "上方居中 x={x}");
         // pet_y 400 - 280 - 8 = 112
         assert!((y - 112.0).abs() < 0.1, "上方 y={y}");
+        assert_eq!(placement, "above", "上方 placement={placement}");
     }
 
     #[test]
     fn reminder_anchor_fallback_below_when_no_top_space() {
-        let (_, y) = compute_reminder_anchor(
+        let (_, y, placement) = compute_reminder_anchor(
             500.0, 30.0, 320.0, 320.0,
             0.0, 0.0, 1920.0, 1080.0,
             REMINDER_W, REMINDER_H,
         );
         // 顶部空间不够（30 - 280 - 8 = -258 < 0+16）→ pet 下方：30 + 320 + 8 = 358
         assert!((y - 358.0).abs() < 0.1, "下方 y={y}");
+        assert_eq!(placement, "below", "下方 placement={placement}");
     }
 
     #[test]
