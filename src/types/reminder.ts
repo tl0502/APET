@@ -59,6 +59,16 @@ export const REMINDER_CATCH_UP_EVENT = 'reminder:catch_up'
 /** #28 FOCUS 期软提醒缓冲；REST 启动时 pomodoro 端 emit 合并展示。复用 ReminderCatchUpItem[]。 */
 export const REMINDER_BUFFER_FLUSH_EVENT = 'reminder:buffer_flush'
 
+/** Reminder overlay 在 pet 上方还是下方（spec 2026-05-25-pet-reminder-card-stack §5）。
+ *  Rust pet_overlay::reposition_overlay 计算后通过 PET_REMINDER_PLACEMENT_EVENT 通知 pet 窗。 */
+export type PetReminderPlacement = 'above' | 'below'
+
+export interface PetReminderPlacementPayload {
+  direction: PetReminderPlacement
+}
+
+export const PET_REMINDER_PLACEMENT_EVENT = 'pet-reminder:placement'
+
 /**
  * 模板预设库（hardcode；前 3 个 id 与 onboarding Step 4 ReminderIntentsView INTENTS 对齐）。
  * #29 实例化 onboarding KV `onboarding:reminder_intents` 时直接按 id 反查本表 → CreateInput。

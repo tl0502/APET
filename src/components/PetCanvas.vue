@@ -19,7 +19,7 @@
 import { computed, ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useVRMModel } from '@/composables/useVRMModel'
-import { usePetReaction } from '@/composables/usePetReaction'
+import { usePetGlance } from '@/composables/usePetGlance'
 import {
   useInteractionRaycaster,
   type InteractionContextMenuEvent,
@@ -68,8 +68,9 @@ const MODEL_URL = '/avatar/avatar.vrm'
 
 const { isLoaded, errorMessage, runtime } = useVRMModel(canvasRef, MODEL_URL, props.view)
 
-// #29 桌宠对 reminder:fired 的反应（点头）。onboarding 场景传 enable-reaction="false" 跳过。
-usePetReaction(runtime, () => props.enableReaction)
+// #29 桌宠对 reminder:fired 的反应（head glance）。2026-05-26 升级为按 reminder placement
+// 抬头/低头（spec 2026-05-25-pet-reminder-card-stack §5）。onboarding 场景传 false 跳过。
+usePetGlance(runtime, () => props.enableReaction)
 
 // #40 物理交互：默认与 draggable 同步（onboarding draggable=false → 关交互）。
 const interactionEnabled = computed(
