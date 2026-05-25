@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reminder Card Model</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #1a1a1f;
+    color: #e8e8ea;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 6px; }
+  .subtitle { font-size: 13px; color: #888; margin-bottom: 32px; }
+
+  .scenarios {
+    display: flex;
+    gap: 48px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .scenario {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .scenario-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #aaa;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Overlay window simulation */
+  .overlay-window {
+    background: transparent;
+    border: 1.5px dashed #333;
+    border-radius: 12px;
+    padding: 10px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .overlay-label {
+    position: absolute;
+    top: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: #555;
+    background: #1a1a1f;
+    padding: 0 6px;
+    white-space: nowrap;
+  }
+
+  /* Single card */
+  .reminder-card {
+    width: 240px;
+    background: rgba(40, 40, 48, 0.95);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px;
+    padding: 10px 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    position: relative;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .card-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #eee;
+    line-height: 1.35;
+  }
+
+  .card-sub {
+    font-size: 10.5px;
+    color: #777;
+    margin-top: 1px;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 6px;
+  }
+
+  .btn {
+    font-size: 10px;
+    padding: 3px 9px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.06);
+    color: #ccc;
+    cursor: pointer;
+  }
+  .btn-primary {
+    background: #5b7cf6;
+    border-color: #5b7cf6;
+    color: #fff;
+  }
+
+  /* Stack: layered cards */
+  .card-stack {
+    position: relative;
+    width: 240px;
+  }
+
+  /* Ghost cards behind – pure CSS stacking illusion */
+  .card-ghost {
+    position: absolute;
+    width: 228px;
+    height: 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .card-ghost-1 {
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(38, 38, 50, 0.7);
+    z-index: 1;
+  }
+
+  .card-ghost-2 {
+    bottom: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 216px;
+    background: rgba(32, 32, 44, 0.5);
+    z-index: 0;
+  }
+
+  .card-stack .reminder-card {
+    position: relative;
+    z-index: 2;
+  }
+
+  /* Count badge */
+  .stack-badge {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    background: #5b7cf6;
+    color: #fff;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(91,124,246,0.5);
+    z-index: 10;
+  }
+
+  /* Annotation */
+  .annotation {
+    font-size: 11px;
+    color: #666;
+    text-align: center;
+    max-width: 260px;
+    line-height: 1.5;
+    margin-top: 4px;
+  }
+
+  .annotation strong { color: #aaa; }
+
+  /* Comparison table */
+  .comparison {
+    margin-top: 48px;
+    border-top: 1px solid #2a2a35;
+    padding-top: 32px;
+  }
+
+  .comparison h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ccc;
+    margin-bottom: 16px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    color: #888;
+    font-weight: 600;
+    border-bottom: 1px solid #2a2a35;
+  }
+
+  td {
+    padding: 8px 12px;
+    color: #bbb;
+    border-bottom: 1px solid #222;
+    vertical-align: top;
+  }
+
+  .old { color: #f87171; }
+  .new { color: #6ee7b7; }
+  .col-feature { color: #888; font-weight: 500; }
+</style>
+</head>
+<body>
+
+<h1>Reminder Card Model — 新设计</h1>
+<p class="subtitle">单卡片 + 叠卡模式，取消 expanded/collapsed/bubble 状态转换</p>
+
+<div class="scenarios">
+
+  <!-- count = 1 -->
+  <div class="scenario">
+    <div class="scenario-label">count = 1　单独 card</div>
+    <div class="overlay-window" style="width:268px">
+      <span class="overlay-label">overlay window（贴合 card）</span>
+      <div class="reminder-card">
+        <div class="card-header">
+          <span class="card-icon">💭</span>
+          <div>
+            <div class="card-title">下午好，喝水了吗？</div>
+            <div class="card-sub">饮水提醒</div>
+          </div>
+        </div>
+        <div class="card-actions">
+          <button class="btn">稍后</button>
+          <button class="btn btn-primary">完成</button>
+        </div>
+      </div>
+    </div>
+    <p class="annotation">无 badge，无特殊状态<br>overlay 贴合卡片大小</p>
+  </div>
+
+  <!-- count > 1 叠卡 -->
+  <div class="scenario">
+    <div class="scenario-label">count = 3　叠卡 stack</div>
+    <div class="overlay-window" style="width:268px; padding-bottom: 26px">
+      <span class="overlay-label">overlay window（贴合 stack）</span>
+      <div class="card-stack">
+        <!-- 顶层：最新的 card，可操作 -->
+        <div class="reminder-card">
+          <span class="stack-badge">3</span>
+          <div class="card-header">
+            <span class="card-icon">🔔</span>
+            <div>
+              <div class="card-title">站起来活动一下</div>
+              <div class="card-sub">久坐提醒</div>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button class="btn">稍后</button>
+            <button class="btn btn-primary">完成</button>
+          </div>
+        </div>
+        <!-- 叠层幻影（视觉厚度感） -->
+        <div class="card-ghost card-ghost-1"></div>
+        <div class="card-ghost card-ghost-2"></div>
+      </div>
+    </div>
+    <p class="annotation"><strong>count badge</strong> 在右上角<br>叠层幻影体现"还有更多"<br>操作的只是顶层 card</p>
+  </div>
+
+  <!-- count > 1 queue 示意 -->
+  <div class="scenario">
+    <div class="scenario-label">叠卡交互流程</div>
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:#888;max-width:220px;padding-top:8px">
+      <div style="padding:10px 12px;background:#1e1e28;border-radius:10px;border:1px solid #2a2a38">
+        <span style="color:#5b7cf6;font-weight:600">新 reminder 进入</span><br>
+        badge +1，轻量 pop 动画<br>
+        <span style="color:#555">卡片本体不重入场</span>
+      </div>
+      <div style="text-align:center;color:#444">↓</div>
+      <div style="padding:10px 12px;background:#1e1e28;border-radius:10px;border:1px solid #2a2a38">
+        <span style="color:#6ee7b7;font-weight:600">用户完成/稍后顶层</span><br>
+        顶层卡片滑出<br>
+        下一条升为顶层<br>
+        badge −1
+      </div>
+      <div style="text-align:center;color:#444">↓</div>
+      <div style="padding:10px 12px;background:#1e1e28;border-radius:10px;border:1px solid #2a2a38">
+        <span style="color:#f0a04b;font-weight:600">count → 1</span><br>
+        badge 隐藏<br>
+        叠层幻影消失<br>
+        回到单卡形态
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 新旧对比 -->
+<div class="comparison">
+  <h2>新 vs 旧 对比</h2>
+  <table>
+    <tr>
+      <th style="width:30%">特性</th>
+      <th style="width:35%">旧（expanded/collapsed/bubble）</th>
+      <th style="width:35%">新（单卡 + 叠卡）</th>
+    </tr>
+    <tr>
+      <td class="col-feature">count = 1</td>
+      <td class="old">普通气泡，无 badge</td>
+      <td class="new">ReminderCard，无 badge ✓</td>
+    </tr>
+    <tr>
+      <td class="col-feature">count = 2</td>
+      <td class="old">2 张气泡上下排列，expanded 模式</td>
+      <td class="new">顶层 card + 1 层幻影 + badge「2」</td>
+    </tr>
+    <tr>
+      <td class="col-feature">count > 2</td>
+      <td class="old">折叠为 collapsed bubble + badge 左上角</td>
+      <td class="new">顶层 card + 多层幻影 + badge 右上角</td>
+    </tr>
+    <tr>
+      <td class="col-feature">新 reminder 进入</td>
+      <td class="old">可能触发整卡 enter 动画</td>
+      <td class="new">只有 badge pop，卡片本体不重入场</td>
+    </tr>
+    <tr>
+      <td class="col-feature">状态转换动画</td>
+      <td class="old">expanded↔collapsed + TransitionGroup</td>
+      <td class="new">无，只有 badge 轻量动画</td>
+    </tr>
+    <tr>
+      <td class="col-feature">overlay 大小</td>
+      <td class="old">固定 320×280 或动态复杂计算</td>
+      <td class="new">贴合单卡 / stack 实际尺寸</td>
+    </tr>
+  </table>
+</div>
+
+</body>
+</html>
