@@ -159,14 +159,17 @@ defineExpose({ bubbleCount, stackEl: computed(() => tgRef.value?.$el ?? null) })
      overlay 窗内水平居中。Rust anchor 已把窗口中心对齐 pet 中心（target_x = pet_center - w/2），
      因此气泡与 pet 中轴线对齐。stack 自身 pointer-events: none，透明区不拦下层操作；
      .reminder-bubble 自己 pointer-events: auto 接 hover/click。 */
+  /* 固定宽度 280px = bubble max-width，确保 reminder-bubble / reminder-bubble--collapsed
+     在容器内居中时有稳定基准。overlay 窗（320px）通过 left:50%+translateX(-50%) 居中对齐
+     Rust 已算好的 pet 中轴线锚点，20px 边距留给 box-shadow 和 badge 溢出。 */
   position: absolute;
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: fit-content;
-  max-width: 280px;
+  width: 280px;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   pointer-events: none;
   z-index: 5;
