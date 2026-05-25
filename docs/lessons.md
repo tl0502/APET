@@ -1,6 +1,6 @@
 ---
 title: AIPET 开发踩坑笔记
-updated: 2026-05-22
+updated: 2026-05-25
 related:
   - STATUS.md
   - WORKFLOW.md
@@ -287,6 +287,28 @@ related:
 **核验**：onboarding_reminders.rs 的 `drain_in_tx_skips_unknown_ids` 单测对"扩 template 后老 KV 找不到 id"的 skip 行为是兜底，但不能替代双写约束 — skip 后 reminders 表没增行，跟"用户没勾"无法从结果反查。
 
 **出处**：#29 D1 落地，2026-05-23。`addded1`。
+
+---
+
+## 17. 新增 migration 必须同步更新 test_db.rs::fresh_db apply 列表（Phase A0 落地暴露）
+
+**症状**：单测全绿、cargo test 358/358 PASS，但生产环境 `SecretRepo::set` 写入时 `created_at` 列永远是空串 —— 审计列丢失。
+
+**根因**：`src-tauri/src/services/test_db.rs::fresh_db()` 是所有 service 测试的共享 fixture，但只 `apply MIGRATION_001`。Phase A0 新增 `002_phase_a0_safety_secrets.sql`（ALTER TABLE secrets ADD created_at + ALTER messages ADD safety_scan_status + 新表 context_access_log）后，**test_db.rs 没同步更新** —— 测试拿到的是 pre-002 schema，prod 跑的是 post-002 schema，二者悄悄分裂。
+
+更严重的二阶效应：Task 5b implementer 看到自己写的 `add_provider_with_conn_and_secret` 调 `SecretRepo::set` 在测试报错（cuz fresh_db 没 ALTER），按"逻辑自洽"原则改 SecretRepo::set 从 4 列 INSERT 改回 3 列，再把 secret_repo 自己的 in-memory test schema 也改成 3 列对齐。测试通过 = 把 prod 的 `created_at` 审计设计静默废了。
+
+**根本原因**：test_db.rs 的 `MIGRATION_001` 常量名 + 旁注 "002 已 merge 进 001" 是历史遗留（旧 002 = persona_snapshot_unique，2026-05-06 合进 001）。Phase A0 加新 002 时，开发者下意识以为"002 已合 001 = 不存在 002 文件"，没注意到 `migrations/` 目录里其实有新 `002_phase_a0_safety_secrets.sql`。
+
+**处理**：
+- 新增 migration `.sql` 时，**两个 commit 必须 paired**：(1) 加 sql 文件（prod 路径） (2) test_db.rs 加 `const MIGRATION_NNN = include_str!(...)` + `conn.execute(MIGRATION_NNN)`
+- test_db.rs 的注释必须明确列**所有** apply 的 migration（不允许"已 merge 进 X"类历史遗留旁注，必须当下真实状态）
+- 任何"prod 代码 vs 测试 schema 看似不一致"的 review 反馈，**先核所有 migration 文件**（包括 ALTER），再下结论改哪边。绝大多数情况是 test fixture 漂移，不是 prod 代码错。
+- 用户层 trigger：lib.rs::run_migrations() 与 test_db.rs::fresh_db() 必须 apply 同一组 sql；不一致就是 bug
+
+**判别要点**：评估"测试 schema vs prod schema"分歧时，read both `001_*.sql` and `002_*.sql` and `test_db.rs::fresh_db`。如果三者口径不一致，prod 路径（lib.rs migrate）是权威，测试要追平，不是反过来。
+
+**出处**：[#50](https://github.com/tl0502/APET/issues/50) Phase A0 落地 commit `1962101` (5b implementer 误改方向) → `c16ed83` 还原 + test_db 加 apply 002，2026-05-25
 
 ---
 
