@@ -146,20 +146,28 @@ related:
    - 模板改为：
      ```vue
      <div class="reminder-bubble-stack" :class="{ 'reminder-bubble-stack--collapsed': count > 1 }">
-       <!-- ghost layers (count > 1 时渲染 count-1 层) -->
-       <div v-for="i in ghostCount" :key="`ghost-${i}`" class="reminder-card--ghost" />
+       <!-- ghost layers (count > 1 时渲染 ghostCount 层；ghostCount = count === 2 ? 1 : 2) -->
+       <div v-for="i in ghostCount" :key="`ghost-${i}`" :class="['reminder-card--ghost', `reminder-card--ghost-${i}`]" />
        <!-- top card -->
        <div class="reminder-card" :class="{ 'reminder-card--exiting': isExiting }">
-         ... content ...
+         ... content (icon + title + sub + actions) ...
          <div v-if="count > 1" class="reminder-badge" :class="{ 'reminder-badge--pop': isBadgePopping }">
            {{ count }}
          </div>
        </div>
      </div>
      ```
-   - ghost layer CSS：`border` + `box-shadow` + `scale` 递减（每层 `scale(0.96)` 相对上一层）。
-   - badge pop：CSS `@keyframes badgePop { 0% { scale: 1 } 50% { scale: 1.3 } 100% { scale: 1 } }`，`200ms`。
-   - exit animation：`translateX(40px) + opacity(0)`，`200ms ease-out`。
+   - **Ghost layer CSS（按 spec §4.1 实施，源头 = `.superpowers/brainstorm/.../card-model-overview.html`）**：
+     - `position: absolute`，`height: 16px`（细条状，**非完整缩放外框**）
+     - `width`：ghost-1 = 228px / ghost-2 = 216px（top card 240px，逐层 -12px）
+     - `border-radius: 14px`
+     - `border: 1px solid rgba(255,255,255,0.06)`
+     - 背景：ghost-1 = `rgba(38,38,50,0.7)` / ghost-2 = `rgba(32,32,44,0.5)`
+     - 位置：ghost-1 `bottom: -8px` / ghost-2 `bottom: -14px`，`left: 50%; transform: translateX(-50%)`
+     - z-index：ghost-1 = 1 / ghost-2 = 0（top card = 2，badge = 10）
+   - **Badge CSS**：`position: absolute; top: -7px; right: -7px;`（**右上角 overhang**）；`background: #5b7cf6`；`min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px`；`color: #fff; font-weight: 700`；`box-shadow: 0 2px 8px rgba(91,124,246,0.5)`。
+   - Badge pop：CSS `@keyframes badgePop { 0% { scale: 1 } 50% { scale: 1.3 } 100% { scale: 1 } }`，`200ms`。
+   - Exit animation：`translateX(40px) + opacity(0)`，`200ms ease-out`。
    - 保持 `stackEl` expose（`tgRef` 改为 `stackRef`），供父 overlay 的 `ResizeObserver` 使用。
 2. `PetReminderOverlayApp.vue`：
    - 适配新组件接口（props / emits 变化）。
@@ -167,15 +175,15 @@ related:
    - command tray open 时 opacity dim 到 40%（保留现有逻辑）。
 
 **验收**:
-- [ ] `count === 1`：单卡，无 badge，无 ghost layer
-- [ ] `count === 2`：1 ghost layer + badge `2`
-- [ ] `count === 3`：2 ghost layers + badge `3`
+- [ ] `count === 1`：单卡（240px），无 badge，无 ghost layer
+- [ ] `count === 2`：1 层 ghost 细条（228×16，α=0.7）+ **右上角** badge `2`
+- [ ] `count === 3`：2 层 ghost 细条（228×16 + 216×16，α 递减）+ badge `3`
 - [ ] Badge count 变化时触发 pop animation
 - [ ] Top card 完成/稍后时 slide right + fade out
-- [ ] 父容器 `.reminder-bubble-stack--collapsed` modifier 正确应用（居中 + padding 防 crop）
+- [ ] 父容器 `.reminder-bubble-stack--collapsed` modifier 正确应用（padding 防 crop + translateX 居中补偿）
 - [ ] `ResizeObserver` 仍能读取 stack 高度并调用 `setSize`
 
-**风险**: ghost layer 的 `scale` 递减叠加时视觉可能过于密集，需手动调参。
+**风险**: ghost 细条的 `bottom` 露出距离和 `width` 递减在不同 DPI / 主题下可能视觉过密，需手动调参；CSS 数值以 `.superpowers/brainstorm/.../card-model-overview.html` 为基线，偏差只在调参方向上允许。
 
 ---
 

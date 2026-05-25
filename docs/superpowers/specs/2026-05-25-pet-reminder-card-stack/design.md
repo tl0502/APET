@@ -61,7 +61,10 @@ related:
 - 仅渲染一张 `ReminderCard`。
 - 无 count badge。
 - 无 stack/ghost layer 效果。
-- 卡片宽度固定（如 `280px`），高度自适应内容（标题 + 操作按钮）。
+- 卡片宽度 `240px`，高度自适应内容（标题 + 副标题 + 操作按钮 `[稍后][完成]`）。
+- 样式：`background: rgba(40, 40, 48, 0.95)`，`border: 1px solid rgba(255,255,255,0.1)`，`border-radius: 14px`，`box-shadow: 0 8px 24px rgba(0,0,0,0.4)`，`padding: 10px 12px`。
+
+> **视觉源头**：[`.superpowers/brainstorm/31012-1779717504/content/card-model-overview.html`](../../../.superpowers/brainstorm/31012-1779717504/content/card-model-overview.html)（用户 2026-05-25 确认）。所有 CSS 数值以该 HTML 为准；本文档与 HTML 不一致时以 HTML 为准。
 
 ### 3.2 生命周期
 
@@ -76,28 +79,38 @@ related:
 ### 4.1 视觉
 
 ```
-┌──────────────────────────┐  ← top card（完整渲染，可交互）
-│  💧 喝水                   │
-│  每 30 分钟                │
-│  [完成]  [稍后]            │
-├──────────────────────────┤  ← ghost layer #2（仅边框/阴影/微缩，不渲染内容）
-├──────────────────────────┤  ← ghost layer #3（同上）
-└──────────────────────────┘
-     ┌──┐
-     │ 3│  ← count badge（右下角，pop animation on change）
-     └──┘
+                           ┌──┐    ← count badge（overhang 右上角 top:-7 right:-7）
+                           │ 3│
+┌──────────────────────────┘──┘─┐
+│  🔔 站起来活动一下              │   ← top card（240px，唯一渲染内容 + actions）
+│     久坐提醒                   │
+│              [稍后][完成]      │
+└────────────────────────────────┘
+   ──────────────────────         ← ghost-1：细条 (228×16, bg α=0.7, bottom -8px)
+     ──────────────────           ← ghost-2：细条 (216×16, bg α=0.5, bottom -14px)
 ```
 
-- **Ghost layer**：底层卡片仅渲染外框（`border` + `box-shadow` + 微缩 `scale(0.96)` 逐层递减），不渲染文本/按钮，避免 DOM 膨胀。
-- **Badge**：右下角圆形 badge，显示当前 queue 长度。count 变化时触发轻量 CSS keyframe（`scale(1) → scale(1.3) → scale(1)`，`200ms`）。
-- **Z-index**：新卡（ newest ）在最上层。
+- **Ghost layer**：底层渲染为**细条状**，不是完整缩小的卡片外框。规格：
+  - `width` 逐层 -12px：top=240px / ghost-1=228px / ghost-2=216px
+  - `height: 16px`（固定细条）
+  - `border-radius: 14px`（与顶层同）
+  - 背景：与顶层同色但 alpha 递减 — ghost-1=`rgba(38, 38, 50, 0.7)` / ghost-2=`rgba(32, 32, 44, 0.5)`
+  - `border: 1px solid rgba(255,255,255,0.06)`（极淡）
+  - 绝对定位：`bottom: -8px`（ghost-1）/ `bottom: -14px`（ghost-2），从顶层卡底部向下露出
+  - 不渲染文本/按钮，避免 DOM 膨胀
+- **Badge**：**右上角 overhang**（`top: -7px / right: -7px`），蓝色填充 `#5b7cf6`，圆形（`min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px`），白字 700，`box-shadow: 0 2px 8px rgba(91,124,246,0.5)`。count 变化时触发 CSS keyframe（`scale(1) → scale(1.3) → scale(1)`，`200ms`）。
+- **Z-index**：top card = 2，ghost-1 = 1，ghost-2 = 0，badge = 10。
+
+> **视觉源头**：[`.superpowers/brainstorm/31012-1779717504/content/card-model-overview.html`](../../../.superpowers/brainstorm/31012-1779717504/content/card-model-overview.html)（用户 2026-05-25 确认）。所有数值以该 HTML 为准。
 
 ### 4.2 父容器定位
 
 - 使用 `.reminder-bubble-stack--collapsed` 条件 modifier：
-  - `padding-top: 8px`（防止 badge 顶部被 crop）
-  - `transform: translateX(calc(-50% + 2.5px))`（补偿 badge 左侧溢出，使整体视觉上居中于 pet 中心轴）
-- 卡片自身尺寸不变，仅调整父容器定位。
+  - `padding-top: 8px`（防止 badge 右上角 overhang 被 crop）
+  - `padding-right: 8px`（防止 badge 右侧 overhang 被 crop）
+  - `padding-bottom: 18px`（容纳 ghost-2 底部露出 14px + 4px 视觉缓冲）
+  - 视觉居中：badge `right: -7px` 使整体视觉重心向右偏移约 3.5px；父容器 `transform: translateX(calc(-50% + 3.5px))` 反向补偿（**实际数值在 Task 5 实施时按 ResizeObserver 实测调整**）。
+- 卡片自身尺寸不变，仅调整父容器定位 + padding 防 crop。
 
 ### 4.3 入场/退场
 
@@ -264,9 +277,9 @@ listen(REMINDER_FIRED_EVENT, (e) => {
 
 ### 7.1 功能验收
 
-- [ ] `count === 1`：仅显示单张卡片，无 badge，无 ghost layer。
-- [ ] `count === 2`：顶层卡可交互，底层一张 ghost layer（仅边框+阴影），右下角 badge 显示 `2`。
-- [ ] `count === 3`：两层 ghost layer（每层 `scale` 递减 `0.04`），badge 显示 `3`。
+- [ ] `count === 1`：仅显示单张卡片（240px 宽），无 badge，无 ghost layer。
+- [ ] `count === 2`：顶层卡可交互，底层一张 ghost 细条（228×16，α=0.7，bottom -8px），**右上角** badge overhang 显示 `2`。
+- [ ] `count === 3`：两层 ghost 细条（228×16 + 216×16，α 递减），badge 显示 `3`。
 - [ ] Badge count 从 `2→3` 时触发 pop animation（`scale 1 → 1.3 → 1`，`200ms`）。
 - [ ] 点击「完成」：top card 执行 slide right + fade out；下一层 ghost layer 升为 top card（无入场动画，直接显现）。
 - [ ] 点击「稍后」：同完成流程，reminder 从 queue 移除，scheduler 会在 snooze 后重新 `fired`。
@@ -289,7 +302,7 @@ listen(REMINDER_FIRED_EVENT, (e) => {
 | 场景 | 行为 |
 |---|---|
 | Pet 移动中 + reminder fired | overlay hide 中，pet 执行 glance 动作（方向按上次有效 placement）；settled 后 overlay reposition 到新位置 |
-| Reminder 在下方时 badge pop | badge 位置在右下角，不受下方 placement 影响 |
+| Reminder 在下方时 badge pop | badge 位置在**右上角 overhang**，不受下方 placement 影响 |
 | `count` 从 1→2（首张变叠卡） | 原单卡保持为 top card，新增 ghost layer 在下方，badge 从隐藏到显示 `2`（pop） |
 | `count` 从 2→1（最后一张完成） | 退场动画后无 ghost layer，badge 消失，恢复单卡形态 |
 | 同 `reminderId` 重复 fired | Queue 中去重：移动到 top，刷新 payload，不触发额外 glance（dedup 阈值 30s 内） |
