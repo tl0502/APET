@@ -78,30 +78,13 @@ related:
 - ✅ Task 8 `a6aae34`：CI 黑名单 OS context API 脚本（8 forbidden symbols：getUserMedia / MediaRecorder / GetForegroundWindow / GetWindowText / BitBlt / ReadClipboardText / GetCursorPos）+ DoD checklist
 - ✅ Task 5b `1962101→c16ed83`：LLM Provider API Key DPAPI 加密迁移 SecretRepo（distribution-gate 关闭）+ 收尾 fix（5b 实施时误把 SecretRepo::set 改回 3-列、改回测试 schema、test_db.rs 漂移；c16ed83 还原 4-列 + test_db 加 apply 002 + 设计意图注释回写）
 - 测试覆盖：cargo test --lib 358/358 pass，含 Task 5a 5 个 secret_repo + Task 5b 6 个 secret_migration 真 DPAPI round-trip
+- Follow-up issues（P1，非分发 gate 阻塞）：
+  - [#48](https://github.com/tl0502/APET/issues/48) ChatService test connectivity probe 绕过 SafetyGuard（设计完整性）
+  - [#49](https://github.com/tl0502/APET/issues/49) SafetyGuard::scan_token trailing-window 优化（Phase A1 mid-stream scan 落地前 O(n²)→O(window)）
 
 ### 立项准备期（2026-04-30 → 2026-05-05）✅
 
 15 项 ADR 敲定 + 6 份基线文档归档 + 文档工程化 + GitHub 仓库接入 + 项目记忆系统。实施期新增 ADR-016/017/018/019/020/021（脚手架 / EP 选型 / LLM 三层抽象 / Onboarding 续接 / 磁吸窗口 hub-spoke / Workspace 多 panel 壳）。
-
----
-
-## 待开 issue（gh 认证超时本地暂存，下次 gh 通了开正式 issue）
-
-### P1-A0-followup-1: ChatService test connectivity probes 绕过 SafetyGuard
-
-- **位置**：`src-tauri/src/services/chat/service.rs` 测试连通性 probe 路径（实际 send_message 前的 ping/test 调用）
-- **问题**：Task 7 实现集成 SafetyGuard 时只覆盖 `run_stream` 的 Ok 分支 final-scan；test connectivity probe（设置面板"测试连接"按钮）走的是独立 prompt 路径，没接 SafetyGuard
-- **风险**：用户在"测试连接"输入框输入恶意指令可绕过安全前缀（虽然 prompt 本身极短 + 接收端是 LLM 不是 native API，实际 attack surface 很小）
-- **修复建议**：把 test probe 也走 prompt::build_with_prefix() 或单独 hardcode 一个 "test connectivity" probe 文本
-- **优先级 P1**：非分发 gate 阻塞，但属于 Phase A0 设计完整性（"Safety guard 不可被 persona/工具旁路"原则）
-
-### P1-A0-followup-2: SafetyGuard scan_token trailing-window 优化
-
-- **位置**：`src-tauri/src/kernel/safety_guard.rs::SafetyGuardImpl::scan_token`
-- **问题**：当前实现每 token 重新扫描完整累积 buffer，时间复杂度 O(n²)。M3 长对话 + 实时 stream UI 可能感知卡顿
-- **修复建议**：维护 trailing-window（最长黑名单关键词 - 1 长度的 overlap），只扫 last_window + new_token
-- **依赖**：Phase A1 mid-stream scan_token 落地后才有真实消费者；此 P1 可跟着 A1 一起做
-- **优先级 P1**：性能而非正确性，Phase A0 不阻塞
 
 ---
 
