@@ -36,10 +36,16 @@ let unlistenChat: UnlistenFn | null = null
 let unlistenWorkspace: UnlistenFn | null = null
 let unlistenViewChanged: UnlistenFn | null = null
 let unlistenAot: UnlistenFn | null = null
+let unlistenTrayOpened: UnlistenFn | null = null
+let unlistenTrayClosed: UnlistenFn | null = null
 
 /** T10 (#31 follow-up B)：AOT 跨窗口广播事件名（Rust 端 toggle 时 emit）。
  *  R1 修复后前端不再启动期 read KV，仅 listen 此事件接 Rust 后续切换。 */
 const AOT_CHANGED_EVT = 'window:always-on-top:changed'
+
+// 2026-05-24 第三轮：pet-command overlay 在 pet 窗外 — pet 窗自己维护 ref + listen
+// overlay 的 ack 事件同步，避免给 Rust 端加 IPC query。pet 窗 contextmenu 改为 toggle 语义。
+const commandTrayOpen = ref(false)
 
 // #30 磁吸窗口系统：pet 是 anchor 之一（也是负责启动期 load persistence 的窗）。
 // composable 在 onMounted 注册 listener，在 onBeforeUnmount 清理。
@@ -74,13 +80,33 @@ const view = ref<AvatarView>('half')
 const size = computed(() => PET_VIEW_SIZES[view.value])
 
 // 2026-05-24 pet UI 重构第二轮：PetCommandTray / PetReminderBubble 已迁出 pet 窗到
-// 独立 Tauri overlay 窗（pet-command / pet-reminder）。pet 窗 contextmenu 只 emit 全局
-// Tauri 事件 `pet:contextmenu:request-open`，由 pet-command overlay 接收 v-if 显示，
-// Rust services/pet_overlay.rs 同步 show overlay window。位置由 Rust 算，不传前端 x/y。
+// 独立 Tauri overlay 窗。第三轮（2026-05-24）补 toggle 语义 + 跨窗 close intent 协议：
+// - commandTrayOpen=false → emit request-open 让 overlay 开
+// - commandTrayOpen=true → emit request-close（再次右键即关）
+// - ctx.close() 始终调，清掉本地 raycaster contextMenu ref 让下次能再触发
 function onPetContextmenu(ctx: InteractionContextMenuEvent & { close: () => void }) {
-  void emitTauri('pet:contextmenu:request-open', { reaction: ctx.reaction })
-  // 立刻清本地 contextMenu ref，让下次右键能再次触发（不依赖 overlay 反馈关闭）
   ctx.close()
+  if (commandTrayOpen.value) {
+    void emitTauri('pet:contextmenu:request-close')
+  } else {
+    void emitTauri('pet:contextmenu:request-open', { reaction: ctx.reaction })
+  }
+}
+
+/** Esc：tray 打开时关闭。二级返一级由 overlay 自己处理（pet 窗看不到 currentView）。 */
+function onPetKeyDown(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (!commandTrayOpen.value) return
+  void emitTauri('pet:contextmenu:request-close')
+}
+
+/** pet 窗内任意左键 pointerdown 都视为 "tray 外部" → 关闭。
+ *  右键 (button=2) 排除：raycaster contextmenu 路径会先于 pointerdown 走 emit request-open，
+ *  保证再次右键 toggle 顺序正确。 */
+function onPetWindowPointerDown(e: PointerEvent) {
+  if (e.button !== 0) return
+  if (!commandTrayOpen.value) return
+  void emitTauri('pet:contextmenu:request-close')
 }
 
 function asPreset(payload: unknown): PetViewPreset {
@@ -93,6 +119,28 @@ onMounted(async () => {
   } catch (e) {
     console.warn('[App] getPetViewPreset failed, fallback half:', e)
   }
+
+  // 第三轮：command tray ack 事件 — overlay 关闭 / 打开后 emit 同步 pet 窗 ref。
+  try {
+    unlistenTrayOpened = await listen('pet:contextmenu:opened-ack', () => {
+      commandTrayOpen.value = true
+    })
+  } catch (e) {
+    console.warn('[App] listen pet:contextmenu:opened-ack failed:', e)
+  }
+  try {
+    unlistenTrayClosed = await listen('pet:contextmenu:closed-ack', () => {
+      commandTrayOpen.value = false
+    })
+  } catch (e) {
+    console.warn('[App] listen pet:contextmenu:closed-ack failed:', e)
+  }
+
+  // 第三轮：Esc / pet 窗左键 pointerdown 触发关闭 intent（跨窗 outside click 协议）。
+  // capture phase 让 raycaster bubble-phase listener 之前先跑：raycaster pointerdown(button=0)
+  // 走 click/longpress 状态机，不影响我们的 close intent（commandTrayOpen=false 时直接 return）。
+  window.addEventListener('keydown', onPetKeyDown)
+  window.addEventListener('pointerdown', onPetWindowPointerDown, true)
 
   // T10 (#31 follow-up B)：AOT 前端 listen 后端 emit 同步切换。
   // R1 修复 (2026-05-19)：启动期由 Rust 端 apply_initial_always_on_top 单一负责，
@@ -173,6 +221,10 @@ onBeforeUnmount(() => {
   unlistenWorkspace?.()
   unlistenViewChanged?.()
   unlistenAot?.()
+  unlistenTrayOpened?.()
+  unlistenTrayClosed?.()
+  window.removeEventListener('keydown', onPetKeyDown)
+  window.removeEventListener('pointerdown', onPetWindowPointerDown, true)
 })
 </script>
 
