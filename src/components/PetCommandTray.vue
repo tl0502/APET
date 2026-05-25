@@ -3,14 +3,17 @@
 //
 // 设计要点（用户拍板）：
 // - 胶囊 tray，纵向 pill list；不是系统 context menu
-// - 锚在 pet 窗"中下"区域，优先右中下，右侧空间不足时 fallback 左中下
-// - drill-down 二级（root ↔ settings），替换内容不展开 hover submenu
+// - 锚在 pet 窗"中下"区域（嵌 pet 窗时）；overlay 模式下由 OverlayApp 用 :deep CSS 强制铺满
+// - drill-down 二级（root ↔ settings），由父级受控（PetCommandOverlayApp 维护 view ref）
+//   方便外层 Esc handler 决定"二级先返一级"还是"一级关闭"
 // - inline 改名功能完全删除（改名走 workspace 设置）
-// - 关闭路径：点击外部 / Esc / 完成 quiet 操作 / 跳走 workspace
+// - 关闭路径全部 emit `close` 单点；外部 OverlayApp + pet 窗 App 负责跨窗 close intent 协议
 //
-// 与 PetReminderBubble 的避让在 App.vue 内实现（commandTrayOpen 状态提升）。
+// 2026-05-24 第三轮：删除原 document.addEventListener('pointerdown' / 'keydown')。
+// pet-command overlay 是独立 webview，跨窗 outside click 失效；Esc 也由 OverlayApp 接管，
+// 因为只有它知道 drill-down 当前在哪一级（受控 view prop）。
 
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { useToast } from '@/composables/useToast'
 import { bosskeyToggle } from '@/services/bosskey'
 import { showWorkspace } from '@/services/window'
@@ -19,21 +22,22 @@ interface Props {
   /** webview 视口坐标（来自 contextmenu event）—— fallback 用，tray 实际锚点按 petSize 算 */
   x: number
   y: number
-  /** pet 窗当前逻辑尺寸（half 320×320 / full 320×512）；App.vue 透传 */
+  /** pet 窗当前逻辑尺寸（half 320×320 / full 320×512）；嵌 pet 窗时用，overlay 模式下传占位 */
   petSize: { width: number; height: number }
+  /** 受控 drill-down 视图（v-model:view）。OverlayApp 维护此 ref，让 Esc handler 能"二级先返一级"。 */
+  view?: 'root' | 'settings'
 }
 
-const props = defineProps<Props>()
-const emit = defineEmits<{ close: [] }>()
+const props = withDefaults(defineProps<Props>(), { view: 'root' })
+const emit = defineEmits<{
+  close: []
+  'update:view': ['root' | 'settings']
+}>()
 
 const toast = useToast()
 
-type View = 'root' | 'settings'
-const currentView = ref<View>('root')
-const trayRef = ref<HTMLDivElement | null>(null)
-
-const TRAY_W = 140
-const TRAY_PAD = 8
+const TRAY_W = 132
+const TRAY_PAD = 6
 const PET_BOTTOM_RATIO = 0.55
 
 /** 锚点：优先 pet 中心右侧；右侧空间不足切左侧；两侧都不够靠左边缘。 */
@@ -50,6 +54,10 @@ const anchor = computed(() => {
 
 function close() {
   emit('close')
+}
+
+function setView(v: 'root' | 'settings') {
+  emit('update:view', v)
 }
 
 async function onQuiet() {
@@ -79,45 +87,17 @@ async function onOpenWorkspace(hint: string) {
     close()
   }
 }
-
-function onDocOrEscapeOrPointer(e: KeyboardEvent | PointerEvent) {
-  if (e instanceof KeyboardEvent) {
-    if (e.key === 'Escape') {
-      if (currentView.value === 'settings') {
-        currentView.value = 'root'
-        return
-      }
-      close()
-    }
-    return
-  }
-  const path = (e.composedPath?.() ?? []) as EventTarget[]
-  const tray = trayRef.value
-  if (tray && path.includes(tray)) return
-  close()
-}
-
-onMounted(() => {
-  document.addEventListener('keydown', onDocOrEscapeOrPointer, true)
-  document.addEventListener('pointerdown', onDocOrEscapeOrPointer)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', onDocOrEscapeOrPointer, true)
-  document.removeEventListener('pointerdown', onDocOrEscapeOrPointer)
-})
 </script>
 
 <template>
   <div
-    ref="trayRef"
     class="command-tray"
     :style="{ top: `${anchor.top}px`, left: `${anchor.left}px`, width: `${TRAY_W}px` }"
     role="menu"
     data-no-drag
   >
     <Transition name="drill" mode="out-in">
-      <ul v-if="currentView === 'root'" key="root" class="command-tray__list">
+      <ul v-if="view === 'root'" key="root" class="command-tray__list">
         <li>
           <button
             class="command-tray__pill command-tray__pill--disabled"
@@ -140,7 +120,7 @@ onBeforeUnmount(() => {
           <button class="command-tray__pill" @click="onQuiet">静一会儿</button>
         </li>
         <li>
-          <button class="command-tray__pill" @click="currentView = 'settings'">
+          <button class="command-tray__pill" @click="setView('settings')">
             设置…
             <span class="command-tray__chevron">›</span>
           </button>
@@ -149,7 +129,7 @@ onBeforeUnmount(() => {
 
       <ul v-else key="settings" class="command-tray__list">
         <li>
-          <button class="command-tray__pill command-tray__pill--back" @click="currentView = 'root'">
+          <button class="command-tray__pill command-tray__pill--back" @click="setView('root')">
             ← 返回
           </button>
         </li>
@@ -187,14 +167,15 @@ onBeforeUnmount(() => {
   position: fixed;
   display: flex;
   flex-direction: column;
-  padding: 6px;
+  padding: 4px;
   background: var(--aipet-color-surface-raised, var(--aipet-color-surface));
-  border: 1px solid var(--aipet-color-border-strong, var(--aipet-color-border));
-  border-radius: 18px;
+  /* 胶囊容器：去掉硬边框，靠 shadow + blur 浮在 pet 旁边 */
+  border: none;
+  border-radius: 24px;
   box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.22), 0 2px 6px -2px rgba(0, 0, 0, 0.1);
   backdrop-filter: blur(10px);
   z-index: 50;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--aipet-color-text-1);
   pointer-events: auto;
   animation: tray-pop 140ms var(--aipet-ease-standard);
@@ -219,7 +200,7 @@ onBeforeUnmount(() => {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .command-tray__pill {
@@ -230,13 +211,13 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 7px 12px;
+  padding: 6px 11px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 999px;
   color: var(--aipet-color-text-1);
   font: inherit;
-  font-size: 12px;
+  font-size: 11.5px;
   text-align: left;
   cursor: pointer;
   transition: background-color 120ms var(--aipet-ease-standard),
@@ -255,6 +236,8 @@ onBeforeUnmount(() => {
 .command-tray__pill--disabled {
   color: var(--aipet-color-text-3);
   cursor: not-allowed;
+  opacity: 0.5;
+  background: transparent;
 }
 
 .command-tray__pill--back {
@@ -272,7 +255,7 @@ onBeforeUnmount(() => {
 
 .command-tray__chevron {
   font-size: 14px;
-  color: var(--aipet-color-text-3);
+  color: var(--aipet-color-text-2);
   line-height: 1;
 }
 
