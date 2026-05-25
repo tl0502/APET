@@ -2,23 +2,21 @@
 // PetReminderBubble：桌宠头顶气泡 overlay（issue #22）。
 //
 // 2026-05-25 P2 职责拆分：
-// - useReminderQueue：队列增删去重 + IPC listen + auto-dismiss timer + 交互处理
-// - useReminderAnimation：transition reason 状态机 + badge pop
-// - 本 SFC 只负责：展示状态（isCollapsed / displayItems / collapsedCount）+ DOM 渲染
+// - useReminderQueue：队列增删去重 + IPC listen + complete/snooze（auto-dismiss 已于 2026-05-26 移除）
+// - useReminderAnimation：badge pop（transition reason 状态机已于 2026-05-26 移除）
+// - 本 SFC 只负责：展示状态 + DOM 渲染
 //
-// 展示规则：
+// 当前展示规则（plan Task 4 过渡态；Task 5 将整段重写为单卡/叠卡新模型）：
 // - count = 0：不显示
-// - count = 1：单气泡（普通形态，无 badge）
-// - count = 2 且未进入 collapsed：两气泡（旧上新下）
-// - count > 2：collapsed 翻页模式，只显示 reminders[0]（最新）+ 左上 count badge
-// - 一旦 collapsed，count 回落到 2 仍保持 collapsed；count 回落到 1 → 重置 expanded
+// - count = 1：单气泡（无 badge）
+// - count > 1：collapsed 翻页模式，只显示 reminders[0]（最新）+ 左上 count badge
 
 import { computed, ref, watch } from 'vue'
 import { useReminderQueue } from '@/composables/useReminderQueue'
 import { useReminderAnimation } from '@/composables/useReminderAnimation'
 
 interface Props {
-  /** pet-command overlay 打开时强制 collapsed + 整体降透明度 */
+  /** pet-command overlay 打开时整体降透明度（dim only，不再强制 collapsed —— spec §2 #6） */
   trayOpen?: boolean
 }
 
@@ -26,37 +24,39 @@ const props = withDefaults(defineProps<Props>(), { trayOpen: false })
 
 const anim = useReminderAnimation()
 
-const queue = useReminderQueue({
-  trayOpen: () => props.trayOpen,
-  onPushReason: (r) => anim.setReason(r),
-  onBadgePop: () => anim.triggerBadgePop(),
-  onRemoveReason: (r) => anim.setReason(r),
-})
+const queue = useReminderQueue()
 
-const { reminders, isCollapsed, bubbleCount, removeBubble, onMouseEnter, onMouseLeave,
-  onComplete, onSnooze, canSnooze, iconOf, reconcileTimers,
+const { reminders, bubbleCount, removeBubble, onComplete, onSnooze, canSnooze, iconOf,
   SNOOZE_OPTIONS, MAX_SNOOZE_COUNT } = queue
+
+/** 叠卡形态（count > 1）：当前过渡态仍走旧 collapsed slot 视觉；Task 5 改为新的单卡/叠卡分层。 */
+const isStacked = computed(() => reminders.value.length > 1)
 
 const collapsedCount = computed(() => reminders.value.length)
 
+/** count 由 N → N+1 且 N+1 > 1 时触发 badge pop（spec §4.1）。 */
+watch(
+  () => reminders.value.length,
+  (newLen, oldLen) => {
+    if (newLen > oldLen && newLen > 1) anim.triggerBadgePop()
+  },
+)
+
 /** 展示项列表，key 保证稳定：
- *  - collapsed 模式：固定 key 'collapsed-slot'，内容指向 reminders[0]（P3 修复）
- *  - expanded 模式：key = reminderId
+ *  - 叠卡形态：固定 key 'stacked-slot'，内容指向 reminders[0]（同 id 重 fire 不重播 enter）
+ *  - 单卡形态：key = reminderId
  */
 const displayItems = computed(() => {
   if (reminders.value.length === 0) return []
-  if (isCollapsed.value) {
-    return [{ key: 'collapsed-slot', bubble: reminders.value[0], collapsed: true }]
+  if (isStacked.value) {
+    return [{ key: 'stacked-slot', bubble: reminders.value[0], collapsed: true }]
   }
-  return reminders.value
-    .slice(0, 2)
-    .slice()
-    .reverse()
-    .map((b) => ({ key: b.payload.reminderId, bubble: b, collapsed: false }))
+  return reminders.value.map((b) => ({
+    key: b.payload.reminderId,
+    bubble: b,
+    collapsed: false,
+  }))
 })
-
-// trayOpen 变化 → 重算 collapsed 状态 → reconcile timer 起停
-watch(() => props.trayOpen, () => reconcileTimers())
 
 // stackEl 暴露给父级 PetReminderOverlayApp 供 ResizeObserver 观测。
 // 注：<script setup> + defineExpose 下 template ref 的 $el 不会自动暴露，需显式 expose。
@@ -70,12 +70,12 @@ defineExpose({ bubbleCount, stackEl: computed(() => tgRef.value?.$el ?? null) })
 <template>
   <TransitionGroup
     ref="tgRef"
-    :name="anim.transitionName.value"
+    name="bubble"
     tag="div"
     class="reminder-bubble-stack"
-    :class="{ 'reminder-bubble-stack--dimmed': trayOpen, 'reminder-bubble-stack--collapsed': isCollapsed }"
+    :class="{ 'reminder-bubble-stack--dimmed': trayOpen, 'reminder-bubble-stack--collapsed': isStacked }"
   >
-    <!-- P3: collapsed 模式 key 固定为 'collapsed-slot'，不触发 TransitionGroup enter/leave -->
+    <!-- 叠卡形态 key 固定为 'stacked-slot'，不触发 TransitionGroup enter/leave -->
     <div
       v-for="item in displayItems"
       :key="item.key"
@@ -84,10 +84,8 @@ defineExpose({ bubbleCount, stackEl: computed(() => tgRef.value?.$el ?? null) })
         'reminder-bubble--hard': item.bubble.payload.priority === 'hard',
         'reminder-bubble--collapsed': item.collapsed,
       }"
-      @mouseenter="onMouseEnter(item.bubble)"
-      @mouseleave="onMouseLeave(item.bubble)"
     >
-      <!-- collapsed mode 左上 count badge -->
+      <!-- 叠卡模式左上 count badge -->
       <div
         v-if="item.collapsed"
         class="reminder-bubble__count-badge"

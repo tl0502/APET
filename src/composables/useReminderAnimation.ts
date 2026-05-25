@@ -1,44 +1,21 @@
-// useReminderAnimation：PetReminderBubble 动画状态机（P2 职责拆分，2026-05-25）。
+// useReminderAnimation：PetReminderBubble badge pop 动画。
 //
-// 职责：
-// - TransitionGroup 切换语义（reason → class 前缀）：fired / badge-bump / collapse-merge /
-//   page-next / single-restore
-// - badge-pop：collapsedCount 增长时 badge 数字短暂 scale 1.25 后回 1
-// - 250ms 后自动 reset reason 回 'fired'（避免下次 enter/leave 用错套 class）
+// 2026-05-26 简化（spec 2026-05-25-pet-reminder-card-stack §4.1，plan Task 4）：
+// - 移除 TransitionGroup reason 状态机（fired / badge-bump / collapse-merge / page-next /
+//   single-restore），原因：新模型只有单卡/叠卡两种形态，count > 1 时叠卡顶层不重入场，
+//   无需切换 transition class
+// - 保留 badge pop：count 增加时短暂 scale 1→1.3→1，给用户视觉感知"又新增一条"
 //
-// 与 useReminderQueue 解耦：queue 通过 onPushReason/onRemoveReason 回调通知，
-// 本 composable 不持有队列引用。
+// 触发方式：组件层 watch reminders.length，count 从 N → N+1（且 N+1 > 1）时调 triggerBadgePop。
 
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 
-export type TransitionReason =
-  | 'fired'
-  | 'badge-bump'
-  | 'collapse-merge'
-  | 'page-next'
-  | 'single-restore'
-
-const REASON_RESET_MS = 250
-const BADGE_POP_MS = 180
+/** 与 spec §4.1 badge pop 时长一致：200ms。 */
+const BADGE_POP_MS = 200
 
 export function useReminderAnimation() {
-  const currentReason = ref<TransitionReason>('fired')
   const badgePopActive = ref(false)
-
-  let reasonResetTimer: number | null = null
   let badgePopTimer: number | null = null
-
-  function setReason(r: TransitionReason) {
-    if (reasonResetTimer !== null) {
-      window.clearTimeout(reasonResetTimer)
-      reasonResetTimer = null
-    }
-    currentReason.value = r
-    reasonResetTimer = window.setTimeout(() => {
-      currentReason.value = 'fired'
-      reasonResetTimer = null
-    }, REASON_RESET_MS) as unknown as number
-  }
 
   function triggerBadgePop() {
     if (badgePopTimer !== null) {
@@ -52,18 +29,12 @@ export function useReminderAnimation() {
     }, BADGE_POP_MS) as unknown as number
   }
 
-  const transitionName = computed(() => `bubble-${currentReason.value}`)
-
   onBeforeUnmount(() => {
-    if (reasonResetTimer !== null) window.clearTimeout(reasonResetTimer)
     if (badgePopTimer !== null) window.clearTimeout(badgePopTimer)
   })
 
   return {
-    currentReason,
-    transitionName,
     badgePopActive,
-    setReason,
     triggerBadgePop,
   }
 }
