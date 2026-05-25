@@ -31,7 +31,8 @@ export interface VRMRuntimeInitOptions {
 
 // #29 桌宠反应动作 ID 契约。#23 接 reaction_table 时扩这个 union。
 export type PetActionId =
-  | 'nod'                  // #29 实现
+  | 'glance_up' | 'glance_down'  // 2026-05-25: reminder placement direction → pet glance（spec 2026-05-25-pet-reminder-card-stack §5）
+  | 'nod'                        // #29 实现（保留兼容，行为 = glance_up）
   | 'head_pat' | 'surprised' | 'fall_asleep' | 'dizzy' | 'protest' | 'cheer'  // #23 placeholder
   | 'drink' | 'stretch' | 'sleep' | 'wander' | 'idle'                          // #23 placeholder
 
@@ -88,8 +89,8 @@ export class VRMRuntime {
   private scene: THREE.Scene | null = null
   private camera: THREE.PerspectiveCamera | null = null
   private vrm: VRM | null = null
-  /** playNod 动画进行中标志：防止并发 nod 导致 baseX 捕获中间值、动画结束后 rotation 卡位。 */
-  private _nodInProgress = false
+  /** playGlance 动画进行中标志：防止并发 glance/nod 导致 baseX 捕获中间值、动画结束后 rotation 卡位。 */
+  private _glanceInProgress = false
   private lookAtTarget: THREE.Object3D | null = null
   private lastFrameMs: number | null = null
   private breathPhase = 0
@@ -581,7 +582,7 @@ export class VRMRuntime {
   }
 
   /**
-   * 播放命名动作。M2 W3 仅 'nod'（#29），其他 #23 接入 reaction_table 时填。
+   * 播放命名动作。M2 W3 实现 'nod' / 'glance_up' / 'glance_down'（#29 + 2026-05-25 spec），其他 #23 接入 reaction_table 时填。
    * vrm 未 ready 时静默 no-op（reminder:fired 可能在 VRM 加载完成前到达）。
    */
   async playAction(actionId: PetActionId): Promise<void> {
@@ -590,8 +591,12 @@ export class VRMRuntime {
       // 此处不报错不弹 toast（spec §8.2 + R8）。
       return
     }
-    if (actionId === 'nod') {
-      await this.playNod()
+    if (actionId === 'nod' || actionId === 'glance_up') {
+      await this.playGlance(1)
+      return
+    }
+    if (actionId === 'glance_down') {
+      await this.playGlance(-1)
       return
     }
     // #23 placeholder：其他 actionId 走 dev 警告 + no-op
@@ -601,21 +606,26 @@ export class VRMRuntime {
   }
 
   /**
-   * 短促点头动效：head bone X 轴 ±15° / 360ms RAF 插值（不引动画 clip）。
+   * 短促 head glance 动效：head bone X 轴 ±15° / 360ms RAF 插值（不引动画 clip）。
+   *
+   * @param sign +1 = 抬头看上方（glance_up / nod 兼容路径），-1 = 低头看下方（glance_down，
+   *             用于 reminder overlay 在 pet 下方时；spec 2026-05-25-pet-reminder-card-stack §5）。
+   *
    * 不打断 wander tween，不持久化（瞬时动效）。
    * head bone 的 rotation 不被 applyBreathing/applyBlink/applyLookAt 任一改写
    * （那三个分别动 chest / expression / lookAtTarget），所以直接写 rotation.x 安全。
+   * _glanceInProgress 标志保证并发 fired 不会 interleaved RAF 导致 baseX 漂移。
    */
-  private async playNod(): Promise<void> {
-    if (!this.vrm || this._nodInProgress) return
-    this._nodInProgress = true
+  private async playGlance(sign: 1 | -1): Promise<void> {
+    if (!this.vrm || this._glanceInProgress) return
+    this._glanceInProgress = true
     const humanoid = this.vrm.humanoid
     if (!humanoid) return
     const headNode = humanoid.getNormalizedBoneNode('head')
     if (!headNode) return
 
     const baseX = headNode.rotation.x
-    const peakDelta = (15 * Math.PI) / 180 // +15°
+    const peakDelta = (sign * 15 * Math.PI) / 180 // +15° 抬头 / -15° 低头
     const duration = 360
     const start = performance.now()
 
@@ -624,7 +634,7 @@ export class VRMRuntime {
         const elapsed = t - start
         if (elapsed >= duration) {
           headNode.rotation.x = baseX
-          this._nodInProgress = false
+          this._glanceInProgress = false
           resolve()
           return
         }
