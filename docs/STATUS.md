@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-23
+updated: 2026-05-25
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -19,9 +19,9 @@ related:
 
 ## 当前状态
 
-- **当前 milestone**：M2 W3 进行中（11/11 落地 ✅；物理交互待办）
-- **当前 session 在做**：Pet Overlay UX 结构重构 8 项（P1-P8）`5ade35f`，cargo test 352 pass / vitest 293 pass
-- **下一步**：[#23](https://github.com/tl0502/APET/issues/23) 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
+- **当前 milestone**：Companion Agent Runtime v3 Phase A0（Safety & Secrets）✅ 完成；M2 W3 [#23] 物理交互仍待开始
+- **当前 session 在做**：Phase A0 全套 8 task + Task 5b distribution-gate 关闭 + c16ed83 顺手修，cargo test 358 pass / CI OS API 黑名单 PASS
+- **下一步**：用户决定 — (A) Phase A1 Persona Snapshot & Soul Package brainstorming（~1.5w）/ (B) M2 [#23] 物理交互 + 心情/精力 + 摸鱼 / (C) 其他
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 
@@ -62,9 +62,46 @@ related:
 - ✅ [#29](https://github.com/tl0502/APET/issues/29) E + 衔接: TodoService MVP + onboarding KV 实例化 + LivingPet reminder hook + daily 时区修 + UI 扩展（拖排序/priority/批量/搜索/最小日历）— ~45 commits `1a03cf8..4c5b9f5`，cargo test 264 pass / vitest 293 pass / 手动 e2e 16 例全绿（spec §12.3）；新增 lessons §15（tx 注入式）+ §16（REMINDER_TEMPLATES 双写）
 - ⏳ [#23](https://github.com/tl0502/APET/issues/23) N+I+K 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 
+### Companion Agent Runtime v3 — Phase A0（Safety & Secrets，spec 驱动 pre-stability）✅ 8/8 + Task 5b 收尾
+
+> Spec: `docs/superpowers/specs/2026-05-24-companion-agent-runtime-design.md`（v3, ~2800 行，已过 third-party review-2）
+> Plan: `docs/superpowers/plans/2026-05-24-phase-a0-safety-secrets.md`（8 task，`b6732a9`）
+> DoD：CI 黑名单 OS API ✅ / 7-state FSM 单测覆盖 ✅ / DPAPI 真落地 ✅ / 分发 gate 关闭 ✅
+
+- ✅ Task 1 `7fcb879→8f7d01a`：SafetyGuard 7-state FSM + ADR-006 prefix 真注入（include_str! 编译时嵌入 `assets/safety/prefix_v1.txt`）+ review fix
+- ✅ Task 2 `10fab2f→3cdd41d`：StateStore Repository pattern + migration 002（messages.token_count/safety_scan_status + secrets.created_at ALTER + context_access_log 新表）+ ALTER 适配 fix
+- ✅ Task 3 `f0b1421→146f133`：DenyOnlyPermissionService + context_access_log 审计写入；review fix DenyOnly 不变量（`?` 不能透传 Db/Repo error）
+- ✅ Task 4 `688ffee`：GrantBroker trait + DenyAllGrantBroker + MockGrantBroker
+- ✅ Task 5a `a70be94→f9a3144`：DPAPI CryptoService + SecretRepo（windows-sys 0.59 + ZeroizeOnDrop derive）+ review fix（SAFETY 注释 / 现代 derive / null 防御）
+- ✅ Task 6 `2742c08`：LifecycleManager 5-state FSM + Kernel::boot 1-7 序列 + lib.rs::setup 集成（Tauri 2.x dev mode resource_dir 问题用 include_str! 解）
+- ✅ Task 7 `525087c→58e3a2b`：ChatService SafetyGuard 集成 + StreamEvent::ReplaceMessage（4 ReplaceReason 变体）+ history mode filter（safety_redacted/safety_blocked/safety_scan_failed 排除避免 A6-pattern 复现）+ ChatError::SafetyScanFailed
+- ✅ Task 8 `a6aae34`：CI 黑名单 OS context API 脚本（8 forbidden symbols：getUserMedia / MediaRecorder / GetForegroundWindow / GetWindowText / BitBlt / ReadClipboardText / GetCursorPos）+ DoD checklist
+- ✅ Task 5b `1962101→c16ed83`：LLM Provider API Key DPAPI 加密迁移 SecretRepo（distribution-gate 关闭）+ 收尾 fix（5b 实施时误把 SecretRepo::set 改回 3-列、改回测试 schema、test_db.rs 漂移；c16ed83 还原 4-列 + test_db 加 apply 002 + 设计意图注释回写）
+- 测试覆盖：cargo test --lib 358/358 pass，含 Task 5a 5 个 secret_repo + Task 5b 6 个 secret_migration 真 DPAPI round-trip
+
 ### 立项准备期（2026-04-30 → 2026-05-05）✅
 
 15 项 ADR 敲定 + 6 份基线文档归档 + 文档工程化 + GitHub 仓库接入 + 项目记忆系统。实施期新增 ADR-016/017/018/019/020/021（脚手架 / EP 选型 / LLM 三层抽象 / Onboarding 续接 / 磁吸窗口 hub-spoke / Workspace 多 panel 壳）。
+
+---
+
+## 待开 issue（gh 认证超时本地暂存，下次 gh 通了开正式 issue）
+
+### P1-A0-followup-1: ChatService test connectivity probes 绕过 SafetyGuard
+
+- **位置**：`src-tauri/src/services/chat/service.rs` 测试连通性 probe 路径（实际 send_message 前的 ping/test 调用）
+- **问题**：Task 7 实现集成 SafetyGuard 时只覆盖 `run_stream` 的 Ok 分支 final-scan；test connectivity probe（设置面板"测试连接"按钮）走的是独立 prompt 路径，没接 SafetyGuard
+- **风险**：用户在"测试连接"输入框输入恶意指令可绕过安全前缀（虽然 prompt 本身极短 + 接收端是 LLM 不是 native API，实际 attack surface 很小）
+- **修复建议**：把 test probe 也走 prompt::build_with_prefix() 或单独 hardcode 一个 "test connectivity" probe 文本
+- **优先级 P1**：非分发 gate 阻塞，但属于 Phase A0 设计完整性（"Safety guard 不可被 persona/工具旁路"原则）
+
+### P1-A0-followup-2: SafetyGuard scan_token trailing-window 优化
+
+- **位置**：`src-tauri/src/kernel/safety_guard.rs::SafetyGuardImpl::scan_token`
+- **问题**：当前实现每 token 重新扫描完整累积 buffer，时间复杂度 O(n²)。M3 长对话 + 实时 stream UI 可能感知卡顿
+- **修复建议**：维护 trailing-window（最长黑名单关键词 - 1 长度的 overlap），只扫 last_window + new_token
+- **依赖**：Phase A1 mid-stream scan_token 落地后才有真实消费者；此 P1 可跟着 A1 一起做
+- **优先级 P1**：性能而非正确性，Phase A0 不阻塞
 
 ---
 
