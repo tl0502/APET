@@ -40,14 +40,17 @@ impl SecretRepo {
     ) -> Result<(), SecretError> {
         let ciphertext = self.crypto.encrypt(plaintext)?;
         let now = Utc::now().to_rfc3339();
+        // Phase A0.5b 修: 与 migrations/001_init.sql secrets 表实际 schema 对齐
+        // (key, ciphertext, updated_at) — 早先版本写 created_at 列在 prod schema
+        // 不存在, set 会 "no such column" 直接 fail; 历史上无 prod caller 故未暴露,
+        // 本次 llm_providers 加密迁移成为首个真消费者, 顺手修。
         sqlx::query(
-            "INSERT INTO secrets (key, ciphertext, created_at, updated_at)
-             VALUES (?, ?, ?, ?)
+            "INSERT INTO secrets (key, ciphertext, updated_at)
+             VALUES (?, ?, ?)
              ON CONFLICT(key) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at"
         )
             .bind(key)
             .bind(&ciphertext)
-            .bind(&now)
             .bind(&now)
             .execute(&mut *conn)
             .await?;
@@ -98,7 +101,6 @@ mod tests {
             "CREATE TABLE secrets (
                 key TEXT PRIMARY KEY,
                 ciphertext BLOB NOT NULL,
-                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )"
         ).execute(&mut conn).await.unwrap();

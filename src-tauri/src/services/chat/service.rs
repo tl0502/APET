@@ -32,7 +32,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use sqlx::Connection;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
@@ -283,7 +283,13 @@ impl ChatService {
         );
 
         // 4. 现建 OpenAIProvider（与 #12 chat_send_test 同模式）。同样在 INSERT 之前。
-        let provider = build_provider_with_conn(&mut conn).await?;
+        // Phase A0.5b: 拿 Kernel.secret_repo 让 get_active_record 走 DPAPI 解密回填 api_key。
+        // Kernel 未注入（理论上只发生于早于 setup 完成的极端情况）→ secret_repo = None,
+        // get_active_record 退化 legacy 明文路径。
+        let secret_repo = app
+            .try_state::<crate::kernel::Kernel>()
+            .map(|kernel| std::sync::Arc::clone(&kernel.secret_repo));
+        let provider = build_provider_with_conn(&mut conn, secret_repo.as_ref()).await?;
 
         // 5. caller 传 conv_id 时校验存在 + 归属（**在 tx 外做**）。
         //    为什么不放 tx 内：sqlx 默认 `BEGIN DEFERRED`，tx 第一句是 SELECT 拿读锁，
@@ -657,8 +663,9 @@ async fn delete_assistant_msg<R: Runtime>(app: &AppHandle<R>, id: &str) -> Resul
 
 async fn build_provider_with_conn(
     conn: &mut sqlx::SqliteConnection,
+    secret_repo: Option<&std::sync::Arc<crate::kernel::repos::SecretRepo>>,
 ) -> Result<OpenAIProvider, ChatError> {
-    let record = llm_providers::get_active_record_with_conn(conn)
+    let record = llm_providers::get_active_record_with_conn_and_secret(conn, secret_repo)
         .await
         .map_err(|e| ChatError::Llm(format!("read active provider: {e}")))?
         .ok_or_else(|| {

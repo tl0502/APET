@@ -17,14 +17,23 @@
 //
 // list_providers 实现走 SQL `LIKE 'llm:provider:%' ESCAPE` 走全表扫描；M1 单用户 provider
 // 数预期 < 20，性能足够。M3 加密分拆后 api_key 不再走本路径。
+//
+// Phase A0.5b 分发 gate 收尾（Spec §0.6 / §15.4 P0）：api_key 不再明文存 config 表，
+// 而是 set/get/delete 走 SecretRepo（DPAPI 加密）+ config JSON 的 api_key 字段留 ""。
+// 向后兼容：legacy 明文 record 仍可读（一次性 eprintln warning），Phase A1 UI 提供
+// 重新输入入口才主动迁移。secret_repo 不可用时（测试 / Kernel 未注入）退化到 legacy
+// 明文路径，不阻断用户操作。
+
+use std::sync::Arc;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, SqliteConnection};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 use ulid::Ulid;
 
+use crate::kernel::repos::SecretRepo;
 use crate::services::config::{self, ConfigError};
 use crate::services::db::{open_app_db, DbError};
 
@@ -40,6 +49,21 @@ pub const LEGACY_KEY_MODEL: &str = "llm:openai:model";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
 const NAME_MAX_LEN: usize = 50;
+
+/// Phase A0.5b: SecretRepo entry key 命名约定，统一前缀 `llm_provider:<ulid>`。
+/// 与 KEY_PROVIDER_PREFIX (`llm:provider:`) 是不同 namespace（前者 secrets 表 key，
+/// 后者 config 表 key），命名分开避免误混。
+fn secret_repo_key(provider_id: &str) -> String {
+    format!("llm_provider:{provider_id}")
+}
+
+/// 从 Tauri AppHandle 拿 Kernel.secret_repo 引用。
+/// Production: Kernel::boot 后由 lib.rs::setup 注入 `app.manage(kernel)`，永远 Some。
+/// 测试: 没 Kernel state → None，调用方退化到 legacy 明文路径。
+fn get_secret_repo<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<SecretRepo>> {
+    app.try_state::<crate::kernel::Kernel>()
+        .map(|kernel| Arc::clone(&kernel.secret_repo))
+}
 
 #[derive(Debug, Error)]
 pub enum LlmProviderError {
@@ -240,20 +264,35 @@ pub async fn get_provider<R: Runtime>(
 ) -> Result<ProviderDetail, LlmProviderError> {
     let id = validate_id(id)?;
     let mut conn = open_app_db(app).await?;
-    let result = get_provider_with_conn(&mut conn, &id).await?;
+    let secret_repo = get_secret_repo(app);
+    let result = get_provider_with_conn_and_secret(&mut conn, secret_repo.as_ref(), &id).await?;
     conn.close().await?;
     Ok(result)
 }
 
+/// Phase A0.5b 后: 此 wrapper 仅作 backward-compat 保留, tests 直接调它走 legacy
+/// 明文路径 (secret_repo = None)。production 走 `_and_secret` 变体。
+#[cfg(test)]
 pub(crate) async fn get_provider_with_conn(
     conn: &mut SqliteConnection,
     id: &str,
 ) -> Result<ProviderDetail, LlmProviderError> {
+    get_provider_with_conn_and_secret(conn, None, id).await
+}
+
+/// Phase A0.5b: 加密读路径。JSON 空 + secret 有 → 解密回填；JSON 非空 → 使用 legacy
+/// 明文 + 一次性 warning；两边都空 → 未配置（保持 api_key 为 ""，与原行为一致）。
+pub(crate) async fn get_provider_with_conn_and_secret(
+    conn: &mut SqliteConnection,
+    secret_repo: Option<&Arc<SecretRepo>>,
+    id: &str,
+) -> Result<ProviderDetail, LlmProviderError> {
     let raw = config::get_with_conn(conn, &provider_kv_key(id)).await?;
-    let record: ProviderRecord = match raw {
+    let mut record: ProviderRecord = match raw {
         Some(s) => serde_json::from_str(&s)?,
         None => return Err(LlmProviderError::NotFound(id.to_string())),
     };
+    enrich_record_from_secret(conn, secret_repo, id, &mut record).await?;
     let active_id = config::get_with_conn(conn, KEY_ACTIVE_ID).await?;
     Ok(ProviderDetail {
         id: id.to_string(),
@@ -265,29 +304,90 @@ pub(crate) async fn get_provider_with_conn(
     })
 }
 
+/// 内部 helper: 把 record.api_key 按 (legacy 明文 / secrets 解密 / 未配置) 三种来源填好。
+/// 不报错（secret_repo.get 失败 / utf8 异常时 log warning，保留 empty），让调用方继续。
+async fn enrich_record_from_secret(
+    conn: &mut SqliteConnection,
+    secret_repo: Option<&Arc<SecretRepo>>,
+    id: &str,
+    record: &mut ProviderRecord,
+) -> Result<(), LlmProviderError> {
+    if record.api_key.is_empty() {
+        if let Some(repo) = secret_repo {
+            match repo.get(conn, &secret_repo_key(id)).await {
+                Ok(secret_value) => {
+                    record.api_key = String::from_utf8(secret_value.0.clone()).map_err(|e| {
+                        LlmProviderError::Database(format!("secret utf8: {e}"))
+                    })?;
+                }
+                Err(crate::kernel::repos::secret_repo::SecretError::NotFound(_)) => {
+                    // 没 secret entry 也没 JSON 明文 → 用户未配置 key, 保持 empty
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[llm_providers] secret_repo.get failed for {id}: {e} — returning empty key"
+                    );
+                }
+            }
+        }
+    } else {
+        // record.api_key 非空 = legacy 明文。一次性 warning 但不主动迁移
+        // （Phase A1 UI 重新输入入口才主动迁移）。
+        eprintln!(
+            "[llm_providers] LEGACY plaintext api_key detected for provider {id}; \
+             consider re-entering via settings UI to migrate to DPAPI"
+        );
+    }
+    Ok(())
+}
+
 /// 新建 provider；返回新 ULID。如果是首条，自动设为 active。
 pub async fn add_provider<R: Runtime>(
     app: &AppHandle<R>,
     req: AddProviderRequest,
 ) -> Result<String, LlmProviderError> {
     let mut conn = open_app_db(app).await?;
-    let id = add_provider_with_conn(&mut conn, req).await?;
+    let secret_repo = get_secret_repo(app);
+    let id = add_provider_with_conn_and_secret(&mut conn, secret_repo.as_ref(), req).await?;
     conn.close().await?;
     Ok(id)
 }
 
+/// Phase A0.5b 后: 此 wrapper 仅作 backward-compat 保留, tests + `migrate_legacy_with_conn`
+/// 直接调它走 legacy 明文路径 (secret_repo = None)。production add 走 `_and_secret` 变体。
 pub(crate) async fn add_provider_with_conn(
     conn: &mut SqliteConnection,
     req: AddProviderRequest,
 ) -> Result<String, LlmProviderError> {
-    let record = ProviderRecord {
-        name: validate_name(&req.name)?,
-        api_key: req.api_key.trim().to_string(), // 允许空（用户先存配置后填 key）
-        base_url: validate_required(&req.base_url, LlmProviderError::EmptyBaseUrl)?,
-        model: validate_required(&req.model, LlmProviderError::EmptyModel)?,
-    };
+    add_provider_with_conn_and_secret(conn, None, req).await
+}
+
+/// Phase A0.5b: 加密写路径。trimmed api_key 非空 + secret_repo 可用 → 加密入 secrets 表 +
+/// JSON api_key 字段留 ""。fallback：加密失败或 secret_repo 不可用 → legacy 明文 +
+/// eprintln warning（不阻断用户配置 provider 的能力）。
+pub(crate) async fn add_provider_with_conn_and_secret(
+    conn: &mut SqliteConnection,
+    secret_repo: Option<&Arc<SecretRepo>>,
+    req: AddProviderRequest,
+) -> Result<String, LlmProviderError> {
+    let name = validate_name(&req.name)?;
+    let base_url = validate_required(&req.base_url, LlmProviderError::EmptyBaseUrl)?;
+    let model = validate_required(&req.model, LlmProviderError::EmptyModel)?;
+    let trimmed_key = req.api_key.trim().to_string();
+
     let id = Ulid::new().to_string();
     let now = Utc::now().to_rfc3339();
+
+    // 加密 api_key 到 secrets 表 (Phase A0.5b 分发 gate);
+    // 失败时 fallback 到 JSON 明文路径 + 日志告警 (向后兼容, 不阻断用户操作)。
+    let json_api_key = encrypt_or_fallback(conn, secret_repo, &id, &trimmed_key).await;
+
+    let record = ProviderRecord {
+        name,
+        api_key: json_api_key,
+        base_url,
+        model,
+    };
     let json = serde_json::to_string(&record)?;
     config::set_with_conn(conn, &provider_kv_key(&id), &json, &now).await?;
 
@@ -299,6 +399,36 @@ pub(crate) async fn add_provider_with_conn(
     Ok(id)
 }
 
+/// 内部 helper: trimmed_key + secret_repo → 返回该写进 JSON `api_key` 字段的值。
+/// - Some(repo) + non-empty key → 加密入 secrets 表, 返回 ""（JSON 字段空 = 真值在 secrets 表）
+/// - Some(repo) + empty key → 返回 ""（无需加密；调用方语义"未配置 key"）
+/// - None secret_repo → 返回 trimmed_key.clone()（legacy 明文路径, 测试或 Kernel 未注入）
+/// - 加密失败 → eprintln warning + 退化到 legacy 明文路径
+async fn encrypt_or_fallback(
+    conn: &mut SqliteConnection,
+    secret_repo: Option<&Arc<SecretRepo>>,
+    id: &str,
+    trimmed_key: &str,
+) -> String {
+    match (secret_repo, trimmed_key.is_empty()) {
+        (Some(repo), false) => {
+            let secret_key = secret_repo_key(id);
+            match repo.set(conn, &secret_key, trimmed_key.as_bytes()).await {
+                Ok(()) => String::new(),
+                Err(e) => {
+                    eprintln!(
+                        "[llm_providers] DPAPI encrypt failed for provider {id}: {e} — \
+                         falling back to plaintext JSON (legacy compat path)"
+                    );
+                    trimmed_key.to_string()
+                }
+            }
+        }
+        (Some(_), true) => String::new(),
+        (None, _) => trimmed_key.to_string(),
+    }
+}
+
 /// 部分更新 provider（None 字段不动）。
 pub async fn update_provider<R: Runtime>(
     app: &AppHandle<R>,
@@ -307,13 +437,31 @@ pub async fn update_provider<R: Runtime>(
 ) -> Result<(), LlmProviderError> {
     let id = validate_id(id)?;
     let mut conn = open_app_db(app).await?;
-    update_provider_with_conn(&mut conn, &id, req).await?;
+    let secret_repo = get_secret_repo(app);
+    update_provider_with_conn_and_secret(&mut conn, secret_repo.as_ref(), &id, req).await?;
     conn.close().await?;
     Ok(())
 }
 
+/// Phase A0.5b 后: 此 wrapper 仅作 backward-compat 保留, tests 直接调它走 legacy
+/// 明文路径 (secret_repo = None)。production 走 `_and_secret` 变体。
+#[cfg(test)]
 pub(crate) async fn update_provider_with_conn(
     conn: &mut SqliteConnection,
+    id: &str,
+    req: UpdateProviderRequest,
+) -> Result<(), LlmProviderError> {
+    update_provider_with_conn_and_secret(conn, None, id, req).await
+}
+
+/// Phase A0.5b: 加密 update 路径。
+/// - req.api_key = Some(non-empty) + secret_repo 有 → 加密入 secrets（overwrite）+ JSON 留 ""
+/// - req.api_key = Some("") + secret_repo 有 → secrets 表 delete（best-effort）+ JSON 留 ""
+/// - req.api_key = Some(new) + secret_repo 无 → 走 legacy 明文（与原行为同, 测试上下文）
+/// - req.api_key = None → 完全不动 api_key
+pub(crate) async fn update_provider_with_conn_and_secret(
+    conn: &mut SqliteConnection,
+    secret_repo: Option<&Arc<SecretRepo>>,
     id: &str,
     req: UpdateProviderRequest,
 ) -> Result<(), LlmProviderError> {
@@ -327,8 +475,43 @@ pub(crate) async fn update_provider_with_conn(
         record.name = validate_name(&name)?;
     }
     if let Some(api_key) = req.api_key {
-        // partial update：传 "" 也写入（用户显式清空）；若调用方不想动，应在前端不带此字段
-        record.api_key = api_key.trim().to_string();
+        let trimmed = api_key.trim().to_string();
+        match (secret_repo, trimmed.is_empty()) {
+            (Some(repo), false) => {
+                // 新 key 加密入 secrets（overwrite 已有 entry）
+                let secret_key = secret_repo_key(id);
+                match repo.set(conn, &secret_key, trimmed.as_bytes()).await {
+                    Ok(()) => {
+                        record.api_key = String::new();
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[llm_providers] DPAPI encrypt failed on update for {id}: {e} — \
+                             falling back to plaintext JSON (legacy compat path)"
+                        );
+                        record.api_key = trimmed;
+                    }
+                }
+            }
+            (Some(repo), true) => {
+                // 用户显式清空 key → 删 secrets entry（best-effort, NotFound 不报）
+                let secret_key = secret_repo_key(id);
+                match repo.delete(conn, &secret_key).await {
+                    Ok(())
+                    | Err(crate::kernel::repos::secret_repo::SecretError::NotFound(_)) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "[llm_providers] secret_repo.delete failed on clear for {id}: {e}"
+                        );
+                    }
+                }
+                record.api_key = String::new();
+            }
+            (None, _) => {
+                // 测试 / Kernel 未注入: 走 legacy 明文路径（partial update：传 "" 也写入）
+                record.api_key = trimmed;
+            }
+        }
     }
     if let Some(base_url) = req.base_url {
         record.base_url = validate_required(&base_url, LlmProviderError::EmptyBaseUrl)?;
@@ -351,13 +534,27 @@ pub async fn delete_provider<R: Runtime>(
 ) -> Result<(), LlmProviderError> {
     let id = validate_id(id)?;
     let mut conn = open_app_db(app).await?;
-    delete_provider_with_conn(&mut conn, &id).await?;
+    let secret_repo = get_secret_repo(app);
+    delete_provider_with_conn_and_secret(&mut conn, secret_repo.as_ref(), &id).await?;
     conn.close().await?;
     Ok(())
 }
 
+/// Phase A0.5b 后: 此 wrapper 仅作 backward-compat 保留, tests 直接调它走 legacy
+/// 明文路径 (secret_repo = None)。production 走 `_and_secret` 变体。
+#[cfg(test)]
 pub(crate) async fn delete_provider_with_conn(
     conn: &mut SqliteConnection,
+    id: &str,
+) -> Result<(), LlmProviderError> {
+    delete_provider_with_conn_and_secret(conn, None, id).await
+}
+
+/// Phase A0.5b: delete provider 同步清 secrets entry（best-effort，
+/// legacy 明文 record 没 secret 行 → NotFound 直接忽略）。
+pub(crate) async fn delete_provider_with_conn_and_secret(
+    conn: &mut SqliteConnection,
+    secret_repo: Option<&Arc<SecretRepo>>,
     id: &str,
 ) -> Result<(), LlmProviderError> {
     let active_id = config::get_with_conn(conn, KEY_ACTIVE_ID).await?;
@@ -393,6 +590,20 @@ pub(crate) async fn delete_provider_with_conn(
         config::delete_with_conn(conn, KEY_ACTIVE_ID).await?;
     }
 
+    // Phase A0.5b: 同步删 secrets entry（legacy 明文 record 没 secret 行 → NotFound 忽略）
+    if let Some(repo) = secret_repo {
+        let secret_key = secret_repo_key(id);
+        match repo.delete(conn, &secret_key).await {
+            Ok(()) | Err(crate::kernel::repos::secret_repo::SecretError::NotFound(_)) => {}
+            Err(e) => {
+                eprintln!(
+                    "[llm_providers] secret_repo.delete failed for {id}: {e} — \
+                     config entry already removed, secrets entry may leak"
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -423,27 +634,46 @@ pub(crate) async fn activate_provider_with_conn(
 
 /// 读当前 active provider 完整记录（ChatService::build_provider 真消费路径）。
 /// active_id 不存在 / 对应 provider 已删 → None（ChatService 会报"未配置 provider"）。
+///
+/// Phase A0.5b 后: ChatService 已切到 `get_active_record_with_conn_and_secret`,
+/// 此 AppHandle wrapper 当前仅作 API 表面保留, 供未来 IPC / debug 命令使用。
+#[allow(dead_code)]
 pub async fn get_active_record<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<Option<ProviderRecord>, LlmProviderError> {
     let mut conn = open_app_db(app).await?;
-    let result = get_active_record_with_conn(&mut conn).await?;
+    let secret_repo = get_secret_repo(app);
+    let result = get_active_record_with_conn_and_secret(&mut conn, secret_repo.as_ref()).await?;
     conn.close().await?;
     Ok(result)
 }
 
+/// Phase A0.5b 后: 此 wrapper 仅作 backward-compat 保留, tests 直接调它走 legacy
+/// 明文路径 (secret_repo = None)。production 走 `_and_secret` 变体。
+#[cfg(test)]
 pub(crate) async fn get_active_record_with_conn(
     conn: &mut SqliteConnection,
+) -> Result<Option<ProviderRecord>, LlmProviderError> {
+    get_active_record_with_conn_and_secret(conn, None).await
+}
+
+/// Phase A0.5b: get_active_record + secret enrichment（与 get_provider 同语义）。
+/// ChatService::build_provider_with_conn 真消费此路径，需保证 api_key 被解密回填。
+pub(crate) async fn get_active_record_with_conn_and_secret(
+    conn: &mut SqliteConnection,
+    secret_repo: Option<&Arc<SecretRepo>>,
 ) -> Result<Option<ProviderRecord>, LlmProviderError> {
     let active_id = match config::get_with_conn(conn, KEY_ACTIVE_ID).await? {
         Some(v) if !v.is_empty() => v,
         _ => return Ok(None),
     };
     let raw = config::get_with_conn(conn, &provider_kv_key(&active_id)).await?;
-    match raw {
-        Some(s) => Ok(Some(serde_json::from_str(&s)?)),
-        None => Ok(None),
-    }
+    let mut record: ProviderRecord = match raw {
+        Some(s) => serde_json::from_str(&s)?,
+        None => return Ok(None),
+    };
+    enrich_record_from_secret(conn, secret_repo, &active_id, &mut record).await?;
+    Ok(Some(record))
 }
 
 /// 启动期 migration：把 #12 单 namespace 的旧三键搬成"默认 OpenAI" provider。
@@ -730,5 +960,270 @@ mod tests {
         assert!(!migrated);
         let items = list_providers_with_conn(&mut conn).await.unwrap();
         assert_eq!(items.len(), 1, "已存在的 provider 不应被复制");
+    }
+
+    // === Phase A0.5b: DPAPI 加密迁移测试 (Windows-only) ===
+    //
+    // 这 6 个测试覆盖:
+    //  1. add_with_secret → secrets 表有 ciphertext + config JSON api_key 留空
+    //  2. add_without_secret → 退化到 legacy 明文 JSON (向后兼容)
+    //  3. get_with_secret → JSON 空 + secret 解密 → 返明文 api_key
+    //  4. get_legacy_plaintext → JSON 直接含明文 → 用 AS-IS (warning 但不报错)
+    //  5. update_with_secret → 覆写 secrets entry, 旧 ciphertext 被替换
+    //  6. delete_with_secret → secrets entry 被同步清掉
+    //
+    // 非 Windows: DPAPI stub 报错; 6 测试需要真实加解密 round-trip, 故 gate 整段。
+
+    #[cfg(target_os = "windows")]
+    mod secret_migration {
+        use super::*;
+        use crate::kernel::crypto::DpapiCryptoService;
+        use crate::kernel::repos::SecretRepo;
+        use std::sync::Arc;
+
+        fn make_repo() -> Arc<SecretRepo> {
+            Arc::new(SecretRepo::new(Arc::new(DpapiCryptoService)))
+        }
+
+        /// 抓 config 表里那条 provider JSON value 的 api_key 字段。
+        async fn read_json_api_key(conn: &mut SqliteConnection, id: &str) -> String {
+            let raw = config::get_with_conn(conn, &provider_kv_key(id))
+                .await
+                .unwrap()
+                .expect("provider entry should exist");
+            let record: ProviderRecord = serde_json::from_str(&raw).unwrap();
+            record.api_key
+        }
+
+        /// 检查 secrets 表是否有指定 key 的行。
+        async fn secrets_row_exists(conn: &mut SqliteConnection, secret_key: &str) -> bool {
+            let count: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM secrets WHERE key = ?")
+                    .bind(secret_key)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .unwrap();
+            count.0 > 0
+        }
+
+        #[tokio::test]
+        async fn add_provider_with_secret_writes_ciphertext_to_secrets_table() {
+            // Distribution-gate 核心 spot-check: 加密路径下 JSON api_key 必须为空,
+            // 真值只存在 secrets 表 ciphertext blob。
+            let (_dir, mut conn) = fresh_db().await;
+            let repo = make_repo();
+            let id = add_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                req("OpenAI", "sk-secret-value-12345"),
+            )
+            .await
+            .unwrap();
+
+            // 1) JSON api_key 字段必须为 "" (明文不再入 config 表)
+            let json_key = read_json_api_key(&mut conn, &id).await;
+            assert_eq!(
+                json_key, "",
+                "Phase A0.5b distribution gate: JSON api_key 必须为空, 真值移至 secrets 表"
+            );
+
+            // 2) secrets 表有 row, 且 ciphertext 不是 plaintext
+            let secret_key = secret_repo_key(&id);
+            assert!(
+                secrets_row_exists(&mut conn, &secret_key).await,
+                "secrets 表应该有 llm_provider:<id> 的 row"
+            );
+            let ciphertext: Vec<u8> =
+                sqlx::query_scalar("SELECT ciphertext FROM secrets WHERE key = ?")
+                    .bind(&secret_key)
+                    .fetch_one(&mut conn)
+                    .await
+                    .unwrap();
+            let ciphertext_str = String::from_utf8_lossy(&ciphertext);
+            assert!(
+                !ciphertext_str.contains("sk-secret-value-12345"),
+                "ciphertext 不应该含 plaintext substring"
+            );
+        }
+
+        #[tokio::test]
+        async fn add_provider_without_secret_writes_plaintext_legacy_path() {
+            // 测试上下文: 没 secret_repo → 退化到 legacy 明文 JSON, 与 #12 行为一致。
+            // 这保证现有 18 单测在 Phase A0.5b 后语义不变 (回归保护)。
+            let (_dir, mut conn) = fresh_db().await;
+            let id = add_provider_with_conn_and_secret(
+                &mut conn,
+                None,
+                req("OpenAI", "sk-legacy-plaintext"),
+            )
+            .await
+            .unwrap();
+
+            // JSON api_key 应为明文 (legacy 路径)
+            let json_key = read_json_api_key(&mut conn, &id).await;
+            assert_eq!(json_key, "sk-legacy-plaintext");
+
+            // secrets 表不应有 row
+            let secret_key = secret_repo_key(&id);
+            assert!(
+                !secrets_row_exists(&mut conn, &secret_key).await,
+                "无 secret_repo 时不应该写 secrets 表"
+            );
+        }
+
+        #[tokio::test]
+        async fn get_provider_decrypts_from_secrets_when_json_empty() {
+            // 写入走加密 → 读回应自动解密回填 plaintext (round-trip)
+            let (_dir, mut conn) = fresh_db().await;
+            let repo = make_repo();
+            let id = add_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                req("OpenAI", "sk-roundtrip-test"),
+            )
+            .await
+            .unwrap();
+
+            let detail =
+                get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                detail.api_key, "sk-roundtrip-test",
+                "get_provider 应该从 secrets 表解密回填 api_key"
+            );
+
+            // get_active_record 同语义验证 (ChatService 真消费路径)
+            let active = get_active_record_with_conn_and_secret(&mut conn, Some(&repo))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(active.api_key, "sk-roundtrip-test");
+        }
+
+        #[tokio::test]
+        async fn get_provider_legacy_plaintext_path_still_works() {
+            // 回归保护: 直接走 None secret_repo 写入 (模拟已有 legacy 安装),
+            // 再用 secret_repo 读取应直接拿 JSON 里的明文 (warning 但不报错)。
+            let (_dir, mut conn) = fresh_db().await;
+            let repo = make_repo();
+            // 用 None 写入 → 明文存 JSON
+            let id = add_provider_with_conn_and_secret(
+                &mut conn,
+                None,
+                req("LegacyProvider", "sk-legacy-key"),
+            )
+            .await
+            .unwrap();
+
+            // 即使用 Some(repo) 读取, legacy 明文路径仍生效 (record.api_key 非空 = legacy)
+            let detail =
+                get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                detail.api_key, "sk-legacy-key",
+                "legacy 明文 record 应继续可读"
+            );
+
+            // secrets 表不应有 entry (legacy 路径根本没写过)
+            assert!(!secrets_row_exists(&mut conn, &secret_repo_key(&id)).await);
+        }
+
+        #[tokio::test]
+        async fn update_provider_with_secret_overwrites_ciphertext() {
+            // 二次 update 应 overwrite 已存的 secrets ciphertext, 而非追加。
+            let (_dir, mut conn) = fresh_db().await;
+            let repo = make_repo();
+            let id = add_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                req("OpenAI", "sk-initial"),
+            )
+            .await
+            .unwrap();
+
+            // 拿初始 ciphertext
+            let secret_key = secret_repo_key(&id);
+            let ct_initial: Vec<u8> =
+                sqlx::query_scalar("SELECT ciphertext FROM secrets WHERE key = ?")
+                    .bind(&secret_key)
+                    .fetch_one(&mut conn)
+                    .await
+                    .unwrap();
+
+            // update 换 key
+            update_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                &id,
+                UpdateProviderRequest {
+                    api_key: Some("sk-rotated".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+            // ciphertext 应不同 (新明文 + DPAPI nonce 双重保证)
+            let ct_after: Vec<u8> =
+                sqlx::query_scalar("SELECT ciphertext FROM secrets WHERE key = ?")
+                    .bind(&secret_key)
+                    .fetch_one(&mut conn)
+                    .await
+                    .unwrap();
+            assert_ne!(
+                ct_initial, ct_after,
+                "update 后 ciphertext 应该被 overwrite"
+            );
+
+            // 解密回读应是新值
+            let detail =
+                get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
+                    .await
+                    .unwrap();
+            assert_eq!(detail.api_key, "sk-rotated");
+
+            // JSON api_key 字段仍为空
+            let json_key = read_json_api_key(&mut conn, &id).await;
+            assert_eq!(json_key, "");
+
+            // secrets 表应只有 1 行 (overwrite 而非追加)
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM secrets WHERE key = ?")
+                .bind(&secret_key)
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(count.0, 1, "应只有一行 (overwrite 语义)");
+        }
+
+        #[tokio::test]
+        async fn delete_provider_removes_secret_entry_too() {
+            // 删 provider 时, secrets 表对应 row 也应被清掉, 避免泄漏密文 + 占用 disk。
+            let (_dir, mut conn) = fresh_db().await;
+            let repo = make_repo();
+            let id = add_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                req("Solo", "sk-to-be-deleted"),
+            )
+            .await
+            .unwrap();
+
+            // 确认初始有 secrets row
+            let secret_key = secret_repo_key(&id);
+            assert!(secrets_row_exists(&mut conn, &secret_key).await);
+
+            // 删 (唯一 active, 走 Bug 5 路径 — 允许删 + 清 KEY_ACTIVE_ID)
+            delete_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
+                .await
+                .unwrap();
+
+            // secrets entry 必须被清
+            assert!(
+                !secrets_row_exists(&mut conn, &secret_key).await,
+                "delete_provider 应该同步删 secrets entry"
+            );
+        }
     }
 }
