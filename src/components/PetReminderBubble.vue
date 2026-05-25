@@ -73,7 +73,7 @@ defineExpose({ bubbleCount, stackEl: computed(() => tgRef.value?.$el ?? null) })
     :name="anim.transitionName.value"
     tag="div"
     class="reminder-bubble-stack"
-    :class="{ 'reminder-bubble-stack--dimmed': trayOpen }"
+    :class="{ 'reminder-bubble-stack--dimmed': trayOpen, 'reminder-bubble-stack--collapsed': isCollapsed }"
   >
     <!-- P3: collapsed 模式 key 固定为 'collapsed-slot'，不触发 TransitionGroup enter/leave -->
     <div
@@ -171,6 +171,15 @@ defineExpose({ bubbleCount, stackEl: computed(() => tgRef.value?.$el ?? null) })
   pointer-events: none;
   z-index: 5;
   transition: opacity 140ms var(--aipet-ease-standard);
+}
+
+/* collapsed 模式：给 badge（top:-5px; left:-5px）预留顶部安全空间，
+   并微调水平位置补偿 badge 左悬挂造成的视觉重心偏移（~2.5px）。
+   transform 覆盖基础 translateX(-50%) —— 同选择器权重，顺序靠后生效。
+   expanded 状态不受影响。 */
+.reminder-bubble-stack--collapsed {
+  padding-top: 8px;
+  transform: translateX(calc(-50% + 2.5px));
 }
 
 .reminder-bubble-stack--dimmed {
