@@ -6,7 +6,11 @@
 
 pub mod crypto;
 pub mod grant_broker;
+pub mod lifecycle_manager;
 pub mod permission_service;
 pub mod repos;
+pub mod runtime;
 pub mod safety_guard;
 pub mod state_store;
+
+pub use runtime::Kernel;

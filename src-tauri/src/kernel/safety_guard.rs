@@ -98,13 +98,25 @@ pub struct SafetyGuardImpl {
 impl SafetyGuardImpl {
     pub fn load(prefix_path: &std::path::Path) -> Result<Self, SafetyError> {
         let prefix = std::fs::read_to_string(prefix_path)?;
+        Self::from_text(&prefix).map_err(|e| match e {
+            // 把 inline "<empty inline prefix>" 误差替换回真实 path, 保留 load 历史行为。
+            SafetyError::PrefixMissing(_) => {
+                SafetyError::PrefixMissing(prefix_path.display().to_string())
+            }
+            other => other,
+        })
+    }
+
+    /// Phase A0 boot 路径: prefix 编译时 include_str! 嵌入, 避免 runtime resource_dir 不可靠。
+    /// 不读 fs, 不接受 dev/prod 路径漂移, Constitution #1 防篡改。
+    pub fn from_text(prefix: &str) -> Result<Self, SafetyError> {
         if prefix.trim().is_empty() {
             return Err(SafetyError::PrefixMissing(
-                prefix_path.display().to_string(),
+                "<empty inline prefix>".to_string(),
             ));
         }
         Ok(Self {
-            prefix,
+            prefix: prefix.to_string(),
             hard_blocklist: vec!["自杀", "自残"],
             soft_blocklist: vec!["违法", "违禁"],
         })

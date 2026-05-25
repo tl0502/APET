@@ -77,6 +77,23 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             eprintln!("[setup] reached");
+
+            // === Phase A0 Boot 1-7 (Spec §6.2) ===
+            // tauri-plugin-sql migrations 已在 Builder 时跑完 (Boot 1)。
+            // services::db::open_app_db / connect_at 提供 DB 访问 (Boot 2)。
+            // 下面调 Kernel::boot 完成 3-7 步并注入 Tauri State。
+            {
+                use crate::kernel::Kernel;
+                let app_config = app
+                    .path()
+                    .app_config_dir()
+                    .expect("[setup] app_config_dir resolution failed (FATAL)");
+                let db_path = app_config.join("aipet.db");
+                let kernel = Kernel::boot(db_path).expect("[setup] Phase A0 Kernel::boot failed (FATAL)");
+                app.manage(kernel);
+                eprintln!("[setup] Phase A0 Kernel booted → Live");
+            }
+
             // #11 ShortcutRegistry：先 manage 让 register_chat_on_startup 能拿到 state
             app.manage(ShortcutRegistry::default());
             // 用户增补 LLM Providers：测试连通用的活跃 CancellationToken 槽（llm_test_provider
