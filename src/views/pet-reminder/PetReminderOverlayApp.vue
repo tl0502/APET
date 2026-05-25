@@ -52,8 +52,10 @@ watch(
 )
 
 onMounted(() => {
-  // 用 nextTick 等 PetReminderBubble mount 完成后才能访问 $el
-  const el = bubbleRef.value?.$el as HTMLElement | undefined
+  // PetReminderBubble 使用 <script setup> + defineExpose，$el 不自动暴露。
+  // stackEl 是组件显式暴露的 TransitionGroup 根 div 引用。
+  // Vue 3 保证父组件 onMounted 时子组件已 mount，无需 nextTick。
+  const el = bubbleRef.value?.stackEl as HTMLElement | null | undefined
   if (!el) return
   resizeObserver = new ResizeObserver((entries) => {
     const h = entries[0]?.contentRect.height ?? 0

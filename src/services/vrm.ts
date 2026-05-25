@@ -88,6 +88,8 @@ export class VRMRuntime {
   private scene: THREE.Scene | null = null
   private camera: THREE.PerspectiveCamera | null = null
   private vrm: VRM | null = null
+  /** playNod 动画进行中标志：防止并发 nod 导致 baseX 捕获中间值、动画结束后 rotation 卡位。 */
+  private _nodInProgress = false
   private lookAtTarget: THREE.Object3D | null = null
   private lastFrameMs: number | null = null
   private breathPhase = 0
@@ -605,7 +607,8 @@ export class VRMRuntime {
    * （那三个分别动 chest / expression / lookAtTarget），所以直接写 rotation.x 安全。
    */
   private async playNod(): Promise<void> {
-    if (!this.vrm) return
+    if (!this.vrm || this._nodInProgress) return
+    this._nodInProgress = true
     const humanoid = this.vrm.humanoid
     if (!humanoid) return
     const headNode = humanoid.getNormalizedBoneNode('head')
@@ -621,6 +624,7 @@ export class VRMRuntime {
         const elapsed = t - start
         if (elapsed >= duration) {
           headNode.rotation.x = baseX
+          this._nodInProgress = false
           resolve()
           return
         }

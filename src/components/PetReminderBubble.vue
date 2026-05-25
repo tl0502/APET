@@ -13,7 +13,7 @@
 // - count > 2：collapsed 翻页模式，只显示 reminders[0]（最新）+ 左上 count badge
 // - 一旦 collapsed，count 回落到 2 仍保持 collapsed；count 回落到 1 → 重置 expanded
 
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useReminderQueue } from '@/composables/useReminderQueue'
 import { useReminderAnimation } from '@/composables/useReminderAnimation'
 
@@ -58,12 +58,18 @@ const displayItems = computed(() => {
 // trayOpen 变化 → 重算 collapsed 状态 → reconcile timer 起停
 watch(() => props.trayOpen, () => reconcileTimers())
 
+// stackEl 暴露给父级 PetReminderOverlayApp 供 ResizeObserver 观测。
+// 注：<script setup> + defineExpose 下 template ref 的 $el 不会自动暴露，需显式 expose。
+// TransitionGroup（tag="div"）是内置组件，其 ref.value.$el 即 .reminder-bubble-stack div。
+const tgRef = ref<{ $el: HTMLElement } | null>(null)
+
 // 供父级 PetReminderOverlayApp watch → emit active/idle Tauri 事件
-defineExpose({ bubbleCount })
+defineExpose({ bubbleCount, stackEl: computed(() => tgRef.value?.$el ?? null) })
 </script>
 
 <template>
   <TransitionGroup
+    ref="tgRef"
     :name="anim.transitionName.value"
     tag="div"
     class="reminder-bubble-stack"
@@ -149,12 +155,14 @@ defineExpose({ bubbleCount })
 
 <style scoped>
 .reminder-bubble-stack {
-  /* 2026-05-24 第三轮：absolute + top:0 + left:0 + fit-content，让 overlay 窗内 stack 起
-     点对齐 Rust 端算的 anchor。stack 自身 pointer-events: none，透明区不拦下层 pet/desktop；
+  /* 2026-05-25 精修：absolute + top:0 + left:50% + translateX(-50%) 让气泡在 320px
+     overlay 窗内水平居中。Rust anchor 已把窗口中心对齐 pet 中心（target_x = pet_center - w/2），
+     因此气泡与 pet 中轴线对齐。stack 自身 pointer-events: none，透明区不拦下层操作；
      .reminder-bubble 自己 pointer-events: auto 接 hover/click。 */
   position: absolute;
   top: 0;
-  left: 0;
+  left: 50%;
+  transform: translateX(-50%);
   width: fit-content;
   max-width: 280px;
   display: flex;
