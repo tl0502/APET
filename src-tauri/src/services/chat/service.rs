@@ -207,7 +207,7 @@ impl ChatService {
                 )));
             }
             crate::kernel::safety_guard::ScanFinalResult::ScanFailed { reason, .. } => {
-                return Err(ChatError::Safety(format!(
+                return Err(ChatError::SafetyScanFailed(format!(
                     "user input scan failed: {}",
                     reason
                 )));
@@ -246,10 +246,20 @@ impl ChatService {
         //
         // Issue #1 修复：mode='cancelled' 同理——是用户中途取消的半句话，下一轮喂给 LLM
         // 会让它"延续半截输出"或反问"我刚才说到哪了"，影响人格连续性。UI 仍可见。
+        //
+        // Task 7 review Important 2 修复：Phase A0 安全降级 3 mode 与 offline_rule / cancelled
+        // 同理 —— 内容是安全 fallback / redacted text，不是 LLM 实际输出，喂回历史会让 LLM
+        // "I just said X" 错乱（复发 A6 pattern）。run_stream Ok 分支按 scan 结果写 mode：
+        // Redacted → 'safety_redacted' / Blocked → 'safety_blocked' / ScanFailed → 'safety_scan_failed'。
         let history_filtered: Vec<MessageRecord> = history
             .into_iter()
             .filter(|r| {
-                !(r.role == "assistant" && (r.mode == "offline_rule" || r.mode == "cancelled"))
+                !(r.role == "assistant"
+                    && (r.mode == "offline_rule"
+                        || r.mode == "cancelled"
+                        || r.mode == "safety_redacted"
+                        || r.mode == "safety_blocked"
+                        || r.mode == "safety_scan_failed"))
             })
             .collect();
 
@@ -429,20 +439,25 @@ impl ChatService {
                 // emit ReplaceMessage 让前端覆盖累积 Delta。DB 写入用改写后的 final_text。
                 use crate::kernel::safety_guard::ScanFinalResult;
                 let scan = self.safety_guard.scan_final(&collected, &persona.id);
-                let (final_text, replace_reason): (String, Option<ReplaceReason>) = match scan {
-                    ScanFinalResult::Ok => (collected.clone(), None),
+                // Important 2 修复：mode 必须随 scan 分支分流入库——之前 Blocked/ScanFailed/
+                // Redacted 路径都写 mode='online'，安全 fallback / redacted 文本下一轮 history
+                // 加载会被喂回 LLM（复发 A6 pattern：让 LLM "I just said X" 错乱）。
+                // prepare() history filter 同步加 3 个安全 mode 到 exclusion list。
+                // Minor 1: Ok arm 直接 move `collected`，省一次 String clone（热路径）。
+                let (final_text, replace_reason, mode): (String, Option<ReplaceReason>, &'static str) = match scan {
+                    ScanFinalResult::Ok => (collected, None, "online"),
                     ScanFinalResult::Redacted { redacted_text, .. } => {
-                        (redacted_text, Some(ReplaceReason::FinalRedacted))
+                        (redacted_text, Some(ReplaceReason::FinalRedacted), "safety_redacted")
                     }
                     ScanFinalResult::Blocked { fallback, .. } => {
-                        (fallback, Some(ReplaceReason::FinalBlocked))
+                        (fallback, Some(ReplaceReason::FinalBlocked), "safety_blocked")
                     }
                     ScanFinalResult::ScanFailed { fallback, .. } => {
-                        (fallback, Some(ReplaceReason::ScanFailed))
+                        (fallback, Some(ReplaceReason::ScanFailed), "safety_scan_failed")
                     }
                 };
                 if let Err(e) =
-                    update_assistant_msg(app, &assistant_id, &final_text, "online").await
+                    update_assistant_msg(app, &assistant_id, &final_text, mode).await
                 {
                     let _ = channel.send(StreamEvent::Error {
                         error_kind: "DbError".to_string(),
