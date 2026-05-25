@@ -20,7 +20,7 @@ related:
 ## 当前状态
 
 - **当前 milestone**：M2 W3 进行中（11/11 落地 ✅；物理交互待办）
-- **当前 session 在做**：[#29](https://github.com/tl0502/APET/issues/29) TodoService MVP + 衔接收尾（onboarding KV 实例化 + LivingPet reminder hook + daily 时区修）— ~45 commits `1a03cf8..4c5b9f5`，cargo test 264 pass / vitest 293 pass / 手动 e2e 16 例全绿
+- **当前 session 在做**：Pet Overlay UX 结构重构 8 项（P1-P8）`5ade35f`，cargo test 352 pass / vitest 293 pass
 - **下一步**：[#23](https://github.com/tl0502/APET/issues/23) 物理交互 + 心情/精力 + 摸鱼（含 N.4 RAWINPUT spike）
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
