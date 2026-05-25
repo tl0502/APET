@@ -1,339 +1,122 @@
 <script setup lang="ts">
-// PetReminderBubble：桌宠头顶气泡 overlay（issue #22；2026-05-24 UI 重构）。
+// PetReminderBubble：桌宠头顶气泡 overlay（issue #22）。
 //
-// 行为模型变更（与原 cap=3 截断方案差异）：
-// - 数据结构：reminders newest-first，旧条目永不因容量被丢弃
-// - 展示规则：
-//   - count = 0：不显示
-//   - count = 1：单气泡（普通形态，无 badge）
-//   - count = 2 且未进入 collapsed：两气泡（template reverse 让旧上新下）
-//   - count > 2：进入 collapsed 翻页模式，只显示 reminders[0]（最新）+ 左上 count badge
+// 2026-05-25 P2 职责拆分：
+// - useReminderQueue：队列增删去重 + IPC listen + auto-dismiss timer + 交互处理
+// - useReminderAnimation：transition reason 状态机 + badge pop
+// - 本 SFC 只负责：展示状态（isCollapsed / displayItems / collapsedCount）+ DOM 渲染
+//
+// 展示规则：
+// - count = 0：不显示
+// - count = 1：单气泡（普通形态，无 badge）
+// - count = 2 且未进入 collapsed：两气泡（旧上新下）
+// - count > 2：collapsed 翻页模式，只显示 reminders[0]（最新）+ 左上 count badge
 // - 一旦 collapsed，count 回落到 2 仍保持 collapsed；count 回落到 1 → 重置 expanded
-// - 同 reminderId 去重：更新内容 + 移到 newest 头部 + 重置 auto-dismiss
-//
-// 与 PetCommandTray 的避让：
-// - props.trayOpen=true 时强制 isCollapsed=true + 整体 opacity 40%
-// - tray 关闭后恢复（不强制保持 collapsed）
-//
-// auto-dismiss：保留 8s + hover/snoozeOpen 暂停 + 只移除当前
-// collapsed mode 下不可见 bubble 暂停 timer（防 reminders[0] 被换走后又 fire 一次）
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { completeReminder, snoozeReminder } from '@/services/reminder'
-import {
-  MAX_SNOOZE_COUNT,
-  REMINDER_FIRED_EVENT,
-  SNOOZE_OPTIONS,
-  type ReminderFiredPayload,
-  type SnoozeMinutes,
-} from '@/types/reminder'
-
-const MAX_EXPANDED = 2
-const AUTO_DISMISS_MS = 8000
+import { computed, watch } from 'vue'
+import { useReminderQueue } from '@/composables/useReminderQueue'
+import { useReminderAnimation } from '@/composables/useReminderAnimation'
 
 interface Props {
-  /** App.vue 透传：command tray 打开时强制 collapsed + 整体降透明度 */
+  /** pet-command overlay 打开时强制 collapsed + 整体降透明度 */
   trayOpen?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), { trayOpen: false })
 
-type DisplayMode = 'expanded' | 'collapsed'
+const anim = useReminderAnimation()
 
-interface BubbleState {
-  key: string
-  payload: ReminderFiredPayload
-  snoozeOpen: boolean
-  busy: boolean
-  hover: boolean
-  timer: number | null
-  snoozeCount: number
-}
-
-const reminders = ref<BubbleState[]>([])
-const displayMode = ref<DisplayMode>('expanded')
-let unlistenFired: UnlistenFn | null = null
-
-// 2026-05-24 第三轮：动画语义区分（reason → TransitionGroup 套 class 前缀）。
-// 每次 stack 变化由 pushBubble / removeBubble 显式设置，250ms 后自动 reset 回 'fired'
-// （避免下一次 enter/leave 用错套 class）。
-type TransitionReason = 'fired' | 'badge-bump' | 'collapse-merge' | 'page-next' | 'single-restore'
-const currentReason = ref<TransitionReason>('fired')
-let reasonResetTimer: number | null = null
-function setReason(r: TransitionReason) {
-  if (reasonResetTimer !== null) {
-    window.clearTimeout(reasonResetTimer)
-    reasonResetTimer = null
-  }
-  currentReason.value = r
-  reasonResetTimer = window.setTimeout(() => {
-    currentReason.value = 'fired'
-    reasonResetTimer = null
-  }, 250) as unknown as number
-}
-const transitionName = computed(() => `bubble-${currentReason.value}`)
-
-// badge-pop：collapsedCount 增长时（不论 reason） badge 数字短暂 scale 1.25 后回 1。
-// 与 transition reason 解耦 —— badge-bump reason 下 bubble 整张不 enter，但 badge 数字仍 pop。
-const badgePopActive = ref(false)
-let badgePopTimer: number | null = null
-function triggerBadgePop() {
-  if (badgePopTimer !== null) {
-    window.clearTimeout(badgePopTimer)
-    badgePopTimer = null
-  }
-  badgePopActive.value = true
-  badgePopTimer = window.setTimeout(() => {
-    badgePopActive.value = false
-    badgePopTimer = null
-  }, 180) as unknown as number
-}
-
-const isCollapsed = computed(() => {
-  if (props.trayOpen && reminders.value.length >= 1) return true
-  return (
-    reminders.value.length > MAX_EXPANDED ||
-    (displayMode.value === 'collapsed' && reminders.value.length > 1)
-  )
+const queue = useReminderQueue({
+  trayOpen: () => props.trayOpen,
+  onPushReason: (r) => anim.setReason(r),
+  onBadgePop: () => anim.triggerBadgePop(),
+  onRemoveReason: (r) => anim.setReason(r),
 })
 
-const visibleReminders = computed<BubbleState[]>(() => {
-  if (reminders.value.length === 0) return []
-  if (isCollapsed.value) return reminders.value.slice(0, 1)
-  // expanded：旧上新下 = reverse(newest-first.slice(0,2))
-  return reminders.value.slice(0, 2).slice().reverse()
-})
+const { reminders, isCollapsed, bubbleCount, removeBubble, onMouseEnter, onMouseLeave,
+  onComplete, onSnooze, canSnooze, iconOf, reconcileTimers,
+  SNOOZE_OPTIONS, MAX_SNOOZE_COUNT } = queue
 
 const collapsedCount = computed(() => reminders.value.length)
 
-function createBubble(payload: ReminderFiredPayload): BubbleState {
-  return {
-    key: `${payload.reminderId}:${Date.now()}`,
-    payload,
-    snoozeOpen: false,
-    busy: false,
-    hover: false,
-    timer: null,
-    snoozeCount: payload.snoozeCount,
+/** 展示项列表，key 保证稳定：
+ *  - collapsed 模式：固定 key 'collapsed-slot'，内容指向 reminders[0]（P3 修复）
+ *  - expanded 模式：key = reminderId
+ */
+const displayItems = computed(() => {
+  if (reminders.value.length === 0) return []
+  if (isCollapsed.value) {
+    return [{ key: 'collapsed-slot', bubble: reminders.value[0], collapsed: true }]
   }
-}
-
-function pushBubble(payload: ReminderFiredPayload) {
-  const existingIdx = reminders.value.findIndex(
-    (b) => b.payload.reminderId === payload.reminderId,
-  )
-  if (existingIdx >= 0) {
-    // 去重 + 移到 newest 头部 + 更新 payload。
-    // 同 id 重 fire：visible bubble 的 key 不变（createBubble 才生成新 key），
-    // Vue TransitionGroup 不触发 enter → 不需要 setReason。
-    const [existing] = reminders.value.splice(existingIdx, 1)
-    existing.payload = payload
-    existing.snoozeCount = payload.snoozeCount
-    reminders.value.unshift(existing)
-    startAutoDismiss(existing)
-    return
-  }
-  const lenBefore = reminders.value.length
-  const b = createBubble(payload)
-  reminders.value.unshift(b)
-  startAutoDismiss(b)
-  if (reminders.value.length > MAX_EXPANDED) {
-    displayMode.value = 'collapsed'
-  }
-  // 动画 reason：
-  // - 进入 collapsed 的临界点（lenBefore = MAX_EXPANDED = 2 → push 后 3）→ collapse-merge
-  // - 已经 collapsed（lenBefore >= MAX_EXPANDED + 1 = 3）→ badge-bump（bubble 不重 enter）
-  // - 否则（expanded 内 1 → 2 / 0 → 1）→ fired（标准 enter）
-  if (lenBefore === MAX_EXPANDED) {
-    setReason('collapse-merge')
-  } else if (lenBefore > MAX_EXPANDED) {
-    setReason('badge-bump')
-    triggerBadgePop()
-  } else {
-    setReason('fired')
-  }
-}
-
-function startAutoDismiss(b: BubbleState) {
-  if (b.timer !== null) {
-    window.clearTimeout(b.timer)
-    b.timer = null
-  }
-  // collapsed mode 下只有 reminders[0] 可见；不可见的暂停 timer 防止被换走后才到期。
-  // trayOpen=true 也强制 collapsed，同款逻辑生效。
-  const willBeVisible = !isCollapsed.value || b === reminders.value[0]
-  if (!willBeVisible) return
-  b.timer = window.setTimeout(() => {
-    if (!b.hover && !b.snoozeOpen) {
-      removeBubble(b)
-    }
-  }, AUTO_DISMISS_MS) as unknown as number
-}
-
-function removeBubble(b: BubbleState) {
-  if (b.timer !== null) {
-    window.clearTimeout(b.timer)
-    b.timer = null
-  }
-  const wasCollapsed = isCollapsed.value
-  const idx = reminders.value.indexOf(b)
-  if (idx >= 0) reminders.value.splice(idx, 1)
-  // count 回落到 ≤1 → 重置 expanded（让单卡用普通气泡形态）。
-  // count 仍 ≥ 2 时不动 displayMode（一旦 collapsed 不自动展开）。
-  if (reminders.value.length <= 1) {
-    displayMode.value = 'expanded'
-  }
-  // collapsed 翻页：新的 reminders[0] 现在变可见，启动它的 auto-dismiss。
-  if (reminders.value.length > 0 && isCollapsed.value) {
-    startAutoDismiss(reminders.value[0])
-  }
-  // 动画 reason：
-  // - wasCollapsed && 剩余 >= 1 → page-next（visible bubble 切到下一条）
-  // - wasCollapsed && 剩余 === 1 → 但上面 displayMode 已 reset，已经走 single-restore 分支
-  // - 不在 collapsed → 标准 leave（fired）
-  if (wasCollapsed && reminders.value.length === 1) {
-    setReason('single-restore')
-  } else if (wasCollapsed && reminders.value.length > 1) {
-    setReason('page-next')
-  } else if (wasCollapsed && reminders.value.length === 0) {
-    setReason('fired')
-  } else {
-    setReason('fired')
-  }
-}
-
-function onMouseEnter(b: BubbleState) {
-  b.hover = true
-}
-
-function onMouseLeave(b: BubbleState) {
-  b.hover = false
-  startAutoDismiss(b)
-}
-
-async function onComplete(b: BubbleState) {
-  b.busy = true
-  try {
-    await completeReminder(b.payload.reminderId)
-    removeBubble(b)
-  } catch (e) {
-    console.error('[reminder-bubble] complete failed:', e)
-  } finally {
-    b.busy = false
-  }
-}
-
-async function onSnooze(b: BubbleState, minutes: SnoozeMinutes) {
-  b.busy = true
-  try {
-    await snoozeReminder(b.payload.reminderId, minutes)
-    removeBubble(b)
-  } catch (e) {
-    console.error('[reminder-bubble] snooze failed:', e)
-  } finally {
-    b.busy = false
-  }
-}
-
-function canSnooze(b: BubbleState): boolean {
-  return b.snoozeCount < MAX_SNOOZE_COUNT
-}
-
-function iconOf(b: BubbleState): string {
-  return b.payload.priority === 'hard' ? '🔔' : '💭'
-}
-
-// trayOpen 变化：可能切换 isCollapsed → 重算 timer 起停
-watch(
-  () => props.trayOpen,
-  () => {
-    for (const b of reminders.value) {
-      startAutoDismiss(b)
-    }
-  },
-)
-
-onMounted(async () => {
-  try {
-    unlistenFired = await listen<ReminderFiredPayload>(REMINDER_FIRED_EVENT, (e) => {
-      if (e.payload) pushBubble(e.payload)
-    })
-  } catch (e) {
-    console.warn('[reminder-bubble] listen failed:', e)
-  }
+  return reminders.value
+    .slice(0, 2)
+    .slice()
+    .reverse()
+    .map((b) => ({ key: b.payload.reminderId, bubble: b, collapsed: false }))
 })
 
-onBeforeUnmount(() => {
-  unlistenFired?.()
-  reminders.value.forEach((b) => {
-    if (b.timer !== null) window.clearTimeout(b.timer)
-  })
-  if (reasonResetTimer !== null) window.clearTimeout(reasonResetTimer)
-  if (badgePopTimer !== null) window.clearTimeout(badgePopTimer)
-})
+// trayOpen 变化 → 重算 collapsed 状态 → reconcile timer 起停
+watch(() => props.trayOpen, () => reconcileTimers())
 
-// 跨窗协作（pet-reminder overlay 迁移）：让父级 overlay App watch bubbleCount → emit
-// Tauri 全局事件，由 Rust services/pet_overlay.rs 控 overlay window 的 show/hide。
-defineExpose({
-  bubbleCount: computed(() => reminders.value.length),
-})
+// 供父级 PetReminderOverlayApp watch → emit active/idle Tauri 事件
+defineExpose({ bubbleCount })
 </script>
 
 <template>
   <TransitionGroup
-    :name="transitionName"
+    :name="anim.transitionName.value"
     tag="div"
     class="reminder-bubble-stack"
     :class="{ 'reminder-bubble-stack--dimmed': trayOpen }"
   >
+    <!-- P3: collapsed 模式 key 固定为 'collapsed-slot'，不触发 TransitionGroup enter/leave -->
     <div
-      v-for="b in visibleReminders"
-      :key="b.key"
+      v-for="item in displayItems"
+      :key="item.key"
       class="reminder-bubble"
       :class="{
-        'reminder-bubble--hard': b.payload.priority === 'hard',
-        'reminder-bubble--collapsed': isCollapsed,
+        'reminder-bubble--hard': item.bubble.payload.priority === 'hard',
+        'reminder-bubble--collapsed': item.collapsed,
       }"
-      @mouseenter="onMouseEnter(b)"
-      @mouseleave="onMouseLeave(b)"
+      @mouseenter="onMouseEnter(item.bubble)"
+      @mouseleave="onMouseLeave(item.bubble)"
     >
-      <!-- collapsed mode 左上 count badge：仅最新一张显示（visibleReminders.length=1） -->
+      <!-- collapsed mode 左上 count badge -->
       <div
-        v-if="isCollapsed"
+        v-if="item.collapsed"
         class="reminder-bubble__count-badge"
-        :class="{ 'badge-pop': badgePopActive }"
+        :class="{ 'badge-pop': anim.badgePopActive.value }"
         aria-label="未处理提醒数"
       >
         {{ collapsedCount }}
       </div>
 
       <div class="reminder-bubble__body">
-        <span class="reminder-bubble__icon">{{ iconOf(b) }}</span>
+        <span class="reminder-bubble__icon">{{ iconOf(item.bubble) }}</span>
         <div class="reminder-bubble__text">
-          <span class="reminder-bubble__title">{{ b.payload.title }}</span>
-          <span v-if="b.snoozeCount > 0" class="reminder-bubble__sub">
-            已稍后 {{ b.snoozeCount }}/{{ MAX_SNOOZE_COUNT }}
+          <span class="reminder-bubble__title">{{ item.bubble.payload.title }}</span>
+          <span v-if="item.bubble.snoozeCount > 0" class="reminder-bubble__sub">
+            已稍后 {{ item.bubble.snoozeCount }}/{{ MAX_SNOOZE_COUNT }}
           </span>
         </div>
       </div>
 
       <div class="reminder-bubble__actions" data-no-drag>
-        <template v-if="!b.snoozeOpen">
+        <template v-if="!item.bubble.snoozeOpen">
           <button
             type="button"
             class="reminder-bubble__btn reminder-bubble__btn--primary"
-            :disabled="b.busy"
-            @click="onComplete(b)"
+            :disabled="item.bubble.busy"
+            @click="onComplete(item.bubble)"
           >
             完成
           </button>
           <button
-            v-if="canSnooze(b)"
+            v-if="canSnooze(item.bubble)"
             type="button"
             class="reminder-bubble__btn"
-            :disabled="b.busy"
-            @click="b.snoozeOpen = true"
+            :disabled="item.bubble.busy"
+            @click="item.bubble.snoozeOpen = true"
           >
             稍后
           </button>
@@ -344,8 +127,8 @@ defineExpose({
             :key="m"
             type="button"
             class="reminder-bubble__btn"
-            :disabled="b.busy"
-            @click="onSnooze(b, m)"
+            :disabled="item.bubble.busy"
+            @click="onSnooze(item.bubble, m)"
           >
             {{ m }}
           </button>
@@ -353,9 +136,9 @@ defineExpose({
         <button
           type="button"
           class="reminder-bubble__btn reminder-bubble__btn--ghost"
-          :disabled="b.busy"
+          :disabled="item.bubble.busy"
           aria-label="关闭"
-          @click="removeBubble(b)"
+          @click="removeBubble(item.bubble)"
         >
           ✕
         </button>
@@ -367,10 +150,8 @@ defineExpose({
 <style scoped>
 .reminder-bubble-stack {
   /* 2026-05-24 第三轮：absolute + top:0 + left:0 + fit-content，让 overlay 窗内 stack 起
-     点对齐 Rust 端算的 anchor。原 fixed + top:6 + left:50% + translateX(-50%) 在
-     overlay 窗内会再做一次居中 → 视觉锚点错位 + 容器感染整窗。stack 自身
-     pointer-events: none，透明区不拦下层 pet/desktop 操作；.reminder-bubble 自己
-     pointer-events: auto 接 hover/click。 */
+     点对齐 Rust 端算的 anchor。stack 自身 pointer-events: none，透明区不拦下层 pet/desktop；
+     .reminder-bubble 自己 pointer-events: auto 接 hover/click。 */
   position: absolute;
   top: 0;
   left: 0;
@@ -543,9 +324,7 @@ defineExpose({
   transition: transform 220ms var(--aipet-ease-standard);
 }
 
-/* collapse-merge：从 expanded 双卡进入 collapsed 单卡的过渡。
-   新 bubble 用 scale 0.92→1 + fade，营造"两卡合并成一摞"的感觉。
-   旧 bubble (被换走的) 走标准 leave。 */
+/* collapse-merge：从 expanded 双卡进入 collapsed 单卡的过渡。 */
 .bubble-collapse-merge-enter-active {
   transition: opacity 220ms var(--aipet-ease-standard),
     transform 220ms var(--aipet-ease-standard);
@@ -583,7 +362,7 @@ defineExpose({
   transition: transform 200ms var(--aipet-ease-standard);
 }
 
-/* single-restore：collapsed 回到单卡。剩余 bubble 用 scale 1.05→1（脱掉"摞"的厚度感）。 */
+/* single-restore：collapsed 回到单卡。 */
 .bubble-single-restore-enter-active {
   transition: opacity 220ms var(--aipet-ease-standard),
     transform 220ms var(--aipet-ease-standard);
@@ -600,8 +379,7 @@ defineExpose({
 }
 
 /* badge-bump：bubble 整张 NOT re-enter（empty enter class → instant render）。
-   仅靠 .badge-pop class 让 count 数字 scale 1.25。reminder 数据更新但 visible bubble 内容
-   只是 title 文本变化（同 key 不触发 transition），用户视觉看到的只是"badge 数字蹦了一下"。 */
+   仅靠 .badge-pop class 让 count 数字 scale 1.25。 */
 .bubble-badge-bump-enter-active,
 .bubble-badge-bump-leave-active {
   transition: none;

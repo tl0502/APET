@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
-    emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PET_WINDOW_LABEL,
-    POMODORO_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
+    emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL,
+    PET_REMINDER_OVERLAY_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL,
+    WORKSPACE_WINDOW_LABEL,
 };
 use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer, WorkspaceSaveDebouncer};
 use tauri::{Listener, Manager};
@@ -539,6 +540,12 @@ pub fn run() {
                             let debouncer = app.state::<WorkspaceSaveDebouncer>();
                             debouncer.schedule(ws);
                         }
+                    }
+                    // P6 (2026-05-25): pet-reminder overlay resized by frontend ResizeObserver,
+                    // reposition using actual overlay size (pet_overlay::reposition_overlay new logic).
+                    if label == PET_REMINDER_OVERLAY_LABEL {
+                        let app = window.app_handle();
+                        crate::services::pet_overlay::reposition_overlay(app, PET_REMINDER_OVERLAY_LABEL);
                     }
                 }
                 _ => {}

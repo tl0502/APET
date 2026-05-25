@@ -1,26 +1,25 @@
 <script setup lang="ts">
 // PetCommandOverlayApp：pet-command overlay 根组件。
 //
-// 第三轮 UX 修正（2026-05-24）：
-// - 加 backdrop click-outside（透明全屏 div 在 tray 下层，命中 backdrop emit close）
-// - Esc 监听放到 OverlayApp（owner of currentView）：二级先返一级，一级关闭
-// - PetCommandTray 受控 view（v-model:view）
-// - listen 全局 `pet:contextmenu:request-close`（pet 窗 outside click / 再次右键 / Esc 触发）
-//   关闭自身 + emit `pet:contextmenu:closed-ack` 让 pet 窗 commandTrayOpen ref 复位
-// - `request-open` listener 内 emit `pet:contextmenu:opened-ack` 让 pet 窗 ref 设 true
-// - 所有 close 路径（backdrop / Esc / tray @close emit / global request-close）→ 单点 closeAll()
+// 2026-05-25 结构重构：
+// - 删除 fakePetSize / x / y / petSize 传参（anchor 算法已从 PetCommandTray 删除）
+// - 删除 :deep(.command-tray) !important override（双重定位已清除）
+// - PetCommandTray 用 position: absolute; inset: 4px 在 overlay 窗内自然填满
+// - 新增 onFocusChanged listener：overlay 获焦后再失焦（点桌面/其他窗口）→ closeAll()
+//   配合 App.vue 的 pet 窗 blur 监听，覆盖所有 click-outside 场景（结构性修复 P7）
 
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import AppShell from '@/components/layouts/AppShell.vue'
 import PetCommandTray from '@/components/PetCommandTray.vue'
 
 const open = ref(false)
 const currentView = ref<'root' | 'settings'>('root')
-const fakePetSize = { width: 160, height: 0 }
 
 let unlistenOpen: UnlistenFn | null = null
 let unlistenClose: UnlistenFn | null = null
+let unlistenFocus: (() => void) | null = null
 
 /** 单一关闭收敛点：所有路径都走这里。idempotent —— 已关时不重复 emit ack。 */
 function closeAll() {
@@ -36,7 +35,7 @@ function onBackdropDown(e: PointerEvent) {
   closeAll()
 }
 
-/** Esc 监听：二级先返一级，一级关闭。pointerdown 不在此处理（backdrop 已接）。 */
+/** Esc 监听：二级先返一级，一级关闭。 */
 function onKeyDown(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
   if (!open.value) return
@@ -49,6 +48,17 @@ function onKeyDown(e: KeyboardEvent) {
 
 onMounted(async () => {
   document.addEventListener('keydown', onKeyDown, true)
+
+  // P7: overlay 失焦（用户在 overlay 内点击按钮后、又点了别处）→ 关闭
+  const appWin = getCurrentWindow()
+  try {
+    unlistenFocus = await appWin.onFocusChanged(({ payload: focused }) => {
+      if (!focused && open.value) closeAll()
+    })
+  } catch (e) {
+    console.warn('[pet-command-overlay] onFocusChanged listen failed:', e)
+  }
+
   try {
     unlistenOpen = await listen('pet:contextmenu:request-open', () => {
       open.value = true
@@ -69,6 +79,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeyDown, true)
+  unlistenFocus?.()
   unlistenOpen?.()
   unlistenClose?.()
 })
@@ -81,9 +92,6 @@ onBeforeUnmount(() => {
     <div v-if="open" class="pet-command-overlay__backdrop" @pointerdown="onBackdropDown" />
     <PetCommandTray
       v-if="open"
-      :x="0"
-      :y="0"
-      :pet-size="fakePetSize"
       :view="currentView"
       @update:view="(v) => (currentView = v)"
       @close="closeAll"
@@ -93,8 +101,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* backdrop：透明全屏点击层，hit-test 透传到下方 desktop 仅靠 pointer-events: auto 在 overlay
-   范围内 = overlay 自己消化。overlay 关闭时 v-if=false 整层消失，pet 窗 / 桌面操作不受影响。 */
+/* backdrop：透明全屏点击层。overlay 关闭时 v-if=false 整层消失，pet 窗 / 桌面操作不受影响。 */
 .pet-command-overlay__backdrop {
   position: fixed;
   inset: 0;
@@ -102,13 +109,6 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   z-index: 0;
 }
-
-/* 强制 tray 填满 overlay 窗（覆盖 PetCommandTray 内 fixed 浮层 top/left 算法的偏差）。
-   z-index 1 在 backdrop 之上让点 tray 落到 tray 自身 + @pointerdown.stop 拦截不冒泡到 backdrop。 */
-:deep(.command-tray) {
-  top: 4px !important;
-  left: 4px !important;
-  width: calc(100% - 8px) !important;
-  z-index: 1;
-}
+/* 2026-05-25 结构重构：移除 :deep(.command-tray) !important override。
+   PetCommandTray 现在用 position: absolute; inset: 4px，无双重定位。 */
 </style>

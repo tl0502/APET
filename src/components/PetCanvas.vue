@@ -91,7 +91,7 @@ const {
 // 右键菜单事件出口：父组件可监听以做额外副作用（关闭其它 popover 等）。
 // payload 含 close 闭包让父级可以在外部触发关闭（同步 useInteractionRaycaster 内部 contextMenu ref）。
 watch(contextMenu, (v) => {
-  if (v) emit('contextmenu', { x: v.x, y: v.y, reaction: v.reaction, close: closeContextMenu })
+  if (v) emit('contextmenu', { x: v.x, y: v.y, close: closeContextMenu })
 })
 
 const stageStyle = computed(() => ({

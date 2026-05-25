@@ -1,17 +1,18 @@
 <script setup lang="ts">
-// PetCommandTray (取代 PetContextMenu)：宠物指令托盘。
+// PetCommandTray：宠物指令托盘。
 //
 // 设计要点（用户拍板）：
 // - 胶囊 tray，纵向 pill list；不是系统 context menu
-// - 锚在 pet 窗"中下"区域（嵌 pet 窗时）；overlay 模式下由 OverlayApp 用 :deep CSS 强制铺满
+// - 固定锚于 pet-command overlay 窗内（overlay 由 Rust pet_overlay.rs 负责定位到 pet 右侧）
 // - drill-down 二级（root ↔ settings），由父级受控（PetCommandOverlayApp 维护 view ref）
 //   方便外层 Esc handler 决定"二级先返一级"还是"一级关闭"
 // - inline 改名功能完全删除（改名走 workspace 设置）
 // - 关闭路径全部 emit `close` 单点；外部 OverlayApp + pet 窗 App 负责跨窗 close intent 协议
 //
-// 2026-05-24 第三轮：删除原 document.addEventListener('pointerdown' / 'keydown')。
-// pet-command overlay 是独立 webview，跨窗 outside click 失效；Esc 也由 OverlayApp 接管，
-// 因为只有它知道 drill-down 当前在哪一级（受控 view prop）。
+// 2026-05-25 结构重构：
+// - 删除 x / y / petSize props：overlay 模式下 Rust 端已定好窗口位置，tray 只需在窗内自然铺开
+// - 删除 anchor computed：无双重定位
+// - position: absolute + inset: 0 取代 position: fixed + top/left 算法
 
 import { computed } from 'vue'
 import { useToast } from '@/composables/useToast'
@@ -19,11 +20,6 @@ import { bosskeyToggle } from '@/services/bosskey'
 import { showWorkspace } from '@/services/window'
 
 interface Props {
-  /** webview 视口坐标（来自 contextmenu event）—— fallback 用，tray 实际锚点按 petSize 算 */
-  x: number
-  y: number
-  /** pet 窗当前逻辑尺寸（half 320×320 / full 320×512）；嵌 pet 窗时用，overlay 模式下传占位 */
-  petSize: { width: number; height: number }
   /** 受控 drill-down 视图（v-model:view）。OverlayApp 维护此 ref，让 Esc handler 能"二级先返一级"。 */
   view?: 'root' | 'settings'
 }
@@ -35,22 +31,6 @@ const emit = defineEmits<{
 }>()
 
 const toast = useToast()
-
-const TRAY_W = 132
-const TRAY_PAD = 6
-const PET_BOTTOM_RATIO = 0.55
-
-/** 锚点：优先 pet 中心右侧；右侧空间不足切左侧；两侧都不够靠左边缘。 */
-const anchor = computed(() => {
-  const top = props.petSize.height * PET_BOTTOM_RATIO
-  const centerX = props.petSize.width / 2
-  let left = centerX + TRAY_PAD
-  if (left + TRAY_W + TRAY_PAD > props.petSize.width) {
-    left = centerX - TRAY_PAD - TRAY_W
-  }
-  if (left < TRAY_PAD) left = TRAY_PAD
-  return { top, left }
-})
 
 function close() {
   emit('close')
@@ -90,12 +70,7 @@ async function onOpenWorkspace(hint: string) {
 </script>
 
 <template>
-  <div
-    class="command-tray"
-    :style="{ top: `${anchor.top}px`, left: `${anchor.left}px`, width: `${TRAY_W}px` }"
-    role="menu"
-    data-no-drag
-  >
+  <div class="command-tray" role="menu" data-no-drag>
     <Transition name="drill" mode="out-in">
       <ul v-if="view === 'root'" key="root" class="command-tray__list">
         <li>
@@ -164,12 +139,15 @@ async function onOpenWorkspace(hint: string) {
 
 <style scoped>
 .command-tray {
-  position: fixed;
+  /* 2026-05-25 结构重构：删除 position: fixed + anchor 算法。
+     overlay 模式下 Rust 端负责窗口定位，tray 只需在窗内自然铺满。
+     absolute + inset: 4px 保留四边小间距给 box-shadow 呼吸空间。 */
+  position: absolute;
+  inset: 4px;
   display: flex;
   flex-direction: column;
   padding: 4px;
   background: var(--aipet-color-surface-raised, var(--aipet-color-surface));
-  /* 胶囊容器：去掉硬边框，靠 shadow + blur 浮在 pet 旁边 */
   border: none;
   border-radius: 24px;
   box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.22), 0 2px 6px -2px rgba(0, 0, 0, 0.1);
@@ -179,7 +157,6 @@ async function onOpenWorkspace(hint: string) {
   color: var(--aipet-color-text-1);
   pointer-events: auto;
   animation: tray-pop 140ms var(--aipet-ease-standard);
-  max-height: calc(100% - 16px);
   overflow-y: auto;
 }
 

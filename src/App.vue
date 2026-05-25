@@ -38,6 +38,8 @@ let unlistenViewChanged: UnlistenFn | null = null
 let unlistenAot: UnlistenFn | null = null
 let unlistenTrayOpened: UnlistenFn | null = null
 let unlistenTrayClosed: UnlistenFn | null = null
+let unlistenPetFocus: (() => void) | null = null
+let petBlurTimer: number | null = null
 
 /** T10 (#31 follow-up B)：AOT 跨窗口广播事件名（Rust 端 toggle 时 emit）。
  *  R1 修复后前端不再启动期 read KV，仅 listen 此事件接 Rust 后续切换。 */
@@ -79,17 +81,18 @@ const snapPreviewStyle = computed(() => ({
 const view = ref<AvatarView>('half')
 const size = computed(() => PET_VIEW_SIZES[view.value])
 
-// 2026-05-24 pet UI 重构第二轮：PetCommandTray / PetReminderBubble 已迁出 pet 窗到
-// 独立 Tauri overlay 窗。第三轮（2026-05-24）补 toggle 语义 + 跨窗 close intent 协议：
-// - commandTrayOpen=false → emit request-open 让 overlay 开
-// - commandTrayOpen=true → emit request-close（再次右键即关）
-// - ctx.close() 始终调，清掉本地 raycaster contextMenu ref 让下次能再触发
+// 2026-05-25 结构重构：
+// - P8 取消右键 hitbox dispatch：ctx 不再携带 reaction，直接 toggle overlay
+// - P5 optimistic update：本地 ref 立即翻转，ack 事件作为二次确认（消除 ack 到达前再次右键重发问题）
+// - P7 focus-lost close：pet 窗失焦时若 tray 仍 open → 60ms 后确认关闭（见 onMounted）
 function onPetContextmenu(ctx: InteractionContextMenuEvent & { close: () => void }) {
   ctx.close()
   if (commandTrayOpen.value) {
+    commandTrayOpen.value = false  // optimistic
     void emitTauri('pet:contextmenu:request-close')
   } else {
-    void emitTauri('pet:contextmenu:request-open', { reaction: ctx.reaction })
+    commandTrayOpen.value = true  // optimistic
+    void emitTauri('pet:contextmenu:request-open')
   }
 }
 
@@ -97,15 +100,17 @@ function onPetContextmenu(ctx: InteractionContextMenuEvent & { close: () => void
 function onPetKeyDown(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
   if (!commandTrayOpen.value) return
+  commandTrayOpen.value = false  // optimistic
   void emitTauri('pet:contextmenu:request-close')
 }
 
 /** pet 窗内任意左键 pointerdown 都视为 "tray 外部" → 关闭。
- *  右键 (button=2) 排除：raycaster contextmenu 路径会先于 pointerdown 走 emit request-open，
- *  保证再次右键 toggle 顺序正确。 */
+ *  右键 (button=2) 排除：contextmenu 路径已经立即翻转 commandTrayOpen，
+ *  确保再次右键 toggle 顺序正确。 */
 function onPetWindowPointerDown(e: PointerEvent) {
   if (e.button !== 0) return
   if (!commandTrayOpen.value) return
+  commandTrayOpen.value = false  // optimistic
   void emitTauri('pet:contextmenu:request-close')
 }
 
@@ -136,7 +141,27 @@ onMounted(async () => {
     console.warn('[App] listen pet:contextmenu:closed-ack failed:', e)
   }
 
-  // 第三轮：Esc / pet 窗左键 pointerdown 触发关闭 intent（跨窗 outside click 协议）。
+  // P7（2026-05-25 结构重构）：pet 窗失焦 → 60ms debounce 后若 tray 仍 open → emit close。
+  // 60ms 给 overlay 按钮的 click handler 留够时间执行 + closed-ack 到达前不误发。
+  // overlay 自身 blur（overlay 获焦后点桌面）由 PetCommandOverlayApp.onFocusChanged 处理。
+  try {
+    unlistenPetFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (!focused && commandTrayOpen.value) {
+        if (petBlurTimer !== null) window.clearTimeout(petBlurTimer)
+        petBlurTimer = window.setTimeout(() => {
+          petBlurTimer = null
+          if (commandTrayOpen.value) {
+            commandTrayOpen.value = false
+            void emitTauri('pet:contextmenu:request-close')
+          }
+        }, 60) as unknown as number
+      }
+    })
+  } catch (e) {
+    console.warn('[App] onFocusChanged listen failed:', e)
+  }
+
+  // Esc / pet 窗左键 pointerdown 触发关闭 intent（跨窗 outside click 协议）。
   // capture phase 让 raycaster bubble-phase listener 之前先跑：raycaster pointerdown(button=0)
   // 走 click/longpress 状态机，不影响我们的 close intent（commandTrayOpen=false 时直接 return）。
   window.addEventListener('keydown', onPetKeyDown)
@@ -223,6 +248,8 @@ onBeforeUnmount(() => {
   unlistenAot?.()
   unlistenTrayOpened?.()
   unlistenTrayClosed?.()
+  unlistenPetFocus?.()
+  if (petBlurTimer !== null) window.clearTimeout(petBlurTimer)
   window.removeEventListener('keydown', onPetKeyDown)
   window.removeEventListener('pointerdown', onPetWindowPointerDown, true)
 })

@@ -16,7 +16,7 @@
 //          └─ 纯 click：
 //                ├─ 距上次 click <300ms → dblclick（取消 pending click timer）
 //                └─ 否则 → schedule click dispatch 在 300ms 后（等 dblclick 窗口过）
-//   pointerdown(2) / contextmenu → dispatch('rclick') + emit 自定义事件让父组件开菜单
+//   pointerdown(2) / contextmenu → 直接 emit 自定义事件让父组件开菜单（不走 interaction dispatch）
 //
 // 与 useSnapWindow 协作（lessons #12 / #13 已有约束）：
 //   useSnapWindow.onPointerDown 在 capture phase 已 arm dragSession；
@@ -25,11 +25,7 @@
 
 import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import {
-  dispatchInteraction,
-  recordDragCount,
-  type ReactionEntry,
-} from '@/services/interaction'
+import { dispatchInteraction, recordDragCount } from '@/services/interaction'
 import { cancelWander } from '@/services/livingPet'
 
 /** drag 阈值：pointermove 累计位移超过此像素值即判定为拖动起点。 */
@@ -43,8 +39,6 @@ export interface InteractionContextMenuEvent {
   /** webview 视口坐标（不是 canvas 内）。父组件用此定位浮层菜单。 */
   x: number
   y: number
-  /** Rust 派发返回的反应条目；rclick 走 dispatch 但 action_id=tilt_head 不强制播动作。 */
-  reaction: ReactionEntry | null
 }
 
 export interface UseInteractionRaycasterOptions {
@@ -226,14 +220,9 @@ export function useInteractionRaycaster(
     if (!isEnabled()) return
     // 阻止 webview 默认浏览器右键菜单（dev 期也屏蔽，避免与自绘菜单同时出现）。
     event.preventDefault()
-    // dispatch + open 自绘菜单。dispatch 失败不阻塞菜单（菜单是核心 UX）。
-    void dispatchInteraction('rclick', 'body').then((reaction) => {
-      contextMenu.value = {
-        x: event.clientX,
-        y: event.clientY,
-        reaction,
-      }
-    })
+    // 2026-05-25 结构重构：取消右键 hitbox dispatch（右键只开指令托盘，不触发 VRM 反应）。
+    // 直接设置 contextMenu 让父组件打开 command overlay，不经过 interaction_dispatch IPC。
+    contextMenu.value = { x: event.clientX, y: event.clientY }
   }
 
   function closeContextMenu() {
@@ -283,6 +272,5 @@ export const __TEST_ONLY__ = {
   DBLCLICK_MS,
 }
 
-// 仅供调用方在拿到 ReactionEntry 后判断是否触发气泡 / mood icon 视觉反馈。
-// 不导出额外抽象，避免接口面爆炸。
-export type { InteractionEventKind, ReactionEntry } from '@/services/interaction'
+// InteractionEventKind 供调用方按事件类型做视觉反馈
+export type { InteractionEventKind } from '@/services/interaction'

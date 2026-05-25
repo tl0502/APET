@@ -131,7 +131,7 @@ fn on_pet_settled<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-fn reposition_overlay<R: Runtime>(app: &AppHandle<R>, label: &str) {
+pub fn reposition_overlay<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let Some(pet) = app.get_webview_window(PET_WINDOW_LABEL) else { return };
     let Some(overlay) = app.get_webview_window(label) else { return };
     let Ok(Some(monitor)) = pet.current_monitor() else { return };
@@ -143,8 +143,17 @@ fn reposition_overlay<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let Ok(pet_phys_size) = pet.outer_size() else { return };
     let pet_size = pet_phys_size.to_logical::<f64>(scale);
 
+    // P6（2026-05-25）：reminder overlay 使用实际窗口大小定位（前端 ResizeObserver 动态调整高度）。
+    // command overlay 仍用固定常量（tray 尺寸固定）。
+    // 实际尺寸 < 10px（初始/隐藏态）时 fallback 到常量防止定位异常。
     let (w, h) = if label == PET_REMINDER_OVERLAY_LABEL {
-        (REMINDER_W, REMINDER_H)
+        let phys = overlay.outer_size().unwrap_or_default();
+        let actual_w = (phys.width as f64) / scale;
+        let actual_h = (phys.height as f64) / scale;
+        (
+            if actual_w > 10.0 { actual_w } else { REMINDER_W },
+            if actual_h > 10.0 { actual_h } else { REMINDER_H },
+        )
     } else {
         (COMMAND_W, COMMAND_H)
     };
