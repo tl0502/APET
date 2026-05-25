@@ -139,21 +139,22 @@ async function onOpenWorkspace(hint: string) {
 
 <style scoped>
 .command-tray {
-  /* 2026-05-25 结构重构：删除 position: fixed + anchor 算法。
+  /* 2026-05-26 紧凑化：原 160×220 与 pet 320×320 视觉竞争（50% × 69%），
+     改 140×196（44% × 61%）让 tray 视觉从属 pet。
      overlay 模式下 Rust 端负责窗口定位，tray 只需在窗内自然铺满。
-     absolute + inset: 4px 保留四边小间距给 box-shadow 呼吸空间。 */
+     absolute + inset: 5px 保留四边小间距给 box-shadow 呼吸空间。 */
   position: absolute;
-  inset: 4px;
+  inset: 5px;
   display: flex;
   flex-direction: column;
-  padding: 4px;
+  padding: 5px;
   background: var(--aipet-color-surface-raised, var(--aipet-color-surface));
   border: none;
-  border-radius: 24px;
+  border-radius: 18px;
   box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.22), 0 2px 6px -2px rgba(0, 0, 0, 0.1);
   backdrop-filter: blur(10px);
   z-index: 50;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--aipet-color-text-1);
   pointer-events: auto;
   animation: tray-pop 140ms var(--aipet-ease-standard);
@@ -177,7 +178,7 @@ async function onOpenWorkspace(hint: string) {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .command-tray__pill {
@@ -188,13 +189,13 @@ async function onOpenWorkspace(hint: string) {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 6px 11px;
+  padding: 7px 12px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 999px;
   color: var(--aipet-color-text-1);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
   transition: background-color 120ms var(--aipet-ease-standard),

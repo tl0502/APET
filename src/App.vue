@@ -38,8 +38,6 @@ let unlistenViewChanged: UnlistenFn | null = null
 let unlistenAot: UnlistenFn | null = null
 let unlistenTrayOpened: UnlistenFn | null = null
 let unlistenTrayClosed: UnlistenFn | null = null
-let unlistenPetFocus: (() => void) | null = null
-let petBlurTimer: number | null = null
 
 /** T10 (#31 follow-up B)：AOT 跨窗口广播事件名（Rust 端 toggle 时 emit）。
  *  R1 修复后前端不再启动期 read KV，仅 listen 此事件接 Rust 后续切换。 */
@@ -141,25 +139,15 @@ onMounted(async () => {
     console.warn('[App] listen pet:contextmenu:closed-ack failed:', e)
   }
 
-  // P7（2026-05-25 结构重构）：pet 窗失焦 → 60ms debounce 后若 tray 仍 open → emit close。
-  // 60ms 给 overlay 按钮的 click handler 留够时间执行 + closed-ack 到达前不误发。
-  // overlay 自身 blur（overlay 获焦后点桌面）由 PetCommandOverlayApp.onFocusChanged 处理。
-  try {
-    unlistenPetFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (!focused && commandTrayOpen.value) {
-        if (petBlurTimer !== null) window.clearTimeout(petBlurTimer)
-        petBlurTimer = window.setTimeout(() => {
-          petBlurTimer = null
-          if (commandTrayOpen.value) {
-            commandTrayOpen.value = false
-            void emitTauri('pet:contextmenu:request-close')
-          }
-        }, 60) as unknown as number
-      }
-    })
-  } catch (e) {
-    console.warn('[App] onFocusChanged listen failed:', e)
-  }
+  // 2026-05-26 移除 pet 窗口 onFocusChanged → blur 60ms 关 tray 的兜底逻辑。
+  // 原因：用户点击 tray 内 "设置..." / "← 返回" 这类内部切换按钮时，焦点从 pet 窗
+  // 迁到 pet-command 窗 → pet 触发 blur → 60ms 后还没收到 closed-ack → 误关 tray，
+  // 用户看到 "无法二级展开"。
+  //
+  // 关闭兜底由以下三条 cover：
+  // - PetCommandOverlayApp 自身的 onFocusChanged：tray 失焦（点桌面/其他窗）→ closeAll
+  // - 本文件下方的 pointerdown capture：用户点回 pet 窗 → emit request-close
+  // - Esc：onPetKeyDown → emit request-close
 
   // Esc / pet 窗左键 pointerdown 触发关闭 intent（跨窗 outside click 协议）。
   // capture phase 让 raycaster bubble-phase listener 之前先跑：raycaster pointerdown(button=0)
@@ -248,8 +236,6 @@ onBeforeUnmount(() => {
   unlistenAot?.()
   unlistenTrayOpened?.()
   unlistenTrayClosed?.()
-  unlistenPetFocus?.()
-  if (petBlurTimer !== null) window.clearTimeout(petBlurTimer)
   window.removeEventListener('keydown', onPetKeyDown)
   window.removeEventListener('pointerdown', onPetWindowPointerDown, true)
 })

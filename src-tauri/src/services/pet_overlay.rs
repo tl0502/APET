@@ -28,8 +28,8 @@ use crate::services::window_actions::{
 
 const REMINDER_W: f64 = 320.0;
 const REMINDER_H: f64 = 280.0;
-const COMMAND_W: f64 = 160.0;
-const COMMAND_H: f64 = 220.0;
+const COMMAND_W: f64 = 140.0;
+const COMMAND_H: f64 = 196.0;
 const GAP: f64 = 8.0;
 const SCREEN_MARGIN: f64 = 16.0;
 const SETTLED_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -316,8 +316,8 @@ mod tests {
             0.0, 0.0, 1920.0, 1080.0,
             COMMAND_W, COMMAND_H,
         );
-        // 期望 x = 1900 - 160 - 8 = 1732
-        assert!((x - 1732.0).abs() < 0.1, "左侧 x={x}");
+        // 期望 x = 1900 - 140 - 8 = 1752（COMMAND_W=140 since 2026-05-26）
+        assert!((x - 1752.0).abs() < 0.1, "左侧 x={x}");
     }
 
     #[test]
