@@ -23,12 +23,13 @@ import PetReminderBubble from '@/components/PetReminderBubble.vue'
 const bubbleRef = ref<InstanceType<typeof PetReminderBubble> | null>(null)
 const trayOpen = ref(false)
 
-/** 窗口固定宽度：240 card + ghost overhang 0 + badge overhang 7 + 双侧安全 ≈ 280。 */
-const OVERLAY_W = 280
-/** 最小高度（1 张单卡 + box-shadow 缓冲）。 */
-const MIN_H = 80
-/** 垂直方向额外 padding（给 box-shadow / badge overhang 留呼吸空间）。 */
-const STACK_PAD = 16
+/** 窗口固定宽度：240 card + ghost overhang 0 + badge overhang 7（右侧）+ 双侧安全 + box-shadow
+ *  ≈ 24px 横向扩散。300px 给 outer padding-right 8 + 左右各 ~26px buffer。 */
+const OVERLAY_W = 300
+/** 最小高度（单卡 + box-shadow 缓冲 + ghost 底部 + badge 顶部余量）。 */
+const MIN_H = 96
+/** 垂直方向额外 padding（给 box-shadow 24px 向下扩散 + 视觉安全余量）。 */
+const STACK_PAD = 24
 
 /** 与 Rust window_actions.rs 同步：'pet-command' 是命令托盘 overlay 窗 label。 */
 const PET_COMMAND_LABEL = 'pet-command'
@@ -75,7 +76,13 @@ onMounted(async () => {
   const el = bubbleRef.value?.stackEl as HTMLElement | null | undefined
   if (el) {
     resizeObserver = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height ?? 0
+      const entry = entries[0]
+      if (!entry) return
+      // borderBoxSize 包含 padding/border；contentRect 仅内容区，
+      // 叠卡时 outer .reminder-bubble-stack 的 padding 8/8/18/0 会被 contentRect 丢掉
+      // 导致窗口算少 26px、badge / ghost 被 Tauri 窗口边裁掉。改用 borderBoxSize。
+      const bbs = entry.borderBoxSize?.[0]
+      const h = bbs?.blockSize ?? entry.contentRect.height
       if (h > 0) applyResize(h)
     })
     resizeObserver.observe(el)

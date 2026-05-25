@@ -606,10 +606,14 @@ export class VRMRuntime {
   }
 
   /**
-   * 短促 head glance 动效：head bone X 轴 ±15° / 360ms RAF 插值（不引动画 clip）。
+   * Head glance 动效：head bone X 轴 ±15°，"看 2 秒" 三段式包络
+   * （240ms ease-in 抬到 peak → 1600ms hold → 240ms ease-out 回 base，共 ~2080ms）。
    *
    * @param sign +1 = 抬头看上方（glance_up / nod 兼容路径），-1 = 低头看下方（glance_down，
    *             用于 reminder overlay 在 pet 下方时；spec 2026-05-25-pet-reminder-card-stack §5）。
+   *
+   * 2026-05-26 修订（用户 e2e 反馈）：原 360ms 三角包络体感像"抽搐"；改为带 hold 的看的动作。
+   * 触发节流由调用方负责（usePetGlance 已改为 count 0→1 才触发，不再每条 fired 都打）。
    *
    * 不打断 wander tween，不持久化（瞬时动效）。
    * head bone 的 rotation 不被 applyBreathing/applyBlink/applyLookAt 任一改写
@@ -620,28 +624,45 @@ export class VRMRuntime {
     if (!this.vrm || this._glanceInProgress) return
     this._glanceInProgress = true
     const humanoid = this.vrm.humanoid
-    if (!humanoid) return
+    if (!humanoid) {
+      this._glanceInProgress = false
+      return
+    }
     const headNode = humanoid.getNormalizedBoneNode('head')
-    if (!headNode) return
+    if (!headNode) {
+      this._glanceInProgress = false
+      return
+    }
 
     const baseX = headNode.rotation.x
     const peakDelta = (sign * 15 * Math.PI) / 180 // +15° 抬头 / -15° 低头
-    const duration = 360
+    const inDur = 240
+    const holdDur = 1600
+    const outDur = 240
+    const totalDur = inDur + holdDur + outDur
     const start = performance.now()
 
     return new Promise<void>((resolve) => {
       const tick = (t: number) => {
         const elapsed = t - start
-        if (elapsed >= duration) {
+        if (elapsed >= totalDur) {
           headNode.rotation.x = baseX
           this._glanceInProgress = false
           resolve()
           return
         }
-        const p = elapsed / duration // 0..1
-        // 三角包络：0 → 1 → 0
-        const tri = p < 0.5 ? p * 2 : (1 - p) * 2
-        headNode.rotation.x = baseX + peakDelta * tri
+        let factor: number
+        if (elapsed < inDur) {
+          // ease-in: sin 0..π/2 = 0..1（向上平滑加速）
+          factor = Math.sin((elapsed / inDur) * (Math.PI / 2))
+        } else if (elapsed < inDur + holdDur) {
+          factor = 1
+        } else {
+          // ease-out: cos 0..π/2 = 1..0（向回平滑减速）
+          const p = (elapsed - inDur - holdDur) / outDur
+          factor = Math.cos(p * (Math.PI / 2))
+        }
+        headNode.rotation.x = baseX + peakDelta * factor
         requestAnimationFrame(tick)
       }
       requestAnimationFrame(tick)

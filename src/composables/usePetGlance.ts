@@ -1,42 +1,50 @@
-// Pet 窗口对 reminder:fired 的 head glance 反应（抬头看上 / 低头看下）。
-// 替代 usePetReaction.ts（#29 仅 'nod'）；spec 2026-05-25-pet-reminder-card-stack §5。
+// Pet 窗口对 reminder 弹窗"首次出现"的 head glance 反应（看 2 秒，抬头 / 低头）。
 //
-// Placement 源：Rust pet_overlay 模块在 reminder overlay reposition 成功后 emit
-// PET_REMINDER_PLACEMENT_EVENT，本 composable 维护当前 placement state，下一次
-// REMINDER_FIRED_EVENT 时按方向选 playAction id：
-//   - placement === 'above' → playAction('glance_up')   抬头（兼容旧 'nod' 行为）
-//   - placement === 'below' → playAction('glance_down') 低头
-// 默认值 'above' 保证 placement 事件 race 未到达时行为与旧版一致。
+// 2026-05-26 第二轮修订（用户 e2e 反馈）：
+// - 触发节流：原版每条 REMINDER_FIRED_EVENT 都触发 glance（+ 30s 同 id dedup），
+//   实测体感像"抽搐"；用户要求"只在弹窗出现时看，叠加不再重复"。
+//   新触发：监听 pet-reminder:active（仅当 count 0→1 emit）+ 配合 pet-reminder:placement
+//   决定方向。同 id 重 fire / 新条目叠卡 → 不再触发 glance。
+// - 持续时长：vrm.playGlance 已升级为 240 + 1600 + 240 ms 三段式（240 ease-in 抬到 peak，
+//   1600 hold "看着"，240 ease-out 回正），共 ~2 秒。
 //
-// dedup 阈值与历史一致（30s）：同 reminderId 在 30s 内重复 fire 不重复 playAction。
-// 这条与 PetReminderBubble 的同 id dedup（移到 newest + 刷新 payload）独立，
-// 各自负责"气泡 UX"和"角色动作"两条线。
+// 同时监听 pet-reminder:idle 防止 active 触发与 placement 到达之间窗口已关闭导致 stale glance。
 
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   PET_REMINDER_PLACEMENT_EVENT,
-  REMINDER_FIRED_EVENT,
   type PetReminderPlacement,
   type PetReminderPlacementPayload,
-  type ReminderFiredPayload,
 } from '@/types/reminder'
 import type { VRMRuntime } from '@/services/vrm'
 
-const DEDUP_WINDOW_MS = 30_000
+/** PetReminderOverlayApp 在 count 0→1 时 emit；Rust pet_overlay 收到后 reposition 并 emit placement。 */
+const PET_REMINDER_ACTIVE_EVENT = 'pet-reminder:active'
+/** count 1→0 时 emit。 */
+const PET_REMINDER_IDLE_EVENT = 'pet-reminder:idle'
 
 export function usePetGlance(
   runtime: VRMRuntime,
   isEnabled: () => boolean = () => true,
 ): void {
-  let unlistenFired: UnlistenFn | null = null
+  let unlistenActive: UnlistenFn | null = null
+  let unlistenIdle: UnlistenFn | null = null
   let unlistenPlacement: UnlistenFn | null = null
-  const lastFiredAt = new Map<string, number>()
-  // 默认 'above' — 兼容 placement 事件 race 未到达 / Rust 模块尚未 emit 过的初始态
+  // 默认 'above' — placement 事件 race 未到达时按上方处理
   const placement = ref<PetReminderPlacement>('above')
+  // active 事件已收到、等待 placement 到达以触发 glance 的临时门控
+  let pendingActive = false
+
+  function triggerGlance() {
+    if (!isEnabled()) return
+    const actionId = placement.value === 'below' ? 'glance_down' : 'glance_up'
+    runtime.playAction(actionId).catch((err) => {
+      console.warn('[pet-glance] playAction failed:', err)
+    })
+  }
 
   onMounted(async () => {
-    if (!isEnabled()) return
     try {
       unlistenPlacement = await listen<PetReminderPlacementPayload>(
         PET_REMINDER_PLACEMENT_EVENT,
@@ -45,32 +53,36 @@ export function usePetGlance(
           if (direction === 'above' || direction === 'below') {
             placement.value = direction
           }
+          // 仅当 active 在等待中（count 0→1 触发的本轮 reposition）时才放 glance；
+          // pet settle 触发的 placement 不放（避免移动 pet 后重复看）。
+          if (pendingActive) {
+            pendingActive = false
+            triggerGlance()
+          }
         },
       )
     } catch (e) {
       console.warn('[pet-glance] listen placement failed:', e)
     }
     try {
-      unlistenFired = await listen<ReminderFiredPayload>(REMINDER_FIRED_EVENT, (e) => {
-        if (!isEnabled()) return
-        const payload = e.payload
-        if (!payload?.reminderId) return
-        const now = performance.now()
-        const prev = lastFiredAt.get(payload.reminderId)
-        if (prev != null && now - prev < DEDUP_WINDOW_MS) return
-        lastFiredAt.set(payload.reminderId, now)
-        const actionId = placement.value === 'below' ? 'glance_down' : 'glance_up'
-        runtime.playAction(actionId).catch((err) => {
-          console.warn('[pet-glance] playAction failed:', err)
-        })
+      unlistenActive = await listen(PET_REMINDER_ACTIVE_EVENT, () => {
+        pendingActive = true
       })
     } catch (e) {
-      console.warn('[pet-glance] listen fired failed:', e)
+      console.warn('[pet-glance] listen active failed:', e)
+    }
+    try {
+      unlistenIdle = await listen(PET_REMINDER_IDLE_EVENT, () => {
+        pendingActive = false
+      })
+    } catch (e) {
+      console.warn('[pet-glance] listen idle failed:', e)
     }
   })
 
   onBeforeUnmount(() => {
-    unlistenFired?.()
+    unlistenActive?.()
+    unlistenIdle?.()
     unlistenPlacement?.()
   })
 }
