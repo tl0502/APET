@@ -11,6 +11,7 @@ pub mod permission_service;
 pub mod repos;
 pub mod runtime;
 pub mod safety_guard;
+pub mod safety_policy;
 pub mod state_store;
 
 pub use runtime::Kernel;
