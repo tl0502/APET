@@ -52,6 +52,8 @@ related:
 - **为什么**：用户人格可以很顽皮，但安全规则（自伤/违法/未成年）必须不可绕过。
 - **选了什么**：通用核心（全球 5 条：自伤/暴力/违法不指导、不冒充医疗/法律/金融、未成年保守、不泄露隐私、角色扮演不诱导混淆现实） + 地区补充（zh-CN 010-82951332/12320-5；international US 988 / UK 116123 / EU 116123）。版本号 v1.0 写入 `consent.version`，变更时强制重确认。
 - **代价**：拒答场景需要人格化文案，否则突兀；地区补充需要法务签字（或自查）。
+- **Updated 2026-05-24**：CA Runtime v3 spec 把 prefix 注入路径明确化（SafetyGuard.wrap_messages 是 kernel-owned trait，subsystem 不可 bypass）；新增 7-state FSM（pending → streaming → final_ok / final_redacted / final_blocked，含 scan_failed 保守降级）与流式 UI 替换语义；新增 `StreamEvent::ReplaceMessage` 协议（前端按 msg_id 覆盖）；scan 消费范围扩展（user input MVP 必扫；tool result + memory summary P1 必扫）。详 spec [`2026-05-24-companion-agent-runtime-design.md`](superpowers/specs/2026-05-24-companion-agent-runtime-design.md) §6.6 与 §13.2。
+- **Updated 2026-05-26**：SafetyGuard prefix 与 scan 的注入路径由 **SafetyPolicy** 决定（kernel-owned trait，4 scope toggle: PrefixInjection / UserInput / StreamToken / FinalOutput，出厂全 OFF，详 spec [`2026-05-26-safety-policy-configurable-design.md`](superpowers/specs/2026-05-26-safety-policy-configurable-design.md)）。原 "subsystem 无法 bypass" 语义保留（subsystem 仍必经 SafetyGuard 路径），但 "永远第一位/必扫" 改为 "policy 决定真注入/扫描 vs noop 时仍走 SafetyGuard 路径返 always-pass"。FSM 从 7-state 扩到 8-state（新增 `disabled` 终态）。ADR-006 安全前缀文本本身**不变**（用户启用 `safety:prefix_enabled` 时仍按本 ADR 文本注入，落 `assets/safety/prefix_v1.txt`）。
 
 ### ADR-007 LLM 游戏场景
 
@@ -286,8 +288,16 @@ related:
 
 ---
 
+### ADR-026 SafetyPolicy 可配置化（Phase A0 收口）
+
+- **为什么**：[CA Runtime v3 spec](superpowers/specs/2026-05-24-companion-agent-runtime-design.md) 把 SafetyGuard 定义为 always-on 强制注入，但单人 vibecoding 项目里 SafetyGuard 严格扫描不是核心产品诉求，强制全开违反"按需配置"项目哲学；同时 2026-05-25 Phase A0 审计暴露 mid-stream scan_token 未接入 + messages.safety_scan_status 列从未真写两项与 spec MUST 漂移。
+- **选什么**：在 kernel 内新建 `SafetyPolicy` trait + `ConfigKvSafetyPolicy`（4 config KV 持 `Arc<AtomicBool>`，详 spec [`2026-05-26-safety-policy-configurable-design.md`](superpowers/specs/2026-05-26-safety-policy-configurable-design.md)），作为 `SafetyGuardImpl` 的依赖；SafetyGuard 路径必经但 noop-when-disabled；同步收口 HIGH-1（scan_token 真接入 + trailing-window O(window) 优化 [#49](https://github.com/tl0502/APET/issues/49)）+ HIGH-2（safety_scan_status 列真写，新增 `disabled` 终态）；workspace popup 加 Safety 4-toggle UI；Constitution #1 改写为 "Safety Configurable"。
+- **代价**：SafetyGuard trait +1 方法（`is_enabled`）；messages.safety_scan_status 列从 7 状态扩到 8 状态；CA Runtime v3 spec §3/§4.2/§6.6/§6.6.2/§14.1 五处 Updated；ADR-006 二次 Updated；与原 spec "永远第一位/必扫" 语义弱化（path completeness 保留：subsystem 仍不得 bypass SafetyGuard 自建路径）；mid-stream scan_token 仍要做（不能借此偷工，dead code 全部消除）。
+
+---
+
 ## 命名约定
 
-新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-026**。
+新决策：`D-<NNN>-<kebab-case-title>`，编号单调递增。当前空闲：**ADR-027**。
 
 被覆盖的决策不删除，在原条目末尾加 `**Supersedes**：ADR-XXX (理由)`。
