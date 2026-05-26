@@ -599,7 +599,7 @@ pub enum ImportError {
 
 | # | 不变量 | 工程落地 |
 |---|---|---|
-| **1. Safety Sovereignty** | SafetyGuard 永远第一 | `safety_prefix` 由 kernel 强制拼到 system message 第一位;subsystem 拿到的 messages 已包好;任何 LLM stream finish 必经 `SafetyGuard.scan_final`;**7-state FSM 跨越流式/终态(见 §6.6)** |
+| **1. Safety Configurable** (Updated 2026-05-26, 原名 "Safety Sovereignty") | SafetyGuard 路径必经，是否真注入/扫描由 **SafetyPolicy** 决定 4 scope 各自启用 | `safety_prefix` 由 kernel 强制经 `SafetyGuard.wrap_messages` 走，subsystem 不得 bypass 自建路径; SafetyPolicy 4 KV (`safety:prefix_enabled` / `safety:scan_user_input_enabled` / `safety:scan_token_enabled` / `safety:scan_final_enabled`) 出厂全 OFF，用户经 IPC + workspace popup UI 配置；任何 LLM stream finish 必经 `SafetyGuard.scan_final` 路径 (off 时返 always-pass);**8-state FSM 跨越流式/终态(见 §6.6, 新增 `disabled` 终态)** |
 | **2. Single Writer per Table** | 每张 SQLite 表恰好 1 个 owner | **MVP: Repository pattern** — 每个 owner table 一个 repo, subsystem 只拿自己的 repo, repo 只暴露强类型写方法;raw `sqlx::Pool` 仅 kernel/db module 内可见;migration 是唯一例外。**P1 hardening: `WriterCap<T>` 类型期 token** (v1 设计推到 P1, MVP 不过度承诺类型期隔离) |
 | **3. Event-or-Direct** | subsystem 间通信只有两路 | (a) 同步调 owner read trait(仅 read);(b) 经 EventBus publish(异步通知,owner 自己 subscribe + write)。**禁止**第三种"直接调 owner write 方法"。**EventBus 失败分级** (见 §7.3): 关键表 fatal, observability 表 degrade |
 | **4. No Self-Ticking** | subsystem 不自封 timer | 仅 Scheduler 持有 tokio runtime handle;subsystem 实现 `on_scheduled_tick(reason)` callback |
@@ -666,7 +666,7 @@ pub enum ImportError {
 
 | Kernel 组件 | 责任 | 不变量 | Phase |
 |---|---|---|---|
-| **SafetyGuard** | ADR-006 prompt prefix 注入 + LLM 流式 token 增量扫描 + 终态全文扫描 + **7-state FSM** + 拒答降级链 | Prefix 永远位于 system message 第一位;subsystem 不能跳过 | A |
+| **SafetyGuard** | ADR-006 prompt prefix 注入 (policy-gated) + LLM 流式 token 增量扫描 + 终态全文扫描 + **8-state FSM (含 `disabled` 终态)** + 拒答降级链 | SafetyGuard 路径必经，是否真注入/扫描由 SafetyPolicy 决定（4 scope toggle 出厂全 OFF）；subsystem 不得 bypass SafetyGuard 自建路径 | A |
 | **LifecycleManager** | Boot/Live/Suspend/Wake/Shutdown FSM + 启动顺序 + dependency wiring | 同一时刻 Runtime 状态唯一;Wake 后 state 一致性自检 | A |
 | **EventBus** | 类型化 pub/sub + 同步派发 + 持久化关键事件到 `event_log` + **失败分级降级 (§7.3)** | 任一 publish 都至少持久化 schema_version + payload;关键 owner 写失败 fatal-for-conv, observability 失败 degrade 到 error_logs | A 占位 / B 真接入 |
 | **Scheduler** | cron + idle-threshold + one-shot + periodic 4 种触发统一调度 | 单实例 tokio runtime;不允许 subsystem 自起 timer | B |
@@ -897,58 +897,87 @@ user_input → ConversationSub.handle_user_message(conv_id)
 - ❌ wandering 不 tick(scheduler 周期触发 + 一次算路径 + 播放完即停)
 - ❌ Conversing/Toolusing 完全 event-driven
 
-### 6.6 SafetyGuard 7-state FSM（v2 新增, reviewer P0）
+### 6.6 SafetyGuard 8-state FSM（Updated 2026-05-26：从 7-state 扩，新增 disabled 终态）
 
 > v1 缺口: SafetyGuard 只描述"wrap + scan"两动作, 没有定义流式 token 已发 → final scan 命中违禁的回滚 / UI 替换 / DB 状态 / event 生命周期。本节是 Constitution #1 工程落地的核心。
 
+#### 6.6.0 SafetyPolicy 与 SafetyGuard 协作（Updated 2026-05-26）
+
+SafetyPolicy 是 kernel-owned trait（不是 Kernel 第 8 件套，仍 7 件套；SafetyPolicy 作为 SafetyGuardImpl 的依赖注入）。详 spec [`2026-05-26-safety-policy-configurable-design.md`](2026-05-26-safety-policy-configurable-design.md)。
+
+```rust
+pub enum SafetyScope { PrefixInjection, UserInput, StreamToken, FinalOutput }
+
+pub trait SafetyPolicy: Send + Sync {
+    fn is_enabled(&self, scope: SafetyScope) -> bool;
+    async fn set_enabled(&self, scope: SafetyScope, enabled: bool) -> Result<(), PolicyError>;
+}
+
+pub trait SafetyGuard {
+    fn is_enabled(&self, scope: SafetyScope) -> bool;  // 转发 policy
+    // ... 其余 4 方法 noop-when-disabled
+}
+```
+
+4 个 config KV（出厂全 OFF）：
+
+| Key | Default | 控制 |
+|---|---|---|
+| `safety:prefix_enabled` | `false` | wrap_messages 注入 ADR-006 prefix |
+| `safety:scan_user_input_enabled` | `false` | scan_user_input (Scope #1) |
+| `safety:scan_token_enabled` | `false` | scan_token (Scope #2) |
+| `safety:scan_final_enabled` | `false` | scan_final (Scope #3) |
+
+ConfigKvSafetyPolicy 持 4 个 `Arc<AtomicBool>`，boot 时同步读 KV 加载，运行期 atomic 读不 hit DB；`set_enabled` 写 DB 成功后才同步更新内存 AtomicBool（保持 DB 与内存一致）。
+
 **针对对象**: assistant message (LLM 返回的每一条消息);user input / tool result / memory summary 在 P1 评估是否走同一 FSM。
 
-**7 个状态** (`messages.safety_scan_status` 枚举值):
+**8 个状态** (`messages.safety_scan_status` 枚举值, Updated 2026-05-26 加 `disabled`):
 
 ```
                           ┌─────────────┐
                           │   pending   │ 消息创建, 尚未开始 stream
                           └──────┬──────┘
-                                 │ stream 启动
-                                 ↓
-                          ┌─────────────┐
-                          │  streaming  │ 流式拼接中
-                          └──────┬──────┘
-                                 │ scan_token 每 chunk
-            ┌────────────────────┼────────────────────┐
-            │ soft hit           │ 终态                │ 流式中断
-            ↓                    ↓                     ↓
-   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-   │stream_soft_block │  │  scan_final 调用 │  │   scan_failed    │
-   │ (插占位 "[审核中]│  │                   │  │ (网络断 / panic) │
-   │  替换最近 N token)│  └────────┬─────────┘  │  保守降级 = redact│
-   └────────┬─────────┘           │             └────────┬─────────┘
-            │                     │                       │
-            │             ┌───────┼────────┐              │
-            │ scan_final  │ ok    │ block  │ redact       │
-            │ 重判       ↓       ↓        ↓              │
-            │     ┌──────────┐ ┌──────────┐ ┌────────────┐│
-            └────→│ final_ok │ │  final_  │ │   final_   ││
-                  │          │ │  blocked │ │   redacted │←┘
-                  │ 流式拼接 │ │ UI 整条  │ │ UI 替换违禁│
-                  │ 内容保留 │ │ 替换 fall│ │ 部分 + 标记│
-                  │          │ │ back 文案│ │            │
-                  └──────────┘ └────┬─────┘ └────────────┘
-                                    │
-                                    └─→ publish safety.violation
+                                 │ run_stream 启动
+            ┌────────────────────┼───────────────────┐
+            │ policy.scan_final  │ policy.scan_final │
+            │ OFF                │ ON                │
+            ↓                    ↓                   │
+       ┌──────────┐         ┌─────────────┐          │
+       │ disabled │ (终态)  │  streaming  │          │
+       │          │         └──────┬──────┘          │
+       └──────────┘                │ scan_token chunk
+                                   │ (policy.scan_token ON)
+              ┌────────────────────┼────────────────────┐
+              │ soft hit           │ 终态                │ 流式中断
+              ↓                    ↓                     ↓
+     ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+     │stream_soft_block │  │  scan_final 调用 │  │   scan_failed    │
+     │ (插占位 "[审核中]│  │                   │  │ (网络断 / panic) │
+     │  替换最近 N token)│  └────────┬─────────┘  │  保守降级 = redact│
+     └────────┬─────────┘           │             └────────┬─────────┘
+              │                     │                       │
+              │             ┌───────┼────────┐              │
+              │ scan_final  │ ok    │ block  │ redact       │
+              │ 重判       ↓       ↓        ↓              │
+              │     ┌──────────┐ ┌──────────┐ ┌────────────┐│
+              └────→│ final_ok │ │  final_  │ │   final_   ││
+                    │          │ │  blocked │ │   redacted │←┘
+                    └──────────┘ └────┬─────┘ └────────────┘
+                                      │
+                               publish safety.violation
 ```
 
-**状态详解**:
-
-| 状态 | 含义 | DB.messages 内容 | UI 表现 | publish event |
-|---|---|---|---|---|
-| `pending` | 消息行已 INSERT, content="", scan 未开始 | content="" | placeholder typing | — |
-| `streaming` | LLM stream 中, token 边到边送 UI 边累积 | content = 累积 partial | typing 动画 + 流式文字 | — |
-| `stream_soft_blocked` | scan_token 命中**软规则** (黑词低危); 累积区最近 N token 被替换为 `[审核中…]` 标记 | content = partial (含 redact 标记) | 流式继续, 用户看到提示 | — |
-| `final_ok` | scan_final 通过 | content = 全文; safety_scan_status='final_ok' | 流式自然结束 | — |
-| `final_redacted` | scan_final 命中**部分违禁**, 替换违禁段落保留剩余 | content = redacted 全文 | UI **replace_message** event 替换显示 (流式 token 显示阶段已发的违禁段被 strikethrough 或 silent overwrite) | `safety.violation` (action=redact) |
-| `final_blocked` | scan_final 命中**严重违禁**, 整条消息废弃 | content = SafetyGuard fallback 拒答模板 | UI **replace_message** 整条换 fallback | `safety.violation` (action=block) |
-| `scan_failed` | scan 自身崩 (regex panic / 词典加载失败) | content = 累积 partial; safety_scan_status='scan_failed' | UI 显示警告 banner "审核降级, 已隐藏" + 整条 fallback | `safety.violation` (action=scan_failed) |
+| 状态 | 含义 | DB.messages 内容 |
+|---|---|---|
+| `pending` | INSERT placeholder | content="" |
+| `streaming` | scan_token ON 流中 | content = partial |
+| `stream_soft_blocked` | scan_token chunk soft hit | content = partial 含 redact 标记 |
+| `final_ok` | scan_final ON + 全文通过 | 全文 |
+| `final_redacted` | scan_final ON + soft 命中 | redacted 全文 |
+| `final_blocked` | scan_final ON + hard 命中（含 scan_token hard hit 强制终态） | fallback 文案 |
+| `scan_failed` | scan 自身崩 | partial + warning |
+| **`disabled`** (新, Updated 2026-05-26) | **scan_final OFF**, ChatService 流末显式写入 | LLM 原文 |
 
 **关键转移规则**:
 
@@ -996,11 +1025,11 @@ v2 7-state vs 4 分支:
 
 > reviewer P0: 必须明确"哪些内容在哪个阶段被扫"。下表是 SafetyScanRules 的完整 scope 矩阵。
 
-| # | Scope (被扫内容) | 来源 | scan_user_input | scan_token | scan_final | Phase | 命中处理 |
+| # | Scope (被扫内容) | 来源 | scan_user_input | scan_token | scan_final | **Phase / default enabled (Updated 2026-05-26)** | 命中处理 |
 |---|---|---|---|---|---|---|---|
-| 1 | **user input** | 任一 surface 用户输入 | ✅ | — | — | A0 | hit → ChatError::UnsafeInput, ConversationSub 拒发 LLM, UI 显示拒绝原因 |
-| 2 | **assistant stream token** | LLM 流式 token chunk | — | ✅ | — | A0 | soft hit → stream_soft_blocked (替换最近 N token 为 `[审核中…]`);hard hit → 强制 finish + scan_final |
-| 3 | **assistant final text** | LLM 流式终态全文 | — | — | ✅ | A0 | 决定 final_ok / final_redacted / final_blocked / scan_failed (§6.6 7-state FSM) |
+| 1 | **user input** | 任一 surface 用户输入 | ✅ | — | — | A0 / **OFF (KV `safety:scan_user_input_enabled`)** | hit → ChatError::UnsafeInput, ConversationSub 拒发 LLM, UI 显示拒绝原因 |
+| 2 | **assistant stream token** | LLM 流式 token chunk | — | ✅ | — | A0 / **OFF (KV `safety:scan_token_enabled`)** | soft hit → stream_soft_blocked (替换最近 N token 为 `[审核中…]`);hard hit → 强制 finish + scan_final |
+| 3 | **assistant final text** | LLM 流式终态全文 | — | — | ✅ | A0 / **OFF (KV `safety:scan_final_enabled`)** | 决定 final_ok / final_redacted / final_blocked / scan_failed (§6.6 8-state FSM) |
 | 4 | **memory KV** (从 `memory` 表读出, 拼入 system message 前) | MemorySub.retrieve_kv 输出 | — | — | ✅ (Phase A2 起) | A2 | hit → 该 KV bullet 不拼入 prompt + 写 error_logs (用户曾输入违禁内容到 KV 时防再次出现) |
 | 5 | **rolling_summary** (Phase A2 占位不扫;P1 真接入时必扫) | MemorySub.maybe_roll_summary 输出 | — | — | ✅ (P1 起) | P1 | hit → 整条摘要丢弃, conversations.rolling_summary 保持 NULL / 占位 + 写 safety.violation |
 | 6 | **tool result content** | ToolSub.execute 返回 (read 文件 / grep 命中行 etc.) | — | — | ✅ | C | hit → ToolError::ResultUnsafe + 不 inject 到 LLM messages + audit log 标记 |
@@ -1010,8 +1039,21 @@ v2 7-state vs 4 分支:
 - 任一 Scope 出 hit 都不允许 silent pass — 必须有显式拒绝路径
 - LLM 产物 (scope 2, 3, 5) hit 必须 publish `safety.violation` event
 - 用户输入 (scope 1) hit 仅 UI 告知, 不 publish safety.violation (避免误报骚扰)
-- Phase A0 必上 scope 1+2+3 (即原有 7-state FSM 全集);Phase A2 加 scope 4;Phase C 加 scope 6;P1+ 加 scope 5+7
+- Phase A0 **接通**路径 scope 1+2+3 + 默认 OFF + 用户经 KV/UI 可启用；Phase A2 加 scope 4；Phase C 加 scope 6；P1+ 加 scope 5+7
 - `scan_final` 是 entry point, 内部根据 source 应用不同 SafetyScanRules 子集 (用户输入 vs LLM 产物的规则可不同)
+
+#### 6.6.3 Cross-scope 互动表（Updated 2026-05-26）
+
+`PrefixInjection` 与 scan 系列**独立**；`UserInput` 与 assistant message 的 safety_scan_status **无关**。
+
+`scan_token` × `scan_final` 4 组合：
+
+| `scan_token` | `scan_final` | 流末状态写入 |
+|---|---|---|
+| OFF | OFF | `disabled` |
+| OFF | ON | `final_ok` / `final_redacted` / `final_blocked` |
+| ON | ON | 完整 8-state FSM |
+| ON | OFF | mid-stream hit → `stream_soft_blocked` / `final_blocked`（hard hit 强制终态）；无命中 → `disabled` |
 
 ### 6.7 Lazy 计算（read-time compute, 不持久化中间值）
 
@@ -2550,7 +2592,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 | ADR | 主题 | Phase | 状态 |
 |---|---|---|---|
 | **ADR-025** | Agent 工具沙盒规则 (path whitelist + denylist + capability + GrantBroker UX + Audit log) | C | 草案 (本 spec §11 提供 MVP 默认), 独立 ADR 文档需撰写; Phase C 阻塞前置 |
-| **ADR-026** | Companion Agent Runtime 顶层架构 + MVP Phasing (本 spec v2 摘要 + 三阶段 + 14 Constitution) | A | 本 spec 通过后归档为 ADR-026 |
+| **ADR-030** | Companion Agent Runtime 顶层架构 + MVP Phasing (本 spec v2 摘要 + 四阶段 + 14 Constitution) | A | 本 spec 通过后归档为 ADR-030（编号让位 2026-05-26: ADR-026 已用于 SafetyPolicy 可配置化, 详 [`2026-05-26-safety-policy-configurable-design.md`](2026-05-26-safety-policy-configurable-design.md)） |
 | **ADR-027** | Memory MVP vs P1 (Phase A: KV+window+rolling_summary; Phase C: episodic+FTS5+RetrievalRanker+LLM 摘要) | A/C | 本 spec §9 提供完整草案 (含 Phase 分界 + 进入门槛), 独立 ADR 撰写 |
 | **🆕 ADR-028** | Soul Package Format (`.soul/` 多文件包 + `.soulpack` 分发 + SoulCompiler + SoulRuntimeProfile + PersonaSnapshot binding) | A | 本 spec §2.6 + §8.3 提供 MVP 默认 (含 schema + validator 黑名单 + 3 内置人格迁移路径), 独立 ADR 撰写 |
 | **🆕 ADR-029** | Context Awareness Permission (默认全 deny + 显式授权 + PermissionService 收口 + context_access_log + 三权限域分离) | A 框架 / P1 实施 | 本 spec §2.4 + §11.1 + §11.6 提供权限模型, 独立 ADR 撰写; MVP 仅落 PermissionService stub + 审计表 + 设置面板 "未启用" 提示 |
@@ -2560,7 +2602,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 | ADR | 原状态 | Updated 内容 |
 |---|---|---|
 | **ADR-003** | "用户角色定义 `.soul.md` schema v2 + 3 内置人格 + 安全前缀拼装" | Updated 2026-05-24: 底层格式扩为 `.soul/` 多文件包 (manifest.toml + identity.md + style.toml + initiative.toml + memory.toml + examples.md);`.soul.md` 简单模式保留作为 SoulCompiler 的 LegacyMd 输入;**内置 3 人格 momo/joker/coach 在 Phase A 迁移到 `.soul/` 目录布局**;Conversation 必须强制绑定 PersonaSnapshot, 严禁 hot path 读 active persona |
-| **ADR-006** | "安全前缀 v1.0,通用核心 + 地区补充" | Updated 2026-05-24: prefix 实际注入路径明确化 (SafetyGuard.wrap_messages, kernel-owned trait, subsystem 无法 bypass);**新增 7-state FSM** (pending → streaming → final_ok/final_redacted/final_blocked, 含 scan_failed 保守降级) 与流式 UI 替换语义;新增 StreamEvent::ReplaceMessage 协议 (前端按 msg_id 覆盖);scan 消费范围扩展 (user input MVP 必扫;tool result + memory summary P1 必扫) |
+| **ADR-006** | "安全前缀 v1.0,通用核心 + 地区补充" | Updated 2026-05-24: prefix 实际注入路径明确化 (SafetyGuard.wrap_messages, kernel-owned trait, subsystem 无法 bypass);**新增 7-state FSM** (pending → streaming → final_ok/final_redacted/final_blocked, 含 scan_failed 保守降级) 与流式 UI 替换语义;新增 StreamEvent::ReplaceMessage 协议 (前端按 msg_id 覆盖);scan 消费范围扩展 (user input MVP 必扫;tool result + memory summary P1 必扫) **Updated 2026-05-26 二次**: SafetyGuard 注入路径由 SafetyPolicy 决定 4 scope toggle（出厂全 OFF，详 [`2026-05-26-safety-policy-configurable-design.md`](2026-05-26-safety-policy-configurable-design.md)）;7-state FSM 扩 8-state（加 `disabled` 终态）。原 "subsystem 无法 bypass" 语义保留, "永远第一位/必扫" 改为 "policy 决定 + noop-when-disabled 仍走路径"。 |
 | **ADR-015** | "对话面板三形态架构" | Updated 2026-05-24: ConversationStore 升级为 ConversationSubsystem;三 surface(pet/chat/workspace)共享 data layer 通过 EventBus 多 surface broadcast;**新增 `persona_snapshot_id` 强绑定** — 用户切换 active persona 不污染历史会话, 历史会话风格稳定 |
 | **ADR-018** | "LLM 三层抽象 + AgentService 工具调用框架" | Updated 2026-05-24: Layer 2 ChatService → ConversationSubsystem;Layer 3 AgentService → ToolSubsystem (本 spec **Phase C P1** 才接入, 不在 MVP);**Phase A 保留** 现有 `service.rs:338` 主动忽略 tool_call 行为不变 (LLM 调用 tools=vec![]);Phase C 启动时增量改造;沙盒细则推到 ADR-025 |
 
@@ -2586,9 +2628,13 @@ Phase C: deferred, 视 M4-M5 节奏决定
 - LifecycleManager FSM (5 顶层 state)
 - Boot 1-7 序列 (含新 PermissionService / GrantBroker init)
 - ConversationSub 接 SafetyGuard.wrap_messages + scan FSM
+- **MUST (Updated 2026-05-26)**: SafetyPolicy trait + ConfigKvSafetyPolicy + 4 config KV (`safety:prefix_enabled` / `safety:scan_user_input_enabled` / `safety:scan_token_enabled` / `safety:scan_final_enabled`，出厂全 OFF)
+- **MUST (Updated 2026-05-26)**: `messages.safety_scan_status` 列真接入 ChatService 主链路 (ConversationRepo 的 `update_safety_status` / `update_message_content_and_status` 真消费, 不再 dead code) — 修复 HIGH-2
+- **MUST (Updated 2026-05-26)**: `scan_token` 真接入 ChatService::run_stream on_delta + trailing-window 优化 (N=64 chars, O(window) 替代 O(n²)) + rule_id dedupe HashSet 防震荡 — 修复 HIGH-1 + 合并 [#49](https://github.com/tl0502/APET/issues/49)
+- **MUST (Updated 2026-05-26)**: workspace popup sidebar 加第 7 项 "Safety" 4-toggle UI
 
 **SHOULD** (Phase A0 不强制, 但若时间允许可一起做):
-- SafetyGuard scan_user_input 简单黑词扫
+- ~~SafetyGuard scan_user_input 简单黑词扫~~ (Updated 2026-05-26: 已上 MUST, 详上方; 规则保持现状 4 黑词 P1 评估扩)
 - Boot 8 subsystems 初始 (Phase A1 才完整)
 
 **MUST NOT** (Phase A0 严禁出现):
