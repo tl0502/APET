@@ -38,6 +38,14 @@ let unlistenViewChanged: UnlistenFn | null = null
 let unlistenAot: UnlistenFn | null = null
 let unlistenTrayOpened: UnlistenFn | null = null
 let unlistenTrayClosed: UnlistenFn | null = null
+let unlistenTrayFocused: UnlistenFn | null = null
+let unlistenTrayBlurred: UnlistenFn | null = null
+let unlistenPetFocus: (() => void) | null = null
+let petBlurTimer: number | null = null
+/** tray 实际获焦标志：pet blur-close 兜底用此 gate 避免误关二级展开。
+ *  - tray:tray-focused 到达 → true + cancel pending blur-close timer
+ *  - tray:tray-blurred 到达 → false */
+let trayIsFocused = false
 
 /** T10 (#31 follow-up B)：AOT 跨窗口广播事件名（Rust 端 toggle 时 emit）。
  *  R1 修复后前端不再启动期 read KV，仅 listen 此事件接 Rust 后续切换。 */
@@ -139,15 +147,50 @@ onMounted(async () => {
     console.warn('[App] listen pet:contextmenu:closed-ack failed:', e)
   }
 
-  // 2026-05-26 移除 pet 窗口 onFocusChanged → blur 60ms 关 tray 的兜底逻辑。
-  // 原因：用户点击 tray 内 "设置..." / "← 返回" 这类内部切换按钮时，焦点从 pet 窗
-  // 迁到 pet-command 窗 → pet 触发 blur → 60ms 后还没收到 closed-ack → 误关 tray，
-  // 用户看到 "无法二级展开"。
-  //
-  // 关闭兜底由以下三条 cover：
-  // - PetCommandOverlayApp 自身的 onFocusChanged：tray 失焦（点桌面/其他窗）→ closeAll
-  // - 本文件下方的 pointerdown capture：用户点回 pet 窗 → emit request-close
-  // - Esc：onPetKeyDown → emit request-close
+  // 2026-05-26 Bug 1 修：pet 窗 blur-close 兜底（点桌面 / 其他窗口关闭 tray）。
+  // 历史：commit 2b6ee25 曾移除此逻辑因为"60ms 无 gate 误关二级展开"。本次重加用
+  // trayIsFocused 正向门控 — tray 实际获焦时立刻取消 pending close timer，避免误关。
+  // 250ms 给 OS 焦点事件双窗 IPC 往返预留余量（pet blur + tray focus 几乎同时）。
+  try {
+    unlistenTrayFocused = await listen('pet:contextmenu:tray-focused', () => {
+      trayIsFocused = true
+      if (petBlurTimer !== null) {
+        window.clearTimeout(petBlurTimer)
+        petBlurTimer = null
+      }
+    })
+  } catch (e) {
+    console.warn('[App] listen tray-focused failed:', e)
+  }
+  try {
+    unlistenTrayBlurred = await listen('pet:contextmenu:tray-blurred', () => {
+      trayIsFocused = false
+    })
+  } catch (e) {
+    console.warn('[App] listen tray-blurred failed:', e)
+  }
+  try {
+    unlistenPetFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        if (petBlurTimer !== null) {
+          window.clearTimeout(petBlurTimer)
+          petBlurTimer = null
+        }
+        return
+      }
+      if (!commandTrayOpen.value) return
+      if (trayIsFocused) return  // 用户在 tray 内操作，不关
+      petBlurTimer = window.setTimeout(() => {
+        petBlurTimer = null
+        if (commandTrayOpen.value && !trayIsFocused) {
+          commandTrayOpen.value = false  // optimistic
+          void emitTauri('pet:contextmenu:request-close')
+        }
+      }, 250)
+    })
+  } catch (e) {
+    console.warn('[App] pet onFocusChanged listen failed:', e)
+  }
 
   // Esc / pet 窗左键 pointerdown 触发关闭 intent（跨窗 outside click 协议）。
   // capture phase 让 raycaster bubble-phase listener 之前先跑：raycaster pointerdown(button=0)
@@ -236,6 +279,13 @@ onBeforeUnmount(() => {
   unlistenAot?.()
   unlistenTrayOpened?.()
   unlistenTrayClosed?.()
+  unlistenTrayFocused?.()
+  unlistenTrayBlurred?.()
+  unlistenPetFocus?.()
+  if (petBlurTimer !== null) {
+    window.clearTimeout(petBlurTimer)
+    petBlurTimer = null
+  }
   window.removeEventListener('keydown', onPetKeyDown)
   window.removeEventListener('pointerdown', onPetWindowPointerDown, true)
 })

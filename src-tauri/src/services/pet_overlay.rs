@@ -90,6 +90,19 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) {
             hide_overlay(&app_handle, PET_COMMAND_OVERLAY_LABEL);
         });
     }
+    // 2026-05-26 Bug 2 修：tray 内部 closeAll（点 pill 后 emit close 关）只 emit
+    // closed-ack 同步 pet App.vue 的 ref，但不告知 Rust → 窗口仍 visible → 最后一条
+    // window:visibility-changed=true 留存 → reminder bubble stuck dim 40%。
+    // 镜像 request-close 行为：closed-ack 到达即 hide 窗 + clear state，覆盖所有关闭路径。
+    {
+        let app_handle = app.clone();
+        app.listen("pet:contextmenu:closed-ack", move |_| {
+            if let Some(state) = app_handle.try_state::<PetOverlayState>() {
+                state.command_is_open.store(false, Ordering::Release);
+            }
+            hide_overlay(&app_handle, PET_COMMAND_OVERLAY_LABEL);
+        });
+    }
 }
 
 /// pet WindowEvent::Moved 触发：立即 hide 两个 overlay + 调度 settled task。

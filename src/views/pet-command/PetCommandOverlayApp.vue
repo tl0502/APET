@@ -7,6 +7,9 @@
 // - PetCommandTray 用 position: absolute; inset: 4px 在 overlay 窗内自然填满
 // - 新增 onFocusChanged listener：overlay 获焦后再失焦（点桌面/其他窗口）→ closeAll()
 //   配合 App.vue 的 pet 窗 blur 监听，覆盖所有 click-outside 场景（结构性修复 P7）
+//
+// 2026-05-26 Bug 1 修：onFocusChanged 同时向 pet 窗 emit tray-focused / tray-blurred
+// 让 pet 窗的 blur-close 兜底能识别"用户正在 tray 内操作"避免误关二级展开。
 
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -49,11 +52,19 @@ function onKeyDown(e: KeyboardEvent) {
 onMounted(async () => {
   document.addEventListener('keydown', onKeyDown, true)
 
-  // P7: overlay 失焦（用户在 overlay 内点击按钮后、又点了别处）→ 关闭
+  // P7: overlay 失焦（用户在 overlay 内点击按钮后、又点了别处）→ 关闭。
+  // 2026-05-26 Bug 1 修：额外向 pet 窗广播 tray-focused / tray-blurred 信号，
+  // 让 pet 窗的 blur-close 兜底能识别"用户正在 tray 内操作"避免误关。
+  // 配合 App.vue 的 trayIsFocused 门控 → 二级展开不被误关 + 桌面点击仍关闭。
   const appWin = getCurrentWindow()
   try {
     unlistenFocus = await appWin.onFocusChanged(({ payload: focused }) => {
-      if (!focused && open.value) closeAll()
+      if (focused) {
+        void emit('pet:contextmenu:tray-focused')
+      } else {
+        void emit('pet:contextmenu:tray-blurred')
+        if (open.value) closeAll()
+      }
     })
   } catch (e) {
     console.warn('[pet-command-overlay] onFocusChanged listen failed:', e)
