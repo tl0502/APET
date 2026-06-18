@@ -176,7 +176,7 @@ WindowBuilder::new(app, "game_room", WindowUrl::App("game.html".into()))
 │   │  │  ├ LocalGameRunner (RPS / GuessNumber /       │           │  │
 │   │  │  │   WordChain)                               │           │  │
 │   │  │  └ LLMGameRunner   (StoryRelay / RolePlay)    │           │  │
-│   │  │  → 共用 SecurityGuard + token 上限            │           │  │
+│   │  │  → 共用 SafetyGuard + SafetyPolicy + token 上限│           │  │
 │   │  └──────────────────────────────────────────────┘           │  │
 │   │  ┌─────────────────┐                                         │  │
 │   │  │ Nickname        │  (扩展 MemoryService 的轻量 facade)     │  │
@@ -283,7 +283,7 @@ WindowBuilder::new(app, "game_room", WindowUrl::App("game.html".into()))
 | **MigrationService**(主进程) | DB schema 升级、备份、回滚(plugin-sql migrations preload,lesson §3) | 启动时执行 | M1+ |
 | **UpdaterService**(主进程,占位) | tauri-updater 集成 | `updater.check / install` | M3 |
 | **NetworkProbe**(主进程,占位) | 网络状态探测、模式切换通知 | event: `network:changed` | M3 |
-| **SecurityGuard**(主进程,占位) | 安全前缀注入、内容过滤(M1 占位,M3 G 真注入,ADR-006) | 内部,被 ChatService / LLMGameRunner 调用 | M3 G |
+| **SafetyGuard + SafetyPolicy**(主进程,kernel) | `SafetyGuard` 是 LLM 输入/输出必经路径；`SafetyPolicy` 控制 PrefixInjection / UserInput / StreamToken / FinalOutput 4 scope，出厂全 OFF | 内部,被 ChatService / LLMGameRunner 调用 | Phase A0+ |
 | **IdleDetector**(主进程,占位) | 键鼠空闲 + 键盘 burst 检测 | `current_idle_ms / subscribe` | M3(N.4 在 M2) |
 | **LivingPetService**(主进程,M1+) | mood / energy / wandering / DailySchedule + reminder hook + FOCUS / REMIND 期 wander 跳过 | `living_pet_get_state / record_interaction / force_stop / set_feature_enabled` | M1+(mood / energy / DailySchedule 待 M2-M3) |
 | **ProactiveCareService**(主进程,占位) | 主动关心调度 + 频率上限 + 文案选择 | `set_enabled / set_quiet_hours / set_idle_threshold / user_response` | M3 |
@@ -299,8 +299,8 @@ WindowBuilder::new(app, "game_room", WindowUrl::App("game.html".into()))
 
 ```
 前端 → IPC → 主进程服务 → 持久化 / 外部
-ChatService → SecurityGuard + PersonaService + MemoryService + NicknameService → LLMProvider
-LLMGameRunner → SecurityGuard + PersonaService + LLMProvider(prompt 含 game_scenes/<id>.yaml)
+ChatService / ConversationSub → PersonaSnapshot + Memory prompt context → PromptBuilder → SafetyGuard.wrap_messages(policy-gated) → LLMProvider
+LLMGameRunner → same runtime contract + game_scenes/<id>.yaml prompt material → SafetyGuard.wrap_messages(policy-gated) → LLMProvider
 PersonaService 不能调用 MemoryService / NicknameService / WardrobeService(防越权);由 ChatService / GameEngine 统一编排
 TaskService 与 PersonaService 互不依赖
 NicknameService 是 MemoryService 上的轻量 facade;桌宠"知道自己穿了什么"通过 system prompt 中的"当前装扮摘要"注入,而非人格直读 WardrobeService
@@ -843,34 +843,44 @@ trait LLMProvider {
 - **导出行为**:默认 `app.export_data` 不导出 secrets;用户勾选"包含敏感凭证"时再次确认(弹"二次输入主密码"对话框,使用 PBKDF2 派生 key 二次包装后导出)。
 - **跨设备迁移**:DPAPI 与设备/账户强绑定,迁移设备后用户需重新输入(设计取舍:牺牲迁移便捷换取无密钥管理负担)。
 
-### 8.2 安全前缀注入(SecurityGuard)
+### 8.2 Agent Runtime prompt contract（SafetyGuard + SafetyPolicy）
 
-正常对话拼装顺序:
+最新 prompt / runtime contract 以 [Agent Runtime Contract Design](../superpowers/specs/2026-06-18-agent-runtime-contract-design.md) 为准。
 
-```
-[ system: 安全前缀(不可见,固定文案,版本 v1.0,ADR-006) ]
-[ system: 当前人格 system prompt(由 .soul.md 渲染) ]
-[ system: 用户记忆摘要(注入键值对,含 username) ]
-[ user / assistant: 历史对话最近 N 轮 ]
-[ user: 本轮输入 ]
-```
-
-LLM 游戏拼装顺序(LLMGameRunner):
+正常对话拼装顺序：
 
 ```
-[ system: 安全前缀 ]
-[ system: 当前人格 system prompt ]
-[ system: game_scenes/<id>.yaml.system_prompt ]
-[ system: 用户记忆摘要(仅 username/作息等公共项) ]
-[ user / assistant: 本会话历史(game_session_events) ]
-[ user: 本轮输入 ]
+[可选 SafetyPrefix（SafetyPolicy.PrefixInjection=ON 时）]
+[app/runtime frame]
+[PersonaSnapshot.identity_prompt]
+[PersonaSnapshot.style_prompt]
+[user profile]
+[live state]
+[memory bullets]
+[few-shot examples]
+[history window]
+[本轮用户输入]
 ```
 
-**安全前缀始终位于人格与游戏场景之前**;游戏场景 yaml 的 `system_prompt` 不能包含"忽略安全规则"等指令(立项期由产品 + 法务复审,ADR-007)。
+LLM 游戏拼装顺序：
 
-LLM 输出后 SecurityGuard **二次扫描**;命中违禁时:
-- 正常对话 → 替换为人格 `## 拒答` 池或全局兜底。
-- LLM 游戏 → 优先用 `game_scenes/<id>.yaml.refusals`(每场景 ≥ 3 条人格化拒答),否则降级到人格 `## 拒答`,最末全局兜底。
+```
+[可选 SafetyPrefix（SafetyPolicy.PrefixInjection=ON 时）]
+[app/runtime frame]
+[PersonaSnapshot.identity_prompt]
+[PersonaSnapshot.style_prompt]
+[game scene system_prompt]
+[公共记忆摘要]
+[game session history]
+[本轮输入]
+```
+
+`SafetyPrefix` 不再是固定常开层。`SafetyPolicy` 4 scope 出厂默认 OFF；开启对应 scope 后，`SafetyGuard` 才执行 prefix 注入或输入/输出扫描。游戏场景 prompt 不能修改 SafetyPolicy、PermissionService、Tool policy 或 Memory 写入规则。
+
+命中扫描规则时：
+
+- 正常对话 → 由 `SafetyGuard` 产生替换内容，并通过 `StreamEvent::ReplaceMessage` 覆盖 UI。
+- LLM 游戏 → 优先用 `game_scenes/<id>.yaml.refusals`（每场景 ≥ 3 条人格化拒答），否则降级到人格 refusal 池，最末全局兜底。
 
 ### 8.3 输入侧防御
 
@@ -1076,9 +1086,9 @@ LLM 输出后 SecurityGuard **二次扫描**;命中违禁时:
 [LLMGameRunner]
  ├── 拼装 prompt(详见 §8.2 LLM 游戏拼装顺序)
  ├── 调 LLMProvider.chat_stream
- ├── 流式输出 → SecurityGuard 实时扫描
- │    ├── 命中违禁 → 替换为 game_scenes/story_relay.yaml.refusals 抽样(人格化拒答)
- │    └── 通过 → 输出
+ ├── 流式输出 → SafetyGuard scan path（SafetyPolicy.StreamToken / FinalOutput 开启时）
+ │    ├── 命中规则 → 替换为 game_scenes/story_relay.yaml.refusals 抽样（人格化拒答）
+ │    └── 未启用或通过 → 输出
  ├── 累计 total_tokens
  │    └── ≥ 2000 → emit 'game.token_budget_warning' + 返回 friendly 收尾
  └── 写 game_session_events  ↓ 前端流式渲染
@@ -1165,7 +1175,7 @@ LLM 输出后 SecurityGuard **二次扫描**;命中违禁时:
 ### 14.2 CI/CD
 
 - GitHub Actions(私有 runner):tag 触发 → 构建 → 签名(M5+,ADR-013) → 上传 manifest。
-- 单测覆盖率目标:核心服务(Persona / Chat / Task / SecurityGuard)≥ 70%。
+- 单测覆盖率目标:核心服务(Persona / Chat / Task / SafetyGuard / SafetyPolicy)≥ 70%。
 - CI 静态扫描:
   - `getUserMedia` / `MediaRecorder` / `AudioContext.createMediaStreamSource`(模块 P 隐私)
   - `GetForegroundWindow` / `GetWindowText`(模块 J 隐私)
@@ -1185,7 +1195,7 @@ LLM 输出后 SecurityGuard **二次扫描**;命中违禁时:
 | **M0**(W0) | 14 项 ADR Accepted、3 个内置人格定稿、灵魂宣誓文案、安全前缀文案、声音包来源、配饰美术管线、装扮付费 schema、小游戏 UI 风格、LLM 游戏场景白名单、桌宠渲染 spike(原 Live2D 改为 VRM,配饰挂载点 humanoid bone 验证；启动/内存预算推到 M5 自测期统一压测) |
 | **M1**(W1-2) | Tauri + Vue 3 项目骨架(组件库 spike 后定)、主进程 IPC 框架、桌宠透明窗口、Onboarding(含 Soul Pledge)、ChatService MVP、PersonaService MVP、LivingPetService 骨架 + 自由活动初版、NicknameService MVP + 昵称设置 UI |
 | **M2**(W3-4) | TaskService 全功能(C/D/E)、PersonaService 试聊沙盒 + 工坊、心情图标 + 精力衰减/恢复、`pet_runtime_state` 持久化、BossKeyService(摸鱼模式)、InteractionRouter(hitbox 解析 + reaction_table + 抗议规则)、RAWINPUT 实现 spike(决断 N.4 是否降级) |
-| **M3**(W5-6) | LLM Provider(OpenAI 兼容)、SecurityGuard、MigrationService、UpdaterService、IdleDetector + ProactiveCareService(频率上限 + 安静时段)、FileDropHandler(文本类)、MilestoneService(首次 7/30 天)、LivingPetService 日常时段表(R.3) |
+| **M3**(W5-6) | LLM Provider(OpenAI 兼容)、SafetyGuard + SafetyPolicy、MigrationService、UpdaterService、IdleDetector + ProactiveCareService(频率上限 + 安静时段)、FileDropHandler(文本类)、MilestoneService(首次 7/30 天)、LivingPetService 日常时段表(R.3) |
 | **M4**(W7-8) | WardrobeService(配饰 + 1 套节气皮肤)、VoiceEffectPlayer(默认音效包 + 静音逻辑)、用户纪念日 UI 与触发(S.4)、装扮工坊前端 |
 | **M5**(W9-10) | GameEngine(LocalGameRunner 3 个 + LLMGameRunner 2 个 + 安全前缀复用 + token 上限)、GameRoom 窗口、事件埋点齐全、性能调优、自测一周、可发布版 |
 
