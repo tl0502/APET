@@ -1,5 +1,7 @@
 # SafetyPolicy 可配置化 Implementation Plan
 
+> **Revision note (2026-06-18)**: 本 plan 已按 [`2026-06-18-agent-runtime-contract-design.md`](../specs/2026-06-18-agent-runtime-contract-design.md) 修订。以 2026-06-18 契约为准：`PrefixInjection` 出厂 OFF；`FinalOutput` OFF 只在没有更高优先级安全命中时写 `disabled`；`ScanTokenResult::SoftBlock` 必须携带 `rule_id`；hard hit 使用 dedicated safety-blocked finalization，不复用普通 cancel 分支；`scan_final` 审计上下文使用 `persona_snapshot_id`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 SafetyGuard 从 always-on 强制改为 kernel-owned SafetyPolicy 驱动 4 scope toggle (PrefixInjection / UserInput / StreamToken / FinalOutput)，出厂全 OFF。同步收口 Phase A0 审计的 HIGH-1（mid-stream scan_token 真接入 + trailing-window N=64 优化，并入 #49）+ HIGH-2（messages.safety_scan_status 列真接入 ChatService 主链路 + 新增 `disabled` 终态消除 dead code），并加 workspace popup Safety panel 4-toggle UI。
@@ -21,7 +23,7 @@
 | `src-tauri/src/kernel/safety_guard.rs` | 改 | trait +1 方法 `is_enabled`; `SafetyGuardImpl` 持 `Arc<dyn SafetyPolicy>`; 4 方法 noop short-circuit; `scan_token` 改 trailing-window N=64 chars + 单测 |
 | `src-tauri/src/kernel/repos/conversation_repo.rs` | 改 | `SafetyScanStatus` enum +1 variant `Disabled` + 单测 |
 | `src-tauri/src/kernel/runtime.rs` | 改 | `Kernel` struct +1 field `safety_policy`; `Kernel::boot` 加 Boot 3.5 (SafetyPolicy::load_from_kv); `SafetyGuardImpl::from_text(prefix, policy)` 改签名 |
-| `src-tauri/src/services/chat/service.rs` | 改 | 4 接线点（scan_user_input / wrap_messages / on_delta scan_token / run_stream Ok 分支末尾 safety_scan_status 真写）+ rule_id dedupe HashSet + ConversationRepo 真接入 + mode 列 6→3 值 + 测试改/新 |
+| `src-tauri/src/services/chat/service.rs` | 改 | 4 接线点（scan_user_input / wrap_messages / on_delta scan_token / run_stream Ok 分支末尾 safety_scan_status 真写）+ `StreamSafetyState` rule_id dedupe + ConversationRepo 真接入 + mode 列 6→3 值 + 测试改/新 |
 | `src-tauri/src/commands/safety.rs` | 新建 | `safety_get_policy` / `safety_set_policy_scope` IPC + 单测 |
 | `src-tauri/src/commands/mod.rs` | 改 | `pub mod safety;` |
 | `src-tauri/src/lib.rs` | 改 | `invoke_handler` 加 `safety_get_policy` / `safety_set_policy_scope` |
@@ -182,40 +184,47 @@ ConfigKvSafetyPolicy 持 4 个 `Arc<AtomicBool>`，boot 时同步读 KV 加载�
 定位原 FSM ASCII 图（约 line 906-940），整段替换为：
 
 ```markdown
-**8 个状态** (`messages.safety_scan_status` 枚举值, Updated 2026-05-26 加 `disabled`):
+**8 个状态** (`messages.safety_scan_status` 枚举值, Updated 2026-06-18 明确终态优先级):
 
 ```
                           ┌─────────────┐
                           │   pending   │ 消息创建, 尚未开始 stream
                           └──────┬──────┘
                                  │ run_stream 启动
-            ┌────────────────────┼───────────────────┐
-            │ policy.scan_final  │ policy.scan_final │
-            │ OFF                │ ON                │
-            ↓                    ↓                   │
-       ┌──────────┐         ┌─────────────┐          │
-       │ disabled │ (终态)  │  streaming  │          │
-       │          │         └──────┬──────┘          │
-       └──────────┘                │ scan_token chunk
-                                   │ (policy.scan_token ON)
-              ┌────────────────────┼────────────────────┐
-              │ soft hit           │ 终态                │ 流式中断
-              ↓                    ↓                     ↓
-     ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-     │stream_soft_block │  │  scan_final 调用 │  │   scan_failed    │
-     │ (插占位 "[审核中]│  │                   │  │ (网络断 / panic) │
-     │  替换最近 N token)│  └────────┬─────────┘  │  保守降级 = redact│
-     └────────┬─────────┘           │             └────────┬─────────┘
-              │                     │                       │
-              │             ┌───────┼────────┐              │
-              │ scan_final  │ ok    │ block  │ redact       │
-              │ 重判       ↓       ↓        ↓              │
-              │     ┌──────────┐ ┌──────────┐ ┌────────────┐│
-              └────→│ final_ok │ │  final_  │ │   final_   ││
-                    │          │ │  blocked │ │   redacted │←┘
-                    └──────────┘ └────┬─────┘ └────────────┘
-                                      │
-                               publish safety.violation
+                           ┌─────────────┐
+                           │  streaming  │
+                           └──────┬──────┘
+                                  │
+        ┌─────────────────────────┼──────────────────────────┐
+        │ scan_token hard hit     │ scan_token soft hit      │ finish/no hit
+        ↓                         ↓                          ↓
+ ┌───────────────┐       ┌───────────────────┐       ┌────────────────────┐
+ │ final_blocked │       │stream_soft_blocked│       │ finalization gate  │
+ │ dedicated path│       │ keep stream state │       │                    │
+ └───────────────┘       └─────────┬─────────┘       └──────────┬─────────┘
+                                   │                            │
+                                   └──────────────┬─────────────┘
+                                                  ↓
+                                      ┌──────────────────────┐
+                                      │ FinalOutput policy   │
+                                      └──────┬────────┬──────┘
+                                             │ ON     │ OFF
+                                             ↓        ↓
+                              ┌──────────────────┐ ┌────────────────────┐
+                              │ scan_final path  │ │ terminal priority  │
+                              └───────┬──────────┘ └──────┬─────────────┘
+                                      │                   │
+                  ┌───────────────────┼─────────────┐     │
+                  ↓                   ↓             ↓     ↓
+            ┌──────────┐       ┌────────────┐ ┌──────────┐ ┌──────────┐
+            │ final_ok │       │final_redact│ │final_blk │ │ disabled │
+            └──────────┘       └────────────┘ └──────────┘ └──────────┘
+
+Priority when deriving terminal status:
+1. `ScanTokenResult::HardEnd` -> `final_blocked` via dedicated safety-blocked finalization.
+2. `FinalOutput=ON` -> `scan_final` result decides `final_ok` / `final_redacted` / `final_blocked` / `scan_failed`.
+3. `StreamToken=ON` soft hit + `FinalOutput=OFF` -> `stream_soft_blocked`.
+4. No earlier safety hit + `FinalOutput=OFF` -> `disabled`.
 ```
 
 | 状态 | 含义 | DB.messages 内容 |
@@ -227,7 +236,7 @@ ConfigKvSafetyPolicy 持 4 个 `Arc<AtomicBool>`，boot 时同步读 KV 加载�
 | `final_redacted` | scan_final ON + soft 命中 | redacted 全文 |
 | `final_blocked` | scan_final ON + hard 命中（含 scan_token hard hit 强制终态） | fallback 文案 |
 | `scan_failed` | scan 自身崩 | partial + warning |
-| **`disabled`** (新, Updated 2026-05-26) | **scan_final OFF**, ChatService 流末显式写入 | LLM 原文 |
+| **`disabled`** (新, Updated 2026-06-18) | **FinalOutput OFF 且无更高优先级安全命中**, ChatService 流末显式写入 | LLM 原文 |
 ```
 
 - [ ] **Step 2.5: §6.6.3 Cross-scope 互动表（新增）**
@@ -240,14 +249,14 @@ ConfigKvSafetyPolicy 持 4 个 `Arc<AtomicBool>`，boot 时同步读 KV 加载�
 
 `PrefixInjection` 与 scan 系列**独立**；`UserInput` 与 assistant message 的 safety_scan_status **无关**。
 
-`scan_token` × `scan_final` 4 组合：
+`scan_token` × `scan_final` 4 组合（Updated 2026-06-18，与 Agent Runtime Contract §6 priority table 保持一致）：
 
 | `scan_token` | `scan_final` | 流末状态写入 |
 |---|---|---|
 | OFF | OFF | `disabled` |
 | OFF | ON | `final_ok` / `final_redacted` / `final_blocked` |
 | ON | ON | 完整 8-state FSM |
-| ON | OFF | mid-stream hit → `stream_soft_blocked` / `final_blocked`（hard hit 强制终态）；无命中 → `disabled` |
+| ON | OFF | hard hit → `final_blocked`；soft hit → `stream_soft_blocked`；无命中 → `disabled` |
 ```
 
 - [ ] **Step 2.6: §6.6.2 Scan Scope Matrix 每行加 default enabled 列**
@@ -258,7 +267,7 @@ ConfigKvSafetyPolicy 持 4 个 `Arc<AtomicBool>`，boot 时同步读 KV 加载�
 | # | Scope (被扫内容) | 来源 | scan_user_input | scan_token | scan_final | **Phase / default enabled (Updated 2026-05-26)** | 命中处理 |
 |---|---|---|---|---|---|---|---|
 | 1 | **user input** | 任一 surface 用户输入 | ✅ | — | — | A0 / **OFF (KV `safety:scan_user_input_enabled`)** | hit → ChatError::UnsafeInput, ConversationSub 拒发 LLM, UI 显示拒绝原因 |
-| 2 | **assistant stream token** | LLM 流式 token chunk | — | ✅ | — | A0 / **OFF (KV `safety:scan_token_enabled`)** | soft hit → stream_soft_blocked (替换最近 N token 为 `[审核中…]`);hard hit → 强制 finish + scan_final |
+| 2 | **assistant stream token** | LLM 流式 token chunk | — | ✅ | — | A0 / **OFF (KV `safety:scan_token_enabled`)** | soft hit → stream_soft_blocked (替换最近 N token 为 `[审核中…]`);hard hit → dedicated `final_blocked` finalization |
 | 3 | **assistant final text** | LLM 流式终态全文 | — | — | ✅ | A0 / **OFF (KV `safety:scan_final_enabled`)** | 决定 final_ok / final_redacted / final_blocked / scan_failed (§6.6 8-state FSM) |
 ```
 
@@ -291,7 +300,7 @@ ConfigKvSafetyPolicy 持 4 个 `Arc<AtomicBool>`，boot 时同步读 KV 加载�
 ```markdown
 - **MUST (Updated 2026-05-26)**: SafetyPolicy trait + ConfigKvSafetyPolicy + 4 config KV (`safety:prefix_enabled` / `safety:scan_user_input_enabled` / `safety:scan_token_enabled` / `safety:scan_final_enabled`，出厂全 OFF)
 - **MUST (Updated 2026-05-26)**: `messages.safety_scan_status` 列真接入 ChatService 主链路 (ConversationRepo 的 `update_safety_status` / `update_message_content_and_status` 真消费, 不再 dead code) — 修复 HIGH-2
-- **MUST (Updated 2026-05-26)**: `scan_token` 真接入 ChatService::run_stream on_delta + trailing-window 优化 (N=64 chars, O(window) 替代 O(n²)) + rule_id dedupe HashSet 防震荡 — 修复 HIGH-1 + 合并 [#49](https://github.com/tl0502/APET/issues/49)
+- **MUST (Updated 2026-06-18)**: `scan_token` 真接入 ChatService::run_stream on_delta + trailing-window 优化 (N=64 chars, O(window) 替代 O(n²)) + `StreamSafetyState` rule_id dedupe 防震荡；SoftBlock 必须携带 `rule_id` — 修复 HIGH-1 + 合并 [#49](https://github.com/tl0502/APET/issues/49)
 - **MUST (Updated 2026-05-26)**: workspace popup sidebar 加第 7 项 "Safety" 4-toggle UI
 ```
 
@@ -998,7 +1007,23 @@ pub trait SafetyGuard: Send + Sync {
 }
 ```
 
-(c) 修改 `SafetyGuardImpl` struct（约 line 91）加 policy 字段：
+(c) 修改 `ScanTokenResult::SoftBlock` variant（约 line 70）加 `rule_id`：
+
+```rust
+pub enum ScanTokenResult {
+    Pass,
+    SoftBlock {
+        rule_id: String,
+        replace_last_n: usize,
+        placeholder: String,
+    },
+    HardEnd {
+        rule_id: String,
+    },
+}
+```
+
+(d) 修改 `SafetyGuardImpl` struct（约 line 91）加 policy 字段：
 
 ```rust
 pub struct SafetyGuardImpl {
@@ -1010,7 +1035,7 @@ pub struct SafetyGuardImpl {
 }
 ```
 
-(d) 修改 `impl SafetyGuardImpl::from_text` 改名为 `from_text_with_policy`（原 `from_text` 留作 backwards-compat helper 调 from_text_with_policy with no-op policy）。同时改 `load`：
+(e) 修改 `impl SafetyGuardImpl::from_text` 改名为 `from_text_with_policy`（原 `from_text` 留作 backwards-compat helper 调 from_text_with_policy with no-op policy）。同时改 `load`：
 
 ```rust
 impl SafetyGuardImpl {
@@ -1056,7 +1081,7 @@ impl SafetyGuardImpl {
 }
 ```
 
-(e) 修改 `impl SafetyGuard for SafetyGuardImpl` 4 方法加短路：
+(f) 修改 `impl SafetyGuard for SafetyGuardImpl` 4 方法加短路：
 
 ```rust
 impl SafetyGuard for SafetyGuardImpl {
@@ -1101,6 +1126,7 @@ impl SafetyGuard for SafetyGuardImpl {
         for rule in &self.soft_blocklist {
             if tail.contains(rule) {
                 return ScanTokenResult::SoftBlock {
+                    rule_id: rule.to_string(),
                     replace_last_n: 8,
                     placeholder: "[审核中…]".to_string(),
                 };
@@ -1303,6 +1329,24 @@ Updated 2026-05-26:
     }
 
     #[test]
+    fn scan_token_soft_block_includes_rule_id() {
+        let guard = make_guard();
+        let result = guard.scan_token("", "这里包含违禁内容", false);
+        match result {
+            ScanTokenResult::SoftBlock {
+                rule_id,
+                replace_last_n,
+                placeholder,
+            } => {
+                assert_eq!(rule_id, "违禁");
+                assert_eq!(replace_last_n, 8);
+                assert_eq!(placeholder, "[审核中…]");
+            }
+            other => panic!("expected SoftBlock with rule_id, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn trailing_chars_handles_utf8_correctly() {
         // 中文每个字符 3 bytes, 不能按 byte 切片
         let s = "中文测试xyz"; // 4 中 + 3 ascii = 7 chars
@@ -1317,9 +1361,9 @@ Updated 2026-05-26:
 Run:
 ```bash
 cd /d/Project/temp/4/src-tauri
-cargo test --lib safety_guard::tests::scan_token_trailing safety_guard::tests::trailing_chars 2>&1 | tail -15
+cargo test --lib safety_guard::tests 2>&1 | tail -30
 ```
-Expected: 4 tests pass
+Expected: all safety_guard tests pass, including trailing-window coverage and `scan_token_soft_block_includes_rule_id`.
 
 - [ ] **Step 7.3: Commit**
 
@@ -1331,10 +1375,11 @@ git -C /d/Project/temp/4 commit -m "perf(kernel/safety_guard): scan_token traili
 trailing_chars(accumulated, 64) 仅扫尾部 64 chars (O(window))。
 N=64 覆盖最长黑词 (4 字符 '自残') + 上下文边界 (60 字符)。
 
-4 新单测覆盖:
+5 新单测覆盖:
 - 100 前缀 + 命中词 + 100 后缀 → 命中超 64 char 窗口外应 Pass
 - 100 前缀 + 60 char + 命中词 → 命中在 64 char 尾部应 HardEnd
 - 短文本 < 64 char 全文扫不退化
+- SoftBlock 返回 rule_id, 上层不再用 placeholder 去重
 - UTF-8 中文按 char 计数不按 byte (中文 3 bytes/char)
 
 Closes #49 (SafetyGuard::scan_token trailing-window O(n^2)→O(window) 优化)"
@@ -1556,25 +1601,40 @@ SafetyGuard 内部 if !policy.is_enabled(PrefixInjection) return messages 已经
 
 ```rust
             Ok(finish) => {
-                // Phase A0.7 Updated 2026-05-26: Scope #3 流终 scan + ConversationRepo 真接入
-                // (HIGH-2 修复). 4 路径: Ok 直透 / Redacted/Blocked/ScanFailed 改写最终内容 +
-                // emit ReplaceMessage 让前端覆盖累积 Delta。
-                // scan_final policy off → 直接写 'disabled' 终态.
+                // Phase A0.7 Updated 2026-06-18: Scope #3 流终 scan + ConversationRepo 真接入
+                // (HIGH-2 修复). 终态优先级:
+                // 1) stream hard hit 已由 dedicated safety-blocked finalization 写 final_blocked;
+                // 2) FinalOutput ON 时 scan_final 决定 final_* / scan_failed;
+                // 3) FinalOutput OFF 且 stream soft hit -> stream_soft_blocked;
+                // 4) FinalOutput OFF 且无 stream hit -> disabled.
                 use crate::kernel::safety_guard::ScanFinalResult;
                 use crate::kernel::repos::conversation_repo::SafetyScanStatus;
 
-                let scan = if self.safety_guard.is_enabled(SafetyScope::FinalOutput) {
-                    self.safety_guard.scan_final(&collected, &persona.id)
+                let stream_state = stream_safety_state.lock().clone();
+                if stream_state.hard_rule_id.is_some() {
+                    // HardEnd path already wrote fallback + mode='online' + final_blocked.
+                    // Do not let normal finish or Cancelled finalization overwrite it.
+                    return;
+                }
+
+                let persona_snapshot_id = conversation.persona_snapshot_id.as_str();
+                let final_output_enabled = self.safety_guard.is_enabled(SafetyScope::FinalOutput);
+                let scan = if final_output_enabled {
+                    self.safety_guard.scan_final(&collected, persona_snapshot_id)
                 } else {
-                    // Policy off → 等价 Ok 但走 disabled 终态分支
+                    // Policy off -> no final scan; terminal status derived below.
                     ScanFinalResult::Ok
                 };
 
                 // 派生 final_text / replace_reason / safety_scan_status / mode
                 // mode 列 Updated 2026-05-26: 只允 3 值 (online / offline_rule / cancelled),
                 // 安全状态走 safety_scan_status 列承担 (HIGH-2 修复 source of truth).
-                let final_status = if !self.safety_guard.is_enabled(SafetyScope::FinalOutput) {
-                    SafetyScanStatus::Disabled
+                let final_status = if !final_output_enabled {
+                    if stream_state.has_soft_hit() {
+                        SafetyScanStatus::StreamSoftBlocked
+                    } else {
+                        SafetyScanStatus::Disabled
+                    }
                 } else {
                     match &scan {
                         ScanFinalResult::Ok => SafetyScanStatus::FinalOk,
@@ -1692,11 +1752,37 @@ async fn update_assistant_msg_with_safety_status<R: Runtime>(
 定位 `let on_delta:` 段（约 line 418）整段改写：
 
 ```rust
-        // Phase A0.7 Updated 2026-05-26: scan_token 真接入 (HIGH-1 修复).
-        // rule_id dedupe 用 Arc<Mutex<HashSet>> 跨 closure 共享; 单条 message 流周期生效.
+        // Phase A0.7 Updated 2026-06-18: scan_token 真接入 (HIGH-1 修复).
+        // StreamSafetyState 跨 closure / finalization 共享; 单条 message 流周期生效.
         use std::collections::HashSet;
-        let scanned_rules: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
-        let scanned_rules_for_cb = Arc::clone(&scanned_rules);
+
+        #[derive(Clone, Debug, Default)]
+        struct StreamSafetyState {
+            soft_rule_ids: HashSet<String>,
+            hard_rule_id: Option<String>,
+        }
+
+        impl StreamSafetyState {
+            fn record_soft(&mut self, rule_id: &str) -> bool {
+                self.soft_rule_ids.insert(rule_id.to_string())
+            }
+
+            fn record_hard(&mut self, rule_id: &str) -> bool {
+                if self.hard_rule_id.is_some() {
+                    return false;
+                }
+                self.hard_rule_id = Some(rule_id.to_string());
+                true
+            }
+
+            fn has_soft_hit(&self) -> bool {
+                !self.soft_rule_ids.is_empty()
+            }
+        }
+
+        let stream_safety_state: Arc<Mutex<StreamSafetyState>> =
+            Arc::new(Mutex::new(StreamSafetyState::default()));
+        let stream_safety_state_for_cb = Arc::clone(&stream_safety_state);
         let buffer_for_cb = Arc::clone(&buffer);
         let channel_for_cb = channel.clone();
         let safety_guard_for_cb = Arc::clone(&self.safety_guard);
@@ -1719,16 +1805,16 @@ async fn update_assistant_msg_with_safety_status<R: Runtime>(
                     match safety_guard_for_cb.scan_token(text, &acc, false) {
                         crate::kernel::safety_guard::ScanTokenResult::Pass => {}
                         crate::kernel::safety_guard::ScanTokenResult::SoftBlock {
+                            rule_id,
                             replace_last_n,
                             placeholder,
                         } => {
-                            // rule_id dedupe (用 placeholder 串作 dedupe key 因为 SoftBlock 不带 rule_id)
-                            let mut seen = scanned_rules_for_cb.lock();
-                            if seen.contains(&placeholder) {
+                            // rule_id dedupe; SoftBlock carries rule_id per 2026-06-18 contract.
+                            let mut state = stream_safety_state_for_cb.lock();
+                            if !state.record_soft(&rule_id) {
                                 return; // 已 SoftBlock 过, 跳过避免震荡
                             }
-                            seen.insert(placeholder.clone());
-                            drop(seen);
+                            drop(state);
 
                             // 替换 buffer 尾部 N chars
                             let mut buf = buffer_for_cb.lock();
@@ -1773,33 +1859,30 @@ async fn update_assistant_msg_with_safety_status<R: Runtime>(
                             });
                         }
                         crate::kernel::safety_guard::ScanTokenResult::HardEnd { rule_id } => {
-                            let mut seen = scanned_rules_for_cb.lock();
-                            if seen.contains(&rule_id) {
-                                return; // dedupe
+                            let mut state = stream_safety_state_for_cb.lock();
+                            if !state.record_hard(&rule_id) {
+                                return; // hard hit 已处理, 避免重复 finalize
                             }
-                            seen.insert(rule_id.clone());
-                            drop(seen);
+                            drop(state);
 
-                            // Hard hit → cancel stream + 标记 final_blocked
-                            cancel_token_for_cb.cancel();
-                            // 实际的 DB 写在 Cancelled 分支收尾时统一处理
-                            // (run_stream Err(Cancelled) 路径会 update 'cancelled' mode,
-                            //  此处仅借 cancel_token 触发它)
-                            // 但 safety_scan_status 要写 FinalBlocked (而非 'cancelled' 的 cancelled 状态),
-                            // 用 spawn 异步写避免 closure 阻塞:
+                            // Hard hit → dedicated safety-blocked finalization.
+                            // cancel_token 只负责停止底层传输; Err(Cancelled) 分支不得覆盖为 mode='cancelled'.
+                            let fallback = "抱歉，这段回复触发了安全规则，已停止输出。".to_string();
+                            let _ = channel_for_cb.send(StreamEvent::ReplaceMessage {
+                                message_id: assistant_id_for_cb.clone(),
+                                new_content: fallback.clone(),
+                                reason: ReplaceReason::FinalBlocked,
+                            });
                             let app2 = app_for_cb.clone();
                             let id2 = assistant_id_for_cb.clone();
                             tauri::async_runtime::spawn(async move {
-                                if let Err(e) = update_safety_status_only(
-                                    &app2,
-                                    &id2,
-                                    crate::kernel::repos::conversation_repo::SafetyScanStatus::FinalBlocked,
-                                )
-                                .await
+                                if let Err(e) =
+                                    finalize_safety_blocked_msg(&app2, &id2, &fallback).await
                                 {
-                                    eprintln!("[chat] hard-hit update_safety_status FinalBlocked failed: {e}");
+                                    eprintln!("[chat] hard-hit finalize_safety_blocked_msg failed: {e}");
                                 }
                             });
+                            cancel_token_for_cb.cancel();
                         }
                     }
                 }
@@ -1808,7 +1891,9 @@ async fn update_assistant_msg_with_safety_status<R: Runtime>(
         });
 ```
 
-- [ ] **Step 9.7: 加 helper update_safety_status_only**
+同时修改 `Err(Cancelled)` 分支：若 `stream_safety_state.lock().hard_rule_id.is_some()`，说明这是 hard safety hit 触发的传输停止，直接 `return`，不得调用普通取消收尾，不得写 `mode='cancelled'` 覆盖 dedicated `final_blocked` 结果。
+
+- [ ] **Step 9.7: 加 helper update_safety_status_only + finalize_safety_blocked_msg**
 
 在 chat/service.rs 文件末尾追加（紧跟 `update_assistant_msg_with_safety_status` 之后）：
 
@@ -1826,6 +1911,23 @@ async fn update_safety_status_only<R: Runtime>(
         .map_err(|e| ChatError::Database(format!("update_safety_status: {}", e)))?;
     conn.close().await?;
     Ok(())
+}
+
+/// Updated 2026-06-18: hard safety hit 专用收尾。
+/// 不复用普通 cancel 分支，避免 mode='cancelled' 覆盖真实安全终态。
+async fn finalize_safety_blocked_msg<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    fallback: &str,
+) -> Result<(), ChatError> {
+    update_assistant_msg_with_safety_status(
+        app,
+        id,
+        fallback,
+        "online",
+        crate::kernel::repos::conversation_repo::SafetyScanStatus::FinalBlocked,
+    )
+    .await
 }
 ```
 
@@ -1869,12 +1971,12 @@ Updated 2026-05-26:
 - scan_user_input 加 if guard.is_enabled(UserInput) 守卫
 - wrap_messages 调用不变 (SafetyGuard 内部短路兜底)
 - run_stream on_delta 真接入 scan_token (HIGH-1):
-  * rule_id dedupe HashSet 防震荡 (单 message 生命周期)
+  * StreamSafetyState + rule_id dedupe 防震荡 (单 message 生命周期)
   * SoftBlock → 替换 buffer 尾 N chars + ReplaceMessage + 后台 spawn 写 stream_soft_blocked
-  * HardEnd → cancel_token + 后台 spawn 写 FinalBlocked
+  * HardEnd → dedicated safety-blocked finalization 写 fallback + mode='online' + FinalBlocked; cancel_token 只停止底层传输
 - run_stream Ok 分支真接 ConversationRepo.update_safety_status (HIGH-2):
   * scan_final policy on → 写 final_ok/redacted/blocked/scan_failed
-  * scan_final policy off → 写 disabled 终态
+  * scan_final policy off → 按 terminal priority 写 stream_soft_blocked 或 disabled
   * mode 列降为 3 值 (online/offline_rule/cancelled), 安全状态走 safety_scan_status
 - 老 mode='safety_*' history filter 保留兼容 (老 DB 数据不 backfill)
 
@@ -2430,7 +2532,7 @@ const TOGGLES: ToggleDef[] = [
   {
     scope: 'streamToken',
     label: '流式输出 mid-stream 扫描',
-    hint: '每个 LLM token 到达后增量扫尾部 64 字符; 命中后 SoftBlock 替换占位或 HardEnd 截断流; 性能开销最大.',
+    hint: '每个 LLM token 到达后增量扫尾部 64 字符; 命中后 SoftBlock 替换占位或 HardEnd 走 dedicated final_blocked 收尾; 性能开销最大.',
     refKey: 'scanTokenEnabled',
   },
   {
