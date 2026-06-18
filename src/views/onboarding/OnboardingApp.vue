@@ -212,7 +212,9 @@ async function onChromeClose() {
         title="关闭（退出应用）"
         aria-label="关闭"
         @click="onChromeClose"
-      >✕</button>
+      >
+        <span class="aipet-chrome-icon aipet-chrome-icon--close" aria-hidden="true" />
+      </button>
     </header>
 
     <div class="onboarding-body">

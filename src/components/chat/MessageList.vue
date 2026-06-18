@@ -259,7 +259,9 @@ watch(
 
 <style scoped>
 .chat-messages {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  width: 100%;
+  height: 100%;
   /* 唯一滚动容器：父级 .message-scroll-surface 已改为 flex column 不滚，本元素 overflow-y 才真正生效。
      min-height: 0 是 flex column 嵌套常坑——不设的话 flex:1 1 auto 在内容超出时不会收缩，
      scrollHeight === clientHeight，scrollTop 设置无效。
@@ -304,6 +306,7 @@ watch(
   /* 2026-05-20：max-width 78% → 绝对 680px；窄窗口下被 padding-inline 后的父级宽度封顶不溢出。
      min-width: 0 保护 row-reverse + align-self:flex-end 场景下 main 内 bubble 的 flex-shrink 能正常工作，
      避免长 bubble 把 avatar 顶出右边界（早先撤回 chat-messages max-width/margin 时同步加） */
+  width: min(100%, 680px);
   max-width: 680px;
   min-width: 0;
   list-style: none;
@@ -320,7 +323,8 @@ watch(
 
 .msg-group--system {
   align-self: center;
-  max-width: 95%;
+  width: fit-content;
+  max-width: min(95%, 680px);
 }
 
 .msg-group__avatar {
@@ -357,6 +361,7 @@ watch(
   flex-direction: column;
   gap: var(--aipet-space-1);
   min-width: 0;
+  max-width: calc(100% - 40px);
   flex: 0 1 auto;
 }
 
@@ -369,6 +374,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 3px;
+  max-width: 100%;
   list-style: none;
   margin: 0;
   padding: 0;

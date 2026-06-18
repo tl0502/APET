@@ -224,7 +224,9 @@ void props.panelActive
         title="关闭（进托盘）"
         aria-label="关闭"
         @click="handleClose"
-      >✕</button>
+      >
+        <span class="aipet-chrome-icon aipet-chrome-icon--close" aria-hidden="true" />
+      </button>
     </header>
 
     <div class="message-scroll-surface">
@@ -415,19 +417,24 @@ void props.panelActive
 
 .content-surface {
   flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
   background: var(--aipet-color-surface);
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   position: relative;
 }
 
 .message-scroll-surface {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  width: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background-image: radial-gradient(
     circle at 1px 1px,
     color-mix(in srgb, var(--aipet-color-text-3) 15%, transparent) 1px,

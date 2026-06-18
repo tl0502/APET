@@ -2,9 +2,10 @@
    消费方：WorkspaceApp.vue 三按钮 + ChatThreadPane content-header__close
    引入方：workspace/main.ts + chat/main.ts + 未来需要自绘 chrome 的窗
 
-   .aipet-chrome-btn  - Win11 风格按钮基础（46×32 / Segoe Fluent Icons font）
+   .aipet-chrome-btn  - Win11 风格按钮基础（46×32，workspace 内覆盖为 48×48）
    .aipet-chrome-btn--min / --max - 普通 hover 浅灰
    .aipet-chrome-btn--close      - hover 红（#c42b1c / Win11 标准）
+   .aipet-chrome-icon             - CSS 绘制图标，避免字体 fallback 基线漂移
 */
 
 .aipet-chrome-btn {
@@ -16,8 +17,8 @@
   background: transparent;
   border: none;
   color: var(--aipet-color-text-2);
-  font-size: 13px;
-  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', system-ui, sans-serif;
+  font: inherit;
+  line-height: 1;
   cursor: pointer;
   padding: 0;
   user-select: none;
@@ -38,6 +39,53 @@
 .aipet-chrome-btn:focus-visible {
   outline: none;
   box-shadow: var(--aipet-ring-focus);
+}
+
+.aipet-chrome-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  position: relative;
+  pointer-events: none;
+}
+
+.aipet-chrome-icon--min::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 7px;
+  height: 1.25px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.aipet-chrome-icon--max::before {
+  content: '';
+  position: absolute;
+  inset: 2.5px;
+  border: 1.4px solid currentColor;
+  border-radius: 2px;
+}
+
+.aipet-chrome-icon--close::before,
+.aipet-chrome-icon--close::after {
+  content: '';
+  position: absolute;
+  left: 1.5px;
+  right: 1.5px;
+  top: 6.35px;
+  height: 1.35px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.aipet-chrome-icon--close::before {
+  transform: rotate(45deg);
+}
+
+.aipet-chrome-icon--close::after {
+  transform: rotate(-45deg);
 }
 
 .aipet-chrome-btn--close:hover {

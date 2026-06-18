@@ -1,6 +1,6 @@
 ---
 title: AIPET 项目进度
-updated: 2026-05-25
+updated: 2026-06-19
 related:
   - ../CLAUDE.md
   - WORKFLOW.md
@@ -20,8 +20,8 @@ related:
 ## 当前状态
 
 - **当前 milestone**：Companion Agent Runtime v3 Phase A0（Safety & Secrets）✅ 完成；M2 W3 [#23] 物理交互仍待开始
-- **当前 session 在做**：Phase A0 全套 8 task + Task 5b distribution-gate 关闭 + c16ed83 顺手修，cargo test 358 pass / CI OS API 黑名单 PASS
-- **下一步**：用户决定 — (A) Phase A1 Persona Snapshot & Soul Package brainstorming（~1.5w）/ (B) M2 [#23] 物理交互 + 心情/精力 + 摸鱼 / (C) 其他
+- **当前 session 在做**：修复 workspace chat 消息区容器适配与自绘 chrome 三按钮视觉问题（未关联 issue）
+- **下一步**：用户复测 workspace 主窗；确认后可进入 (A) Phase A1 Persona Snapshot & Soul Package brainstorming（~1.5w）/ (B) M2 [#23] 物理交互 + 心情/精力 + 摸鱼 / (C) 其他
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 

@@ -151,21 +151,25 @@ onBeforeUnmount(() => {
 
       <div class="workspace-topbar__chrome">
         <button
-          class="aipet-chrome-btn"
+          class="aipet-chrome-btn aipet-chrome-btn--min"
           type="button"
           data-tauri-drag-region="false"
           title="最小化"
           aria-label="最小化"
           @click="onMinimize"
-        >─</button>
+        >
+          <span class="aipet-chrome-icon aipet-chrome-icon--min" aria-hidden="true" />
+        </button>
         <button
-          class="aipet-chrome-btn"
+          class="aipet-chrome-btn aipet-chrome-btn--max"
           type="button"
           data-tauri-drag-region="false"
           title="最大化"
           aria-label="最大化"
           @click="onMaximize"
-        >□</button>
+        >
+          <span class="aipet-chrome-icon aipet-chrome-icon--max" aria-hidden="true" />
+        </button>
         <button
           class="aipet-chrome-btn aipet-chrome-btn--close"
           type="button"
@@ -173,7 +177,9 @@ onBeforeUnmount(() => {
           title="关闭（进托盘）"
           aria-label="关闭"
           @click="onClose"
-        >✕</button>
+        >
+          <span class="aipet-chrome-icon aipet-chrome-icon--close" aria-hidden="true" />
+        </button>
       </div>
     </header>
 
@@ -285,6 +291,11 @@ onBeforeUnmount(() => {
   height: 48px;
   position: relative;
   z-index: 6;
+}
+
+.workspace-topbar__chrome .aipet-chrome-btn {
+  width: 48px;
+  height: 48px;
 }
 
 /* 三列区 */

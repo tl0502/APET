@@ -42,6 +42,8 @@ const isCancelled = computed(() => props.message.mode === 'cancelled')
 .msg {
   list-style: none;
   display: flex;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .msg--user {
@@ -65,6 +67,7 @@ const isCancelled = computed(() => props.message.mode === 'cancelled')
   font-size: 15px;
   line-height: 1.7;
   word-break: break-word;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   max-width: 100%;
 }
