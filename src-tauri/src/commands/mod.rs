@@ -20,6 +20,7 @@ pub mod onboarding;
 pub mod persona;
 // #22 reminder IPC（6 命令：create/list/update/delete/snooze/complete）。
 pub mod reminder;
+pub mod safety;
 // #29 todo IPC（6 命令：create/list/update/complete/breakdown/reorder）。
 pub mod todo;
 // #28 pomodoro IPC（6 命令：start/pause/resume/stop/active/today_stats）。

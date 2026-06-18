@@ -17,6 +17,7 @@ import UserProfilePanel from '@/panels/user/UserProfilePanel.vue'
 import UserHelpPanel from '@/panels/user/UserHelpPanel.vue'
 import UserAboutPanel from '@/panels/user/UserAboutPanel.vue'
 import UserPlaceholderPanel from '@/panels/user/UserPlaceholderPanel.vue'
+import UserSafetyPanel from '@/panels/user/UserSafetyPanel.vue'
 
 import { useUserPopupStore } from '@/stores/userPopup'
 
@@ -35,6 +36,8 @@ const panelTitle = computed(() => {
       return '数据与隐私'
     case 'notifications':
       return '通知'
+    case 'safety':
+      return '安全'
     case 'help':
       return '帮助'
     case 'about':
@@ -115,6 +118,7 @@ onBeforeUnmount(() => {
 
           <div class="popup-main__content">
             <UserProfilePanel v-show="popup.activeNav === 'profile'" />
+            <UserSafetyPanel v-show="popup.activeNav === 'safety'" />
             <UserHelpPanel v-show="popup.activeNav === 'help'" />
             <UserAboutPanel v-show="popup.activeNav === 'about'" />
             <!-- 3 个 disabled nav 选中时不渲染（store 守卫不允许 setNav 到这些；保留模板 v-show 防御性） -->

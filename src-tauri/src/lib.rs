@@ -573,6 +573,8 @@ pub fn run() {
             commands::config::config_get,
             commands::config::config_set,
             commands::config::config_delete,
+            commands::safety::safety_policy_get,
+            commands::safety::safety_policy_set,
             // B3 修复：persist+broadcast 原子 IPC（替代前端 persistConstraints+emit 的两步走，
             // 避免 emit 比 KV 写抵达其他 webview 更早导致的状态分歧）
             commands::config::snap_persist_and_broadcast,

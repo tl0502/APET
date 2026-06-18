@@ -1,4 +1,4 @@
-// userPopup store 单测 — 5 case
+// userPopup store 单测 — 6 case
 //
 // 覆盖：open / close / setNav / 默认 activeNav / 重复 open 不抖
 
@@ -54,5 +54,13 @@ describe('userPopup store', () => {
     expect(store.activeNav).toBe('profile')
     store.setNav('notifications') // disabled
     expect(store.activeNav).toBe('profile')
+  })
+
+  it('case 6: setNav 接受 safety nav id', () => {
+    const store = useUserPopupStore()
+    store.open()
+    store.setNav('safety')
+    expect(store.activeNav).toBe('safety')
+    expect(store.isDisabled('safety')).toBe(false)
   })
 })

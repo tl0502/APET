@@ -46,6 +46,7 @@ const NAV_GROUPS: NavGroupDef[] = [
     items: [
       { id: 'privacy', label: '数据与隐私', icon: '🔒', badge: 'M3+', disabled: true },
       { id: 'notifications', label: '通知', icon: '🔔', badge: 'M3+', disabled: true },
+      { id: 'safety', label: '安全', icon: '🛡' },
     ],
   },
   {
