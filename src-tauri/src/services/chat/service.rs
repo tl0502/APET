@@ -24,7 +24,7 @@
 //   → cancel 按钮成死按钮、切换会话被锁
 // - Channel 自带 scope（每个 invoke 一条），不需 messageId 路由；类型安全；并发隔离
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -36,12 +36,14 @@ use tauri::{AppHandle, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
+use crate::kernel::repos::conversation_repo::SafetyScanStatus;
+use crate::kernel::safety_guard::{SafetyGuard, ScanFinalResult, ScanTokenResult};
+use crate::kernel::safety_policy::SafetyScope;
 use crate::services::chat::conversation::{
     ensure_active_conversation_with_conn, update_last_activity,
 };
 use crate::services::chat::prompt::build_messages;
 use crate::services::chat::ChatError;
-use crate::kernel::safety_guard::SafetyGuard;
 use crate::services::db::open_app_db;
 use crate::services::llm::{
     ChatMessage, ChatOptions, FinishReason, LLMError, LLMProvider, OpenAIProvider, StreamDelta,
@@ -60,6 +62,59 @@ use crate::services::persona::{load_active_persona_with_conn, PersonaSummary};
 const HISTORY_LIMIT: u32 = 10;
 /// 全局兜底拒答（persona-design.md §7.5 降级链末端）。
 const FALLBACK_REFUSAL: &str = "这个我现在没法陪你聊，要不我们换个话题？";
+
+#[derive(Debug, Clone, Default)]
+struct StreamSafetyState {
+    soft_rule_ids: HashSet<String>,
+    hard_rule_id: Option<String>,
+}
+
+impl StreamSafetyState {
+    fn record_soft(&mut self, rule_id: &str) -> bool {
+        self.soft_rule_ids.insert(rule_id.to_string())
+    }
+
+    fn record_hard(&mut self, rule_id: &str) -> bool {
+        if self.hard_rule_id.is_some() {
+            return false;
+        }
+        self.hard_rule_id = Some(rule_id.to_string());
+        true
+    }
+
+    fn has_soft_hit(&self) -> bool {
+        !self.soft_rule_ids.is_empty()
+    }
+}
+
+fn derive_final_safety_status(
+    final_output_enabled: bool,
+    stream_state: &StreamSafetyState,
+    scan: &crate::kernel::safety_guard::ScanFinalResult,
+) -> SafetyScanStatus {
+    if stream_state.hard_rule_id.is_some() {
+        return SafetyScanStatus::FinalBlocked;
+    }
+    if !final_output_enabled {
+        return if stream_state.has_soft_hit() {
+            SafetyScanStatus::StreamSoftBlocked
+        } else {
+            SafetyScanStatus::Disabled
+        };
+    }
+    match scan {
+        crate::kernel::safety_guard::ScanFinalResult::Ok => SafetyScanStatus::FinalOk,
+        crate::kernel::safety_guard::ScanFinalResult::Redacted { .. } => {
+            SafetyScanStatus::FinalRedacted
+        }
+        crate::kernel::safety_guard::ScanFinalResult::Blocked { .. } => {
+            SafetyScanStatus::FinalBlocked
+        }
+        crate::kernel::safety_guard::ScanFinalResult::ScanFailed { .. } => {
+            SafetyScanStatus::ScanFailed
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,11 +202,11 @@ pub struct PreparedSend {
     pub cancel_token: CancellationToken,
 }
 
-/// ChatService — chat 业务编排, 持 SafetyGuard 引用以注入 ADR-006 prefix 和扫输入/输出。
+/// ChatService — chat 业务编排, 持 SafetyGuard 引用以按 SafetyPolicy 包装 prompt 和扫输入/输出。
 ///
 /// Phase A0.7 重要变更: `safety_guard: Arc<dyn SafetyGuard>` 必填字段, `new` 改为
-/// `new(safety_guard)`。原 `Default` impl 被移除 —— ChatService 永远必须有 SafetyGuard,
-/// 与 Constitution #1 "ADR-006 prefix 不可禁用" 一致 (Spec §6.6)。
+/// `new(safety_guard)`。原 `Default` impl 被移除 —— ChatService 永远必须有 SafetyGuard；
+/// 具体 scope 是否启用由 SafetyPolicy 决定。
 ///
 /// `Clone` 保留: `active_streams` 是 `Arc<Mutex<...>>`, `safety_guard` 是 `Arc<dyn ...>`,
 /// clone 仅增加引用计数, 不复制状态; spawn 出去的 task 共享同一 token map 与 guard 实例。
@@ -160,7 +215,7 @@ pub struct ChatService {
     /// 在飞 chat_stream 的 cancel token map（key = assistant message_id ULID）。
     /// 用 Arc<Mutex<...>> 让 ChatService 可 Clone 进 spawn 出去的 task。
     active_streams: Arc<Mutex<HashMap<String, CancellationToken>>>,
-    /// SafetyGuard 注入点 (Phase A0.7, Spec §6.6 / Constitution #1)。
+    /// SafetyGuard 注入点 (Phase A0.7, runtime contract)。
     /// 来源: Kernel::boot 时 Arc 构造, 经 lib.rs setup 传入此 ChatService::new。
     safety_guard: Arc<dyn SafetyGuard>,
 }
@@ -249,8 +304,8 @@ impl ChatService {
         //
         // Task 7 review Important 2 修复：Phase A0 安全降级 3 mode 与 offline_rule / cancelled
         // 同理 —— 内容是安全 fallback / redacted text，不是 LLM 实际输出，喂回历史会让 LLM
-        // "I just said X" 错乱（复发 A6 pattern）。run_stream Ok 分支按 scan 结果写 mode：
-        // Redacted → 'safety_redacted' / Blocked → 'safety_blocked' / ScanFailed → 'safety_scan_failed'。
+        // "I just said X" 错乱（复发 A6 pattern）。这些 mode 是 legacy 读兼容；
+        // 新写入保持 mode='online'，终态写入 safety_scan_status。
         let history_filtered: Vec<MessageRecord> = history
             .into_iter()
             .filter(|r| {
@@ -274,13 +329,11 @@ impl ChatService {
             &input,
         )?;
 
-        // Phase A0.7: SafetyGuard.wrap_messages 强制注入 ADR-006 prefix (Spec §6.6 / Constitution #1)。
-        // 注入点在 build_messages 之后, 保证 prefix 永远是 system message 第一位,
-        // 不可被人格 4 节或用户 history 顶掉 (Spec 不可禁用语义)。
-        let messages = self.safety_guard.wrap_messages(
-            messages,
-            crate::kernel::safety_guard::Locale::ZhCn,
-        );
+        // Phase A0.7: SafetyGuard.wrap_messages 在 PrefixInjection ON 时注入 prefix。
+        // 注入点在 build_messages 之后，启用时保证 prefix 是 system message 第一位。
+        let messages = self
+            .safety_guard
+            .wrap_messages(messages, crate::kernel::safety_guard::Locale::ZhCn);
 
         // 4. 现建 OpenAIProvider（与 #12 chat_send_test 同模式）。同样在 INSERT 之前。
         // Phase A0.5b: 拿 Kernel.secret_repo 让 get_active_record 走 DPAPI 解密回填 api_key。
@@ -307,9 +360,8 @@ impl ChatService {
                         .bind(id)
                         .fetch_optional(&mut conn)
                         .await?;
-                let row = row.ok_or_else(|| {
-                    ChatError::Database(format!("对话不存在或已被删除：{id}"))
-                })?;
+                let row =
+                    row.ok_or_else(|| ChatError::Database(format!("对话不存在或已被删除：{id}")))?;
                 if row.0 != active_persona.id {
                     return Err(ChatError::Database(format!(
                         "会话归属不匹配：对话 {id} 属于 persona {}，当前 active 是 {}",
@@ -413,8 +465,14 @@ impl ChatService {
 
         // 流式调用 + 收集 buffer + send Delta
         let buffer = Arc::new(Mutex::new(String::new()));
+        let stream_safety_state = Arc::new(Mutex::new(StreamSafetyState::default()));
         let buffer_for_cb = buffer.clone();
+        let stream_safety_state_for_cb = Arc::clone(&stream_safety_state);
         let channel_for_cb = channel.clone();
+        let safety_guard_for_cb = Arc::clone(&self.safety_guard);
+        let app_for_cb = app.clone();
+        let assistant_id_for_cb = assistant_id.clone();
+        let cancel_token_for_cb = cancel_token.clone();
         let on_delta: Box<dyn Fn(StreamDelta) + Send + Sync> = Box::new(move |delta| {
             if let StreamDelta::TextDelta(text) = &delta {
                 buffer_for_cb.lock().push_str(text);
@@ -422,6 +480,86 @@ impl ChatService {
                     token: text.clone(),
                 }) {
                     eprintln!("[chat] channel send Delta failed: {e}");
+                }
+                if safety_guard_for_cb.is_enabled(SafetyScope::StreamToken) {
+                    let acc = buffer_for_cb.lock().clone();
+                    match safety_guard_for_cb.scan_token(text, &acc, false) {
+                        ScanTokenResult::Pass => {}
+                        ScanTokenResult::SoftBlock {
+                            rule_id,
+                            replace_last_n,
+                            placeholder,
+                        } => {
+                            let mut stream_state = stream_safety_state_for_cb.lock();
+                            if !stream_state.record_soft(&rule_id) {
+                                return;
+                            }
+                            drop(stream_state);
+
+                            let mut buf = buffer_for_cb.lock();
+                            let chars: Vec<char> = buf.chars().collect();
+                            if chars.len() >= replace_last_n {
+                                let kept: String =
+                                    chars[..chars.len() - replace_last_n].iter().collect();
+                                *buf = format!("{}{}", kept, placeholder);
+                            } else {
+                                *buf = placeholder.clone();
+                            }
+                            let new_content = buf.clone();
+                            drop(buf);
+
+                            let _ = channel_for_cb.send(StreamEvent::ReplaceMessage {
+                                message_id: assistant_id_for_cb.clone(),
+                                new_content: new_content.clone(),
+                                reason: ReplaceReason::SoftBlockToken,
+                            });
+
+                            let app2 = app_for_cb.clone();
+                            let id2 = assistant_id_for_cb.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = update_assistant_msg_with_safety_status(
+                                    &app2,
+                                    &id2,
+                                    &new_content,
+                                    "online",
+                                    SafetyScanStatus::StreamSoftBlocked,
+                                )
+                                .await
+                                {
+                                    eprintln!("[chat] mid-stream soft block update failed: {e}");
+                                }
+                            });
+                        }
+                        ScanTokenResult::HardEnd { rule_id } => {
+                            let mut stream_state = stream_safety_state_for_cb.lock();
+                            if !stream_state.record_hard(&rule_id) {
+                                return;
+                            }
+                            drop(stream_state);
+
+                            let fallback = FALLBACK_REFUSAL.to_string();
+                            let _ = channel_for_cb.send(StreamEvent::ReplaceMessage {
+                                message_id: assistant_id_for_cb.clone(),
+                                new_content: fallback.clone(),
+                                reason: ReplaceReason::FinalBlocked,
+                            });
+                            let _ = channel_for_cb.send(StreamEvent::Done {
+                                total_tokens: 0,
+                                finish_reason: "safety_blocked".to_string(),
+                            });
+
+                            let app2 = app_for_cb.clone();
+                            let id2 = assistant_id_for_cb.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) =
+                                    finalize_safety_blocked_msg(&app2, &id2, &fallback).await
+                                {
+                                    eprintln!("[chat] hard safety finalization failed: {e}");
+                                }
+                            });
+                            cancel_token_for_cb.cancel();
+                        }
+                    }
                 }
             }
             // ToolCallDelta / Finish：M1 不接 tools，不会触发；忽略
@@ -440,30 +578,39 @@ impl ChatService {
         // A4 修复：assistant 行已在 prepare 期 INSERT；这里只做 UPDATE / DELETE。
         match stream_result {
             Ok(finish) => {
-                // Phase A0.7: Scan Scope #3 — 流终 final scan (Spec §6.6.2)。
-                // 4 路径: Ok 直透; Redacted/Blocked/ScanFailed → 改写最终内容 +
-                // emit ReplaceMessage 让前端覆盖累积 Delta。DB 写入用改写后的 final_text。
-                use crate::kernel::safety_guard::ScanFinalResult;
-                let scan = self.safety_guard.scan_final(&collected, &persona.id);
-                // Important 2 修复：mode 必须随 scan 分支分流入库——之前 Blocked/ScanFailed/
-                // Redacted 路径都写 mode='online'，安全 fallback / redacted 文本下一轮 history
-                // 加载会被喂回 LLM（复发 A6 pattern：让 LLM "I just said X" 错乱）。
-                // prepare() history filter 同步加 3 个安全 mode 到 exclusion list。
-                // Minor 1: Ok arm 直接 move `collected`，省一次 String clone（热路径）。
-                let (final_text, replace_reason, mode): (String, Option<ReplaceReason>, &'static str) = match scan {
-                    ScanFinalResult::Ok => (collected, None, "online"),
+                let stream_state = stream_safety_state.lock().clone();
+                if stream_state.hard_rule_id.is_some() {
+                    return;
+                }
+                let final_output_enabled = self.safety_guard.is_enabled(SafetyScope::FinalOutput);
+                let scan = if final_output_enabled {
+                    self.safety_guard
+                        .scan_final(&collected, &persona.snapshot_id)
+                } else {
+                    ScanFinalResult::Ok
+                };
+                let final_status =
+                    derive_final_safety_status(final_output_enabled, &stream_state, &scan);
+                let (final_text, replace_reason): (String, Option<ReplaceReason>) = match scan {
+                    ScanFinalResult::Ok => (collected, None),
                     ScanFinalResult::Redacted { redacted_text, .. } => {
-                        (redacted_text, Some(ReplaceReason::FinalRedacted), "safety_redacted")
+                        (redacted_text, Some(ReplaceReason::FinalRedacted))
                     }
                     ScanFinalResult::Blocked { fallback, .. } => {
-                        (fallback, Some(ReplaceReason::FinalBlocked), "safety_blocked")
+                        (fallback, Some(ReplaceReason::FinalBlocked))
                     }
                     ScanFinalResult::ScanFailed { fallback, .. } => {
-                        (fallback, Some(ReplaceReason::ScanFailed), "safety_scan_failed")
+                        (fallback, Some(ReplaceReason::ScanFailed))
                     }
                 };
-                if let Err(e) =
-                    update_assistant_msg(app, &assistant_id, &final_text, mode).await
+                if let Err(e) = update_assistant_msg_with_safety_status(
+                    app,
+                    &assistant_id,
+                    &final_text,
+                    "online",
+                    final_status,
+                )
+                .await
                 {
                     let _ = channel.send(StreamEvent::Error {
                         error_kind: "DbError".to_string(),
@@ -489,6 +636,9 @@ impl ChatService {
                 });
             }
             Err(LLMError::Cancelled { partial_usage }) => {
+                if stream_safety_state.lock().hard_rule_id.is_some() {
+                    return;
+                }
                 // Issue #1 + #7 修复：
                 // - 空 buffer（"还没开始就被 cancel"）→ DELETE placeholder（与 Error 分支同款），
                 //   不留下空气泡，UI/DB 都看不见这一轮。
@@ -496,9 +646,7 @@ impl ChatService {
                 //   过滤会跳过这条，避免污染 LLM 上下文（与 offline_rule 同款理由）。
                 if collected.is_empty() {
                     if let Err(del_err) = delete_assistant_msg(app, &assistant_id).await {
-                        eprintln!(
-                            "[chat] delete empty placeholder on cancel failed: {del_err}"
-                        );
+                        eprintln!("[chat] delete empty placeholder on cancel failed: {del_err}");
                     }
                 } else if let Err(e) =
                     update_assistant_msg(app, &assistant_id, &collected, "cancelled").await
@@ -574,9 +722,7 @@ impl ChatService {
                         {
                             Ok(()) => {
                                 if let Err(act_err) = update_last_activity(app, &conv_id).await {
-                                    eprintln!(
-                                        "[chat] update_last_activity failed: {act_err}"
-                                    );
+                                    eprintln!("[chat] update_last_activity failed: {act_err}");
                                 }
                                 let _ = channel.send(StreamEvent::Delta {
                                     token: placeholder_text.clone(),
@@ -654,6 +800,38 @@ async fn update_assistant_msg<R: Runtime>(
     Ok(())
 }
 
+async fn update_assistant_msg_with_safety_status<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    content: &str,
+    mode: &str,
+    safety_status: SafetyScanStatus,
+) -> Result<(), ChatError> {
+    let mut conn = open_app_db(app).await?;
+    update_message_content_with_conn(&mut conn, id, content, mode).await?;
+    let repo = crate::kernel::repos::ConversationRepo::new();
+    repo.update_safety_status(&mut conn, id, safety_status)
+        .await
+        .map_err(|e| ChatError::Database(format!("update_safety_status: {}", e)))?;
+    conn.close().await?;
+    Ok(())
+}
+
+async fn finalize_safety_blocked_msg<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    fallback: &str,
+) -> Result<(), ChatError> {
+    update_assistant_msg_with_safety_status(
+        app,
+        id,
+        fallback,
+        "online",
+        SafetyScanStatus::FinalBlocked,
+    )
+    .await
+}
+
 async fn delete_assistant_msg<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), ChatError> {
     let mut conn = open_app_db(app).await?;
     delete_message_with_conn(&mut conn, id).await?;
@@ -703,9 +881,9 @@ fn error_kind_str(e: &LLMError) -> &'static str {
         // Issue #5：以下三个变体被 run_stream 上游分支拦下后不会到这里。
         // unreachable! 而非删除映射，是为了让"未来若新增 LLMError 变体却忘了在 run_stream 加分支"
         // 能在运行时立即暴露（而不是沉默地路由错信号到前端）。
-        LLMError::Network(_) | LLMError::ServerError(_) => unreachable!(
-            "Network/ServerError are handled by the offline_rule branch in run_stream"
-        ),
+        LLMError::Network(_) | LLMError::ServerError(_) => {
+            unreachable!("Network/ServerError are handled by the offline_rule branch in run_stream")
+        }
         LLMError::Cancelled { .. } => {
             unreachable!("Cancelled is handled by its dedicated branch in run_stream")
         }
@@ -784,7 +962,7 @@ mod tests {
     const MOMO_RAW: &str = include_str!("../../../personas/_builtin/momo.soul.md");
 
     /// Phase A0.7 test-only 构造: 用 inline test prefix 起一个 SafetyGuardImpl,
-    /// 替代旧 `ChatService::new()` 空构造。Default 已与 Constitution #1 不兼容移除,
+    /// 替代旧 `ChatService::new()` 空构造。Default 已按 runtime contract 移除,
     /// 测试需要显式注入一个最小可用 guard 才能构造 ChatService。
     fn test_chat_service() -> ChatService {
         use crate::kernel::safety_guard::{SafetyGuard, SafetyGuardImpl};
@@ -937,6 +1115,36 @@ mod tests {
     }
 
     #[test]
+    fn derive_final_safety_status_respects_2026_06_18_priority() {
+        use crate::kernel::repos::conversation_repo::SafetyScanStatus;
+        use crate::kernel::safety_guard::ScanFinalResult;
+
+        let mut hard = StreamSafetyState::default();
+        assert!(hard.record_hard("自杀"));
+        assert_eq!(
+            derive_final_safety_status(false, &hard, &ScanFinalResult::Ok),
+            SafetyScanStatus::FinalBlocked
+        );
+
+        let mut soft = StreamSafetyState::default();
+        assert!(soft.record_soft("违禁"));
+        assert_eq!(
+            derive_final_safety_status(false, &soft, &ScanFinalResult::Ok),
+            SafetyScanStatus::StreamSoftBlocked
+        );
+
+        assert_eq!(
+            derive_final_safety_status(false, &StreamSafetyState::default(), &ScanFinalResult::Ok),
+            SafetyScanStatus::Disabled
+        );
+
+        assert_eq!(
+            derive_final_safety_status(true, &soft, &ScanFinalResult::Ok),
+            SafetyScanStatus::FinalOk
+        );
+    }
+
+    #[test]
     fn cancel_unknown_message_id_is_noop() {
         let svc = test_chat_service();
         let result = svc.cancel("non-existent");
@@ -1022,10 +1230,7 @@ mod tests {
         let _svc = ChatService::new(Arc::clone(&guard));
 
         // 同样调一遍 wrap_messages 确认 prefix 注入 ([user] → [system(prefix), user])
-        let wrapped = guard.wrap_messages(
-            vec![ChatMessage::text(Role::User, "hi")],
-            Locale::ZhCn,
-        );
+        let wrapped = guard.wrap_messages(vec![ChatMessage::text(Role::User, "hi")], Locale::ZhCn);
         assert_eq!(wrapped.len(), 2);
         assert_eq!(wrapped[0].role, Role::System);
         if let crate::services::llm::ContentPart::Text { text } = &wrapped[0].content[0] {

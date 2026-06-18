@@ -635,6 +635,10 @@ mod tests {
     use crate::services::test_db::fresh_db;
     use sqlx::Connection;
 
+    fn future_due_at(days: i64) -> String {
+        (Utc::now() + chrono::Duration::days(days)).to_rfc3339()
+    }
+
     #[tokio::test]
     async fn types_compile() {
         // 编译通过即可；真单测在 Phase C 各 Task 内
@@ -675,12 +679,13 @@ mod tests {
     async fn create_with_due_at_writes_reminder_and_backfills_id() {
         let (_dir, mut conn) = fresh_db().await;
         let mut tx = conn.begin().await.unwrap();
+        let due_at = future_due_at(30);
 
         let todo = create_with_tx(
             &mut tx,
             CreateInput {
                 title: "复诊".into(),
-                due_at: Some("2026-06-01T09:00:00Z".into()),
+                due_at: Some(due_at.clone()),
                 priority: Some("high".into()),
             },
         )
@@ -688,7 +693,7 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        assert_eq!(todo.due_at.as_deref(), Some("2026-06-01T09:00:00Z"));
+        assert_eq!(todo.due_at.as_deref(), Some(due_at.as_str()));
         let rid = todo.reminder_id.expect("reminder_id should be set");
         // 验证 reminders 表 +1 行
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reminders WHERE id=?")
@@ -798,16 +803,17 @@ mod tests {
         tx.commit().await.unwrap();
 
         let mut tx = conn.begin().await.unwrap();
+        let due_at = future_due_at(30);
         let updated = update_with_tx(
             &mut tx, &todo.id,
             UpdateInput {
-                due_at: Some(DueAtChange::Set("2026-06-01T09:00:00Z".into())),
+                due_at: Some(DueAtChange::Set(due_at.clone())),
                 ..Default::default()
             },
         ).await.unwrap();
         tx.commit().await.unwrap();
 
-        assert_eq!(updated.due_at.as_deref(), Some("2026-06-01T09:00:00Z"));
+        assert_eq!(updated.due_at.as_deref(), Some(due_at.as_str()));
         assert!(updated.reminder_id.is_some());
     }
 
@@ -815,11 +821,13 @@ mod tests {
     async fn update_due_at_set_on_existing_updates_reminder_spec() {
         let (_dir, mut conn) = fresh_db().await;
         let mut tx = conn.begin().await.unwrap();
+        let due_at = future_due_at(30);
+        let next_due_at = future_due_at(31);
         let todo = create_with_tx(
             &mut tx,
             CreateInput {
                 title: "x".into(),
-                due_at: Some("2026-06-01T09:00:00Z".into()),
+                due_at: Some(due_at),
                 priority: None,
             },
         ).await.unwrap();
@@ -830,7 +838,7 @@ mod tests {
         let updated = update_with_tx(
             &mut tx, &todo.id,
             UpdateInput {
-                due_at: Some(DueAtChange::Set("2026-06-02T10:00:00Z".into())),
+                due_at: Some(DueAtChange::Set(next_due_at.clone())),
                 ..Default::default()
             },
         ).await.unwrap();
@@ -840,18 +848,19 @@ mod tests {
         // 验证 reminder.trigger_spec 同步更新
         let spec: (String,) = sqlx::query_as("SELECT trigger_spec FROM reminders WHERE id=?")
             .bind(&original_rid).fetch_one(&mut conn).await.unwrap();
-        assert_eq!(spec.0, "2026-06-02T10:00:00Z");
+        assert_eq!(spec.0, next_due_at);
     }
 
     #[tokio::test]
     async fn cancel_via_update_with_once_reminder_deletes_reminder() {
         let (_dir, mut conn) = fresh_db().await;
         let mut tx = conn.begin().await.unwrap();
+        let due_at = future_due_at(30);
         let todo = create_with_tx(
             &mut tx,
             CreateInput {
                 title: "x".into(),
-                due_at: Some("2026-06-01T09:00:00Z".into()),
+                due_at: Some(due_at),
                 priority: None,
             },
         ).await.unwrap();
@@ -876,11 +885,12 @@ mod tests {
     async fn update_due_at_clear_deletes_reminder() {
         let (_dir, mut conn) = fresh_db().await;
         let mut tx = conn.begin().await.unwrap();
+        let due_at = future_due_at(30);
         let todo = create_with_tx(
             &mut tx,
             CreateInput {
                 title: "x".into(),
-                due_at: Some("2026-06-01T09:00:00Z".into()),
+                due_at: Some(due_at),
                 priority: None,
             },
         ).await.unwrap();
@@ -905,11 +915,12 @@ mod tests {
     async fn complete_with_once_reminder_deletes_reminder_and_clears_id() {
         let (_dir, mut conn) = fresh_db().await;
         let mut tx = conn.begin().await.unwrap();
+        let due_at = future_due_at(30);
         let todo = create_with_tx(
             &mut tx,
             CreateInput {
                 title: "x".into(),
-                due_at: Some("2026-06-01T09:00:00Z".into()),
+                due_at: Some(due_at),
                 priority: None,
             },
         ).await.unwrap();

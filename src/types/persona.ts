@@ -1,6 +1,7 @@
 /** PersonaService IPC 契约（与 src-tauri/src/services/persona.rs::PersonaSummary 对齐）。 */
 export interface PersonaSummary {
   id: string
+  snapshot_id: string
   name: string
   version: string
   source: string

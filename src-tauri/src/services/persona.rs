@@ -106,6 +106,7 @@ pub struct PersonaSummary {
     pub name: String,
     pub version: String,
     pub source: String,
+    pub snapshot_id: String,
     pub raw_markdown: String,
 }
 
@@ -280,8 +281,8 @@ pub(crate) async fn load_persona_with_conn(
             .await?;
     let (pid, name, version, source) =
         row.ok_or_else(|| PersonaLookupError::NotFound(id.to_string()))?;
-    let snap: Option<(String,)> = sqlx::query_as(
-        "SELECT content FROM persona_snapshots          WHERE persona_id = ? AND version = ?          ORDER BY id DESC LIMIT 1",
+    let snap: Option<(i64, String)> = sqlx::query_as(
+        "SELECT id, content FROM persona_snapshots          WHERE persona_id = ? AND version = ?          ORDER BY id DESC LIMIT 1",
     )
     .bind(&pid)
     .bind(&version)
@@ -292,7 +293,11 @@ pub(crate) async fn load_persona_with_conn(
         name,
         version,
         source,
-        raw_markdown: snap.map(|(c,)| c).unwrap_or_default(),
+        snapshot_id: snap
+            .as_ref()
+            .map(|(id, _)| id.to_string())
+            .unwrap_or_default(),
+        raw_markdown: snap.map(|(_, c)| c).unwrap_or_default(),
     })
 }
 
@@ -510,6 +515,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_persona_summary_includes_snapshot_id() {
+        let (_dir, mut conn) = fresh_db().await;
+        let parsed = parse_persona(MOMO_RAW).unwrap();
+        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH, true)
+            .await
+            .unwrap();
+
+        let expected_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM persona_snapshots WHERE persona_id = ? AND version = ?",
+        )
+        .bind(&parsed.frontmatter.id)
+        .bind(&parsed.frontmatter.version)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        let summary = load_persona_with_conn(&mut conn, &parsed.frontmatter.id)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.snapshot_id, expected_id.to_string());
+    }
+
+    #[tokio::test]
     async fn seed_builtin_is_idempotent() {
         // 关键:启动时 seed 多次(用户重启 / dev tooling reload)不能重复插入 snapshot
         let (_dir, mut conn) = fresh_db().await;
@@ -645,11 +673,10 @@ mod tests {
             .unwrap();
         assert_eq!(count.0, 3, "all 3 builtins should be seeded");
 
-        let active_id: (String,) =
-            sqlx::query_as("SELECT id FROM personas WHERE is_active = 1")
-                .fetch_one(&mut conn)
-                .await
-                .unwrap();
+        let active_id: (String,) = sqlx::query_as("SELECT id FROM personas WHERE is_active = 1")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
         assert_eq!(active_id.0, "momo", "momo is default active on first seed");
 
         let active_count: (i64,) =
@@ -674,11 +701,10 @@ mod tests {
         // 再 seed 一遍(模拟重启)
         seed_all_builtins(&mut conn).await;
 
-        let active_id: (String,) =
-            sqlx::query_as("SELECT id FROM personas WHERE is_active = 1")
-                .fetch_one(&mut conn)
-                .await
-                .unwrap();
+        let active_id: (String,) = sqlx::query_as("SELECT id FROM personas WHERE is_active = 1")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
         assert_eq!(
             active_id.0, "joker",
             "user's active choice must survive re-seed"

@@ -12,6 +12,7 @@ use crate::kernel::lifecycle_manager::{LifecycleManager, LifecycleState, Transit
 use crate::kernel::permission_service::{DenyOnlyPermissionService, PermissionService};
 use crate::kernel::repos::{PermissionRepo, SecretRepo};
 use crate::kernel::safety_guard::{SafetyError, SafetyGuard, SafetyGuardImpl};
+use crate::kernel::safety_policy::{ConfigKvSafetyPolicy, PolicyError, SafetyPolicy};
 use crate::kernel::state_store::StateStore;
 
 /// Phase A0 boot 时编译嵌入的 ADR-006 prefix; runtime 不可篡改。
@@ -26,11 +27,14 @@ pub enum BootError {
     Io(#[from] std::io::Error),
     #[error("transition: {0}")]
     Transition(#[from] TransitionError),
+    #[error("safety policy load failed: {0}")]
+    SafetyPolicy(#[from] PolicyError),
 }
 
 /// Phase A0 Kernel 总句柄 — 注入到 Tauri State, 供 commands 用。
 pub struct Kernel {
     pub state_store: Arc<StateStore>,
+    pub safety_policy: Arc<dyn SafetyPolicy>,
     pub safety_guard: Arc<dyn SafetyGuard>,
     pub permission_service: Arc<dyn PermissionService>,
     pub grant_broker: Arc<dyn GrantBroker>,
@@ -51,9 +55,16 @@ impl Kernel {
     /// 6. CryptoService + SecretRepo
     /// 7. LifecycleManager → Live
     pub fn boot(db_path: PathBuf) -> Result<Self, BootError> {
-        // Boot 3: SafetyGuard (compile-time prefix, 不读 runtime 文件)
-        let safety_guard: Arc<dyn SafetyGuard> =
-            Arc::new(SafetyGuardImpl::from_text(SAFETY_PREFIX)?);
+        // Boot 3a: SafetyPolicy (4 KV, 出厂全 OFF)
+        let safety_policy: Arc<dyn SafetyPolicy> = Arc::new(tauri::async_runtime::block_on(
+            ConfigKvSafetyPolicy::load_from_kv(&db_path),
+        )?);
+
+        // Boot 3b: SafetyGuard (compile-time prefix + policy dependency)
+        let safety_guard: Arc<dyn SafetyGuard> = Arc::new(SafetyGuardImpl::from_text_with_policy(
+            SAFETY_PREFIX,
+            Arc::clone(&safety_policy),
+        )?);
 
         // Boot 4: PermissionService (DenyOnly)
         let permission_repo = Arc::new(PermissionRepo::new());
@@ -77,6 +88,7 @@ impl Kernel {
 
         Ok(Self {
             state_store,
+            safety_policy,
             safety_guard,
             permission_service,
             grant_broker,
@@ -94,7 +106,8 @@ mod tests {
     #[test]
     fn boot_produces_live_lifecycle_and_all_components() {
         let db_path = std::env::temp_dir().join("boot_test_db.sqlite");
-        let kernel = Kernel::boot(db_path).expect("Kernel::boot should succeed with embedded prefix");
+        let kernel =
+            Kernel::boot(db_path).expect("Kernel::boot should succeed with embedded prefix");
         assert_eq!(kernel.lifecycle.current_state(), LifecycleState::Live);
         // 不检查具体类型, 但确保 Arc 字段非空 (compile 即证明; runtime sanity)
         assert!(Arc::strong_count(&kernel.lifecycle) >= 1);

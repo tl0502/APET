@@ -6,7 +6,7 @@
 use super::RepoError;
 use sqlx::SqliteConnection;
 
-/// messages.safety_scan_status 7 状态枚举 (Spec §6.6)。
+/// messages.safety_scan_status 8 状态枚举 (Spec §6.6)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyScanStatus {
     Pending,
@@ -16,6 +16,7 @@ pub enum SafetyScanStatus {
     FinalRedacted,
     FinalBlocked,
     ScanFailed,
+    Disabled,
 }
 
 impl SafetyScanStatus {
@@ -28,6 +29,7 @@ impl SafetyScanStatus {
             Self::FinalRedacted => "final_redacted",
             Self::FinalBlocked => "final_blocked",
             Self::ScanFailed => "scan_failed",
+            Self::Disabled => "disabled",
         }
     }
 }
@@ -69,14 +71,13 @@ impl ConversationRepo {
         new_content: &str,
         status: SafetyScanStatus,
     ) -> Result<(), RepoError> {
-        let res = sqlx::query(
-            "UPDATE messages SET content = ?, safety_scan_status = ? WHERE id = ?",
-        )
-        .bind(new_content)
-        .bind(status.as_str())
-        .bind(message_id)
-        .execute(&mut *conn)
-        .await?;
+        let res =
+            sqlx::query("UPDATE messages SET content = ?, safety_scan_status = ? WHERE id = ?")
+                .bind(new_content)
+                .bind(status.as_str())
+                .bind(message_id)
+                .execute(&mut *conn)
+                .await?;
         if res.rows_affected() == 0 {
             return Err(RepoError::NotFound(format!("message {}", message_id)));
         }
@@ -142,7 +143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_safety_status_all_7_states_serialize_correctly() {
+    async fn update_safety_status_all_8_states_serialize_correctly() {
         let mut conn = setup_test_db().await;
         let repo = ConversationRepo::new();
         for s in [
@@ -153,6 +154,7 @@ mod tests {
             SafetyScanStatus::FinalRedacted,
             SafetyScanStatus::FinalBlocked,
             SafetyScanStatus::ScanFailed,
+            SafetyScanStatus::Disabled,
         ] {
             repo.update_safety_status(&mut conn, "msg_1", s)
                 .await
@@ -164,6 +166,11 @@ mod tests {
                     .unwrap();
             assert_eq!(stored, s.as_str());
         }
+    }
+
+    #[tokio::test]
+    async fn safety_scan_status_disabled_serializes_as_string() {
+        assert_eq!(SafetyScanStatus::Disabled.as_str(), "disabled");
     }
 
     #[tokio::test]
@@ -188,12 +195,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let row: (String, String) = sqlx::query_as(
-            "SELECT content, safety_scan_status FROM messages WHERE id = 'msg_1'",
-        )
-        .fetch_one(&mut conn)
-        .await
-        .unwrap();
+        let row: (String, String) =
+            sqlx::query_as("SELECT content, safety_scan_status FROM messages WHERE id = 'msg_1'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
         assert_eq!(row.0, "*** redacted ***");
         assert_eq!(row.1, "final_redacted");
     }

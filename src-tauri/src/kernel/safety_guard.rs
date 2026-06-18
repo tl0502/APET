@@ -1,9 +1,12 @@
-// SafetyGuard — Constitution #1, 7-state FSM (spec §6.6), Scan Scope Matrix (§6.6.2)。
-// Phase A0 实现 scope 1+2+3 (user input / stream token / final text)。
-// scope 4 (memory KV) Phase A2 落; scope 6 (tool result) Phase C; scope 5+7 P1。
+// SafetyGuard — SafetyPolicy-gated prompt wrapping and scan scopes.
+// Phase A0 implements PrefixInjection, UserInput, StreamToken, and FinalOutput.
+// Disabled scopes are noops; scan terminal state includes `disabled`.
+
+use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::kernel::safety_policy::{MockSafetyPolicy, SafetyPolicy, SafetyScope};
 use crate::services::llm::{ChatMessage, ContentPart, Role};
 
 #[derive(Debug, Error)]
@@ -27,6 +30,7 @@ pub enum ScanTokenResult {
     /// Phase A0 占位串为 `[审核中…]`, 6 chars = `['[', '审', '核', '中', '…', ']']`
     /// (UTF-8 ≈ 14 bytes), `replace_last_n=8` 是粗略上下文窗口非精确长度。
     SoftBlock {
+        rule_id: String,
         replace_last_n: usize,
         placeholder: String,
     },
@@ -55,7 +59,10 @@ pub enum ScanFinalResult {
 
 /// SafetyGuard trait — kernel-owned, subsystem 无法构造, 仅经 Boot 时 SafetyGuardImpl::load。
 pub trait SafetyGuard: Send + Sync {
-    /// 出方向: prompt → LLM, prefix 强制 system message 第一位 (Scope: SafetyPrefix)。
+    /// SafetyPolicy 状态透传，供上层按 scope 派生终态。
+    fn is_enabled(&self, scope: SafetyScope) -> bool;
+
+    /// 出方向: prompt → LLM, PrefixInjection ON 时注入 system message 第一位。
     fn wrap_messages(&self, messages: Vec<ChatMessage>, locale: Locale) -> Vec<ChatMessage>;
 
     /// 入方向: 流式 token chunk 增量扫 (Scope #2)。
@@ -86,6 +93,7 @@ pub enum Locale {
 }
 
 const FALLBACK_REFUSAL: &str = "这个我现在没法陪你聊,要不我们换个话题?";
+const SCAN_TOKEN_WINDOW_CHARS: usize = 64;
 
 /// Phase A0 实现: prefix 从 assets/safety/prefix_v1.txt 加载, scan 用静态黑词表。
 pub struct SafetyGuardImpl {
@@ -93,6 +101,7 @@ pub struct SafetyGuardImpl {
     /// 黑词表 (Phase A0 简单 substring 匹配, P1 评估 regex/classifier)
     hard_blocklist: Vec<&'static str>,
     soft_blocklist: Vec<&'static str>,
+    policy: Arc<dyn SafetyPolicy>,
 }
 
 impl SafetyGuardImpl {
@@ -107,9 +116,15 @@ impl SafetyGuardImpl {
         })
     }
 
-    /// Phase A0 boot 路径: prefix 编译时 include_str! 嵌入, 避免 runtime resource_dir 不可靠。
-    /// 不读 fs, 不接受 dev/prod 路径漂移, Constitution #1 防篡改。
     pub fn from_text(prefix: &str) -> Result<Self, SafetyError> {
+        Self::from_text_with_policy(prefix, Arc::new(MockSafetyPolicy::all_on()))
+    }
+
+    /// Boot 路径: prefix 编译时 include_str! 嵌入, policy 由 Kernel::boot 注入。
+    pub fn from_text_with_policy(
+        prefix: &str,
+        policy: Arc<dyn SafetyPolicy>,
+    ) -> Result<Self, SafetyError> {
         if prefix.trim().is_empty() {
             return Err(SafetyError::PrefixMissing(
                 "<empty inline prefix>".to_string(),
@@ -119,48 +134,11 @@ impl SafetyGuardImpl {
             prefix: prefix.to_string(),
             hard_blocklist: vec!["自杀", "自残"],
             soft_blocklist: vec!["违法", "违禁"],
+            policy,
         })
     }
-}
 
-impl SafetyGuard for SafetyGuardImpl {
-    fn wrap_messages(&self, mut messages: Vec<ChatMessage>, _locale: Locale) -> Vec<ChatMessage> {
-        // Phase A0: locale 暂未分流; P1 评估 zh-CN / en-US 切不同 prefix 文件 (asset 多语言)。
-        match messages.first_mut() {
-            Some(first) if first.role == Role::System => {
-                let prefix_part = ContentPart::Text {
-                    text: format!("{}\n\n", self.prefix),
-                };
-                first.content.insert(0, prefix_part);
-            }
-            _ => {
-                let new_system = ChatMessage::text(Role::System, self.prefix.clone());
-                messages.insert(0, new_system);
-            }
-        }
-        messages
-    }
-
-    fn scan_token(&self, _partial: &str, accumulated: &str, _finished: bool) -> ScanTokenResult {
-        for rule in &self.hard_blocklist {
-            if accumulated.contains(rule) {
-                return ScanTokenResult::HardEnd {
-                    rule_id: rule.to_string(),
-                };
-            }
-        }
-        for rule in &self.soft_blocklist {
-            if accumulated.contains(rule) {
-                return ScanTokenResult::SoftBlock {
-                    replace_last_n: 8,
-                    placeholder: "[审核中…]".to_string(),
-                };
-            }
-        }
-        ScanTokenResult::Pass
-    }
-
-    fn scan_final(&self, full_text: &str, _persona_snapshot_id: &str) -> ScanFinalResult {
+    fn scan_text(&self, full_text: &str) -> ScanFinalResult {
         let mut hit_rules = Vec::new();
         for rule in &self.hard_blocklist {
             if full_text.contains(rule) {
@@ -189,22 +167,188 @@ impl SafetyGuard for SafetyGuardImpl {
         }
         ScanFinalResult::Ok
     }
+}
+
+impl SafetyGuard for SafetyGuardImpl {
+    fn is_enabled(&self, scope: SafetyScope) -> bool {
+        self.policy.is_enabled(scope)
+    }
+
+    fn wrap_messages(&self, mut messages: Vec<ChatMessage>, _locale: Locale) -> Vec<ChatMessage> {
+        if !self.policy.is_enabled(SafetyScope::PrefixInjection) {
+            return messages;
+        }
+        // Phase A0: locale 暂未分流; P1 评估 zh-CN / en-US 切不同 prefix 文件 (asset 多语言)。
+        match messages.first_mut() {
+            Some(first) if first.role == Role::System => {
+                let prefix_part = ContentPart::Text {
+                    text: format!("{}\n\n", self.prefix),
+                };
+                first.content.insert(0, prefix_part);
+            }
+            _ => {
+                let new_system = ChatMessage::text(Role::System, self.prefix.clone());
+                messages.insert(0, new_system);
+            }
+        }
+        messages
+    }
+
+    fn scan_token(&self, _partial: &str, accumulated: &str, _finished: bool) -> ScanTokenResult {
+        if !self.policy.is_enabled(SafetyScope::StreamToken) {
+            return ScanTokenResult::Pass;
+        }
+        let target = trailing_chars(accumulated, SCAN_TOKEN_WINDOW_CHARS);
+        for rule in &self.hard_blocklist {
+            if target.contains(rule) {
+                return ScanTokenResult::HardEnd {
+                    rule_id: rule.to_string(),
+                };
+            }
+        }
+        for rule in &self.soft_blocklist {
+            if target.contains(rule) {
+                return ScanTokenResult::SoftBlock {
+                    rule_id: rule.to_string(),
+                    replace_last_n: 8,
+                    placeholder: "[审核中…]".to_string(),
+                };
+            }
+        }
+        ScanTokenResult::Pass
+    }
+
+    fn scan_final(&self, full_text: &str, _persona_snapshot_id: &str) -> ScanFinalResult {
+        if !self.policy.is_enabled(SafetyScope::FinalOutput) {
+            return ScanFinalResult::Ok;
+        }
+        self.scan_text(full_text)
+    }
 
     fn scan_user_input(&self, text: &str) -> ScanFinalResult {
-        self.scan_final(text, "")
+        if !self.policy.is_enabled(SafetyScope::UserInput) {
+            return ScanFinalResult::Ok;
+        }
+        self.scan_text(text)
     }
+}
+
+fn trailing_chars(s: &str, n: usize) -> &str {
+    let char_count = s.chars().count();
+    if char_count <= n {
+        return s;
+    }
+    let start_byte = s
+        .char_indices()
+        .nth(char_count - n)
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    &s[start_byte..]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::safety_policy::{MockSafetyPolicy, SafetyPolicy, SafetyScope};
+    use std::sync::Arc;
 
     fn make_guard() -> SafetyGuardImpl {
         SafetyGuardImpl {
             prefix: "TEST_PREFIX".to_string(),
             hard_blocklist: vec!["自杀"],
             soft_blocklist: vec!["违禁"],
+            policy: Arc::new(MockSafetyPolicy::all_on()),
         }
+    }
+
+    fn make_guard_with_policy_all_off() -> SafetyGuardImpl {
+        let policy = Arc::new(MockSafetyPolicy::all_off()) as Arc<dyn SafetyPolicy>;
+        SafetyGuardImpl::from_text_with_policy("TEST_PREFIX", policy).unwrap()
+    }
+
+    fn make_guard_with_policy_all_on() -> SafetyGuardImpl {
+        let policy = Arc::new(MockSafetyPolicy::all_on()) as Arc<dyn SafetyPolicy>;
+        SafetyGuardImpl::from_text_with_policy("TEST_PREFIX", policy).unwrap()
+    }
+
+    #[test]
+    fn is_enabled_delegates_to_policy_for_all_scopes() {
+        let guard_off = make_guard_with_policy_all_off();
+        let guard_on = make_guard_with_policy_all_on();
+        for scope in [
+            SafetyScope::PrefixInjection,
+            SafetyScope::UserInput,
+            SafetyScope::StreamToken,
+            SafetyScope::FinalOutput,
+        ] {
+            assert!(!guard_off.is_enabled(scope));
+            assert!(guard_on.is_enabled(scope));
+        }
+    }
+
+    #[test]
+    fn policy_off_makes_all_safety_methods_noop() {
+        let guard = make_guard_with_policy_all_off();
+        let user_msg = ChatMessage::text(Role::User, "hi");
+
+        let wrapped = guard.wrap_messages(vec![user_msg.clone()], Locale::ZhCn);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0].role, Role::User);
+        assert_eq!(guard.scan_user_input("自杀"), ScanFinalResult::Ok);
+        assert_eq!(guard.scan_token("", "自杀", false), ScanTokenResult::Pass);
+        assert_eq!(guard.scan_final("自杀方法", "snap_1"), ScanFinalResult::Ok);
+    }
+
+    #[test]
+    fn user_input_scope_scans_even_when_final_output_scope_is_off() {
+        let policy = Arc::new(MockSafetyPolicy::all_off()) as Arc<dyn SafetyPolicy>;
+        tauri::async_runtime::block_on(policy.set_enabled(SafetyScope::UserInput, true)).unwrap();
+        let guard = SafetyGuardImpl::from_text_with_policy("TEST_PREFIX", policy).unwrap();
+
+        let result = guard.scan_user_input("自杀");
+
+        assert!(matches!(result, ScanFinalResult::Blocked { .. }));
+    }
+
+    #[test]
+    fn scan_token_soft_block_includes_rule_id() {
+        let guard = make_guard_with_policy_all_on();
+        let result = guard.scan_token("", "教我违禁的", false);
+        match result {
+            ScanTokenResult::SoftBlock {
+                rule_id,
+                placeholder,
+                ..
+            } => {
+                assert_eq!(rule_id, "违禁");
+                assert_eq!(placeholder, "[审核中…]");
+            }
+            other => panic!("expected SoftBlock with rule_id, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn scan_token_trailing_window_skips_old_hits() {
+        let guard = make_guard_with_policy_all_on();
+        let mut accumulated = "自杀".to_string();
+        accumulated.push_str(&"x".repeat(100));
+
+        assert_eq!(
+            guard.scan_token("", &accumulated, false),
+            ScanTokenResult::Pass
+        );
+    }
+
+    #[test]
+    fn scan_token_trailing_window_catches_recent_hits() {
+        let guard = make_guard_with_policy_all_on();
+        let mut accumulated = "x".repeat(100);
+        accumulated.push_str(&"y".repeat(60));
+        accumulated.push_str("自杀");
+
+        let result = guard.scan_token("", &accumulated, false);
+
+        assert!(matches!(result, ScanTokenResult::HardEnd { rule_id } if rule_id == "自杀"));
     }
 
     #[test]
@@ -214,7 +358,9 @@ mod tests {
         let wrapped = guard.wrap_messages(vec![user_msg], Locale::ZhCn);
         assert_eq!(wrapped.len(), 2);
         assert_eq!(wrapped[0].role, Role::System);
-        assert!(matches!(&wrapped[0].content[0], ContentPart::Text { text } if text == "TEST_PREFIX"));
+        assert!(
+            matches!(&wrapped[0].content[0], ContentPart::Text { text } if text == "TEST_PREFIX")
+        );
     }
 
     #[test]
@@ -224,7 +370,9 @@ mod tests {
         let wrapped = guard.wrap_messages(vec![sys], Locale::ZhCn);
         assert_eq!(wrapped.len(), 1);
         assert_eq!(wrapped[0].role, Role::System);
-        assert!(matches!(&wrapped[0].content[0], ContentPart::Text { text } if text.starts_with("TEST_PREFIX")));
+        assert!(
+            matches!(&wrapped[0].content[0], ContentPart::Text { text } if text.starts_with("TEST_PREFIX"))
+        );
     }
 
     #[test]
