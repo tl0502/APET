@@ -226,35 +226,50 @@ pub(crate) async fn list_providers_with_conn(
     .fetch_all(&mut *conn)
     .await?;
 
-    let mut items: Vec<ProviderListItem> = rows
-        .into_iter()
-        .filter_map(|(key, value)| {
-            let id = key.strip_prefix(KEY_PROVIDER_PREFIX)?.to_string();
-            // 损坏 JSON（用户手改 DB / 跨版本 schema 漂移 / 解密残留）：log 警告 + skip。
-            // 早先版本 `serde_json::from_str(&value).ok()?` 静默吞错，导致用户在设置面板
-            // 看不到那条诡异行也无法修复——若它恰好是 active_id 指向那条，ChatService 会报
-            // "未配置 provider"，用户排查无门。2026-05-10 code-review Bug 3 修复。
-            match serde_json::from_str::<ProviderRecord>(&value) {
-                Ok(record) => Some(ProviderListItem {
-                    is_active: active_id.as_deref() == Some(id.as_str()),
-                    has_api_key: !record.api_key.is_empty(),
-                    id,
-                    name: record.name,
-                    base_url: record.base_url,
-                    model: record.model,
-                }),
-                Err(e) => {
-                    eprintln!(
-                        "[llm_providers] skip corrupted provider entry id={id}: {e}"
-                    );
-                    None
-                }
+    let mut items: Vec<ProviderListItem> = Vec::with_capacity(rows.len());
+    for (key, value) in rows {
+        let Some(id) = key.strip_prefix(KEY_PROVIDER_PREFIX).map(str::to_string) else {
+            continue;
+        };
+        // 损坏 JSON（用户手改 DB / 跨版本 schema 漂移 / 解密残留）：log 警告 + skip。
+        // 早先版本 `serde_json::from_str(&value).ok()?` 静默吞错，导致用户在设置面板
+        // 看不到那条诡异行也无法修复——若它恰好是 active_id 指向那条，ChatService 会报
+        // "未配置 provider"，用户排查无门。2026-05-10 code-review Bug 3 修复。
+        let record = match serde_json::from_str::<ProviderRecord>(&value) {
+            Ok(record) => record,
+            Err(e) => {
+                eprintln!("[llm_providers] skip corrupted provider entry id={id}: {e}");
+                continue;
             }
-        })
-        .collect();
+        };
+
+        // Phase A0.5b 后 JSON api_key 正常为空，真实值在 secrets 表；
+        // legacy 明文 JSON 仍按非空直接显示已设置。
+        let has_api_key = !record.api_key.is_empty() || secret_entry_exists(conn, &id).await?;
+
+        items.push(ProviderListItem {
+            is_active: active_id.as_deref() == Some(id.as_str()),
+            has_api_key,
+            id,
+            name: record.name,
+            base_url: record.base_url,
+            model: record.model,
+        });
+    }
     // 按 name ASC（前端列表稳定排序；M3 拖拽排序时再加 sort_index 字段）
     items.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(items)
+}
+
+async fn secret_entry_exists(
+    conn: &mut SqliteConnection,
+    provider_id: &str,
+) -> Result<bool, LlmProviderError> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM secrets WHERE key = ?")
+        .bind(secret_repo_key(provider_id))
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(count.0 > 0)
 }
 
 /// 读单个 provider 详情（含 api_key）。
@@ -316,9 +331,8 @@ async fn enrich_record_from_secret(
         if let Some(repo) = secret_repo {
             match repo.get(conn, &secret_repo_key(id)).await {
                 Ok(secret_value) => {
-                    record.api_key = String::from_utf8(secret_value.0.clone()).map_err(|e| {
-                        LlmProviderError::Database(format!("secret utf8: {e}"))
-                    })?;
+                    record.api_key = String::from_utf8(secret_value.0.clone())
+                        .map_err(|e| LlmProviderError::Database(format!("secret utf8: {e}")))?;
                 }
                 Err(crate::kernel::repos::secret_repo::SecretError::NotFound(_)) => {
                     // 没 secret entry 也没 JSON 明文 → 用户未配置 key, 保持 empty
@@ -497,8 +511,7 @@ pub(crate) async fn update_provider_with_conn_and_secret(
                 // 用户显式清空 key → 删 secrets entry（best-effort, NotFound 不报）
                 let secret_key = secret_repo_key(id);
                 match repo.delete(conn, &secret_key).await {
-                    Ok(())
-                    | Err(crate::kernel::repos::secret_repo::SecretError::NotFound(_)) => {}
+                    Ok(()) | Err(crate::kernel::repos::secret_repo::SecretError::NotFound(_)) => {}
                     Err(e) => {
                         eprintln!(
                             "[llm_providers] secret_repo.delete failed on clear for {id}: {e}"
@@ -565,11 +578,10 @@ pub(crate) async fn delete_provider_with_conn_and_secret(
     // 早先版本无差别拒删 active，唯一 provider 场景下用户永远走不到"清空 active_id"
     // 路径，必须靠"先 add 第二个 → activate 它 → delete 第一个"绕路）。
     if is_active {
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM config WHERE key LIKE 'llm:provider:%'",
-        )
-        .fetch_one(&mut *conn)
-        .await?;
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM config WHERE key LIKE 'llm:provider:%'")
+                .fetch_one(&mut *conn)
+                .await?;
         if count.0 > 1 {
             return Err(LlmProviderError::CannotDeleteActive);
         }
@@ -844,7 +856,9 @@ mod tests {
 
         let items = list_providers_with_conn(&mut conn).await.unwrap();
         assert!(items.is_empty(), "唯一 provider 删除后 list 应为空");
-        let active_kv = config::get_with_conn(&mut conn, KEY_ACTIVE_ID).await.unwrap();
+        let active_kv = config::get_with_conn(&mut conn, KEY_ACTIVE_ID)
+            .await
+            .unwrap();
         assert!(
             active_kv.is_none(),
             "唯一 active 删除后 KEY_ACTIVE_ID 应被清，避免孤儿"
@@ -997,12 +1011,11 @@ mod tests {
 
         /// 检查 secrets 表是否有指定 key 的行。
         async fn secrets_row_exists(conn: &mut SqliteConnection, secret_key: &str) -> bool {
-            let count: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM secrets WHERE key = ?")
-                    .bind(secret_key)
-                    .fetch_one(&mut *conn)
-                    .await
-                    .unwrap();
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM secrets WHERE key = ?")
+                .bind(secret_key)
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
             count.0 > 0
         }
 
@@ -1084,10 +1097,9 @@ mod tests {
             .await
             .unwrap();
 
-            let detail =
-                get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
-                    .await
-                    .unwrap();
+            let detail = get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
+                .await
+                .unwrap();
             assert_eq!(
                 detail.api_key, "sk-roundtrip-test",
                 "get_provider 应该从 secrets 表解密回填 api_key"
@@ -1117,10 +1129,9 @@ mod tests {
             .unwrap();
 
             // 即使用 Some(repo) 读取, legacy 明文路径仍生效 (record.api_key 非空 = legacy)
-            let detail =
-                get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
-                    .await
-                    .unwrap();
+            let detail = get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
+                .await
+                .unwrap();
             assert_eq!(
                 detail.api_key, "sk-legacy-key",
                 "legacy 明文 record 应继续可读"
@@ -1178,10 +1189,9 @@ mod tests {
             );
 
             // 解密回读应是新值
-            let detail =
-                get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
-                    .await
-                    .unwrap();
+            let detail = get_provider_with_conn_and_secret(&mut conn, Some(&repo), &id)
+                .await
+                .unwrap();
             assert_eq!(detail.api_key, "sk-rotated");
 
             // JSON api_key 字段仍为空
@@ -1195,6 +1205,56 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(count.0, 1, "应只有一行 (overwrite 语义)");
+        }
+
+        #[tokio::test]
+        async fn list_provider_reports_key_present_after_secret_reentry() {
+            // 用户误清空 api_key 并保存后, 再次填回 key 应让列表 badge 恢复为"已设置"。
+            // Phase A0.5b 下 JSON api_key 永远为空, list 路径必须看 secrets 表而不是旧 JSON 字段。
+            let (_dir, mut conn) = fresh_db().await;
+            let repo = make_repo();
+            let id = add_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                req("OpenAI", "sk-initial"),
+            )
+            .await
+            .unwrap();
+
+            update_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                &id,
+                UpdateProviderRequest {
+                    api_key: Some("".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let items_after_clear = list_providers_with_conn(&mut conn).await.unwrap();
+            assert!(
+                !items_after_clear[0].has_api_key,
+                "清空保存后列表应显示 API Key 缺失"
+            );
+
+            update_provider_with_conn_and_secret(
+                &mut conn,
+                Some(&repo),
+                &id,
+                UpdateProviderRequest {
+                    api_key: Some("sk-reentered".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+            let items_after_reentry = list_providers_with_conn(&mut conn).await.unwrap();
+            assert!(
+                items_after_reentry[0].has_api_key,
+                "重新填入 API Key 后列表应恢复为已设置"
+            );
         }
 
         #[tokio::test]
