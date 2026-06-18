@@ -11,6 +11,8 @@ related:
 
 # Companion Agent Runtime v3 — Revised MVP Architecture Spec
 
+> **Supersession note (2026-06-18)**: Agent Runtime hot path, prompt material contract, SafetyPolicy defaults, and Persona source-format boundaries are superseded by [2026-06-18-agent-runtime-contract-design.md](2026-06-18-agent-runtime-contract-design.md). This v3 spec remains useful for historical context and broader subsystem mapping, but active implementation must follow the 2026-06-18 runtime contract when conflicts exist.
+>
 > **第三方审核 v2 verdict (2026-05-24)**: v2 架构方向通过, 10 项收紧后出 v3 进入 **Phase A0 开发就绪**。
 > **Audience**: 项目核心开发 + 第三方架构审核。本文档**自包含**。
 > **Status**: Brainstorm v3, 等 third review (若需);通过后进入 implementation plan 阶段。
@@ -20,7 +22,7 @@ related:
 
 | # | 项 | v2 | v3 |
 |---|---|---|---|
-| 1 | Soul 术语统一 | `.soul.md` / `.soul/` / `.soulpack` 残留混用 | **`.soul/` 一等格式** / `.soulpack` 分发 / `.soul.md` legacy 输入;§2.6.1 Soul Package Terminology |
+| 1 | Soul 术语统一 | `.soul.md` / `.soul/` / `.soulpack` 残留混用 | **Superseded 2026-06-18**: runtime only depends on `SoulRuntimeProfile`; `.soul/` is an undecided source format, not an active runtime requirement |
 | 2 | Phase A 拆分 | 单 Phase A ~3w | **Phase A0 Safety & Secrets (~1w) / A1 Persona Snapshot & Soul Package (~1.5w) / A2 Conversation Memory & History Stability (~0.5-1w)** |
 | 3 | Phase A DoD | (无) | **每个 sub-phase 独立 DoD** (§14.x) |
 | 4 | 旧 conversation migration | 默认 `COALESCE 'momo'` silent backfill | **cascade**: existing persona_id → metadata/messages → `LegacyUnknownSnapshot`; SQLite 两步 ALTER |
@@ -40,7 +42,7 @@ related:
 
 **AIPET**（AI Desktop Pet, 内部代号）是一个 Windows 桌面 AI 桌宠应用。10 周 MVP, 单人 vibecoding 项目。差异化定位三引擎:
 
-1. **用户自主人格**: 角色定义采用 **`.soul/` 多文件包**作为底层一等格式 (manifest+identity+style+initiative+memory+examples);用户可分享的 `.soulpack` 是 zip 分发格式;`.soul.md` 是 legacy / simple 模式输入, 由 SoulCompiler 转换为默认 `.soul/` 布局。参考 OpenClaw 开源项目验证可行。用户可编辑、可分享、可从零创建。详见 §2.6 与 ADR-028。
+1. **用户自主人格**: 运行时只依赖 `SoulRuntimeProfile` / `PersonaSnapshot`；`.soul/`、`.soul.md`、GUI schema、imported package 都只是候选 source format。`.soul/` 不再是已拍板的源格式，后续需独立 source-format spec 决定。
 2. **主动陪伴**: 桌宠**默认**基于本地空闲信号(GetLastInputInfo)主动起话题。**默认不读**窗口标题/应用名/输入内容/麦克风/屏幕内容。这些能力作为**可选 Context Awareness 增强**仅在用户**显式授权**后开放(P1+, 见 ADR-029)。
 3. **共同活动**: 物理交互(摸头/抗议/拖动反应)、装扮系统、声音表情、本地小游戏(3 个) + LLM 小游戏(2 个,故事接龙 + 角色扮演)。
 
@@ -120,13 +122,13 @@ related:
 **解决** (顶层契约 + 7 件 kernel + 6 件 subsystem 边界):
 - ✅ Runtime 总体架构 (Kernel 7 + Subsystems 6 + Soul Overlay 4)
 - ✅ State ownership (谁拥有什么表 / 谁能写 / 谁能读) + MVP Repository pattern
-- ✅ Lifecycle 状态机 (Boot/Live/Suspend/Wake/Shutdown) + SafetyGuard 7-state FSM
+- ✅ Lifecycle 状态机 (Boot/Live/Suspend/Wake/Shutdown) + SafetyGuard 8-state FSM（含 disabled）
 - ✅ Event 模型 (10 event + sync/async 边界 + 失败分级)
 - ✅ 17 trait 完整签名 (Kernel 7 + Subsystem 6 + Soul 4)
 - ✅ Memory **Phase A MVP**: KV 注入 + token-aware history window + 可选 rolling_summary
 - ✅ Initiative **Phase B MVP**: 4 trigger + hard gate + idle-only 默认
 - ✅ Tool **Phase C P1**: 3 read-only + GrantBroker sync + whitelist + audit
-- ✅ Soul Package 格式 (`.soul/` + `.soulpack` + Compiler + Snapshot)
+- ✅ `SoulRuntimeProfile` / `PersonaSnapshot` runtime contract（source format 由 2026-06-18 contract 降级为未决）
 - ✅ Persona Snapshot binding for Conversation
 - ✅ Context Awareness 权限模型 (默认关闭, 可选授权增强)
 - ✅ AIPET 现有 service → Runtime subsystem 三阶段迁移路径
@@ -156,7 +158,7 @@ related:
 ```
 src-tauri/src/kernel/                     新建 kernel 层 (P0 子集)
 ├── mod.rs                                ← trait 聚合 export
-├── safety_guard.rs                       🟢 P0 ADR-006 真注入 + 7-state FSM
+├── safety_guard.rs                       🟢 P0 SafetyGuard path + SafetyPolicy + 8-state FSM
 ├── permission_service.rs                 🟢 P0 stub + audit 表 (Context Awareness 默认全 deny)
 ├── grant_broker.rs                       🟢 P0 sync request/response stub (Phase C 真接 ToolSub)
 ├── state_store.rs                        🟢 P0 Repository pattern 包 sqlx pool
@@ -244,7 +246,7 @@ src-tauri/src/subsystems/memory/ranker.rs      🔴 P1 三因子排序 + LLM 摘
 | 表 | 改动 | 迁移方式 |
 |---|---|---|
 | `conversations` | 加 `persona_id TEXT NOT NULL` + `persona_snapshot_id TEXT NOT NULL` (新会话强绑定) + `rolling_summary TEXT DEFAULT NULL` | `ALTER TABLE` + backfill 旧会话用 active persona snapshot |
-| `messages` | 加 `token_count INTEGER DEFAULT NULL` + `safety_scan_status TEXT DEFAULT 'pending'` (7-state 枚举) | `ALTER TABLE` + default 兼容 |
+| `messages` | 加 `token_count INTEGER DEFAULT NULL` + `safety_scan_status TEXT DEFAULT 'pending'` (8-state 枚举,含 `disabled`) | `ALTER TABLE` + default 兼容 |
 | `persona_snapshots` | 加 `source_hash TEXT` + `compiled_profile_json TEXT NOT NULL` + `schema_version TEXT NOT NULL` (现有 schema 不足时拆 `persona_snapshot_profiles` 子表) | `ALTER TABLE` 或新建子表 |
 
 **Phase A (P0 必做) — 新增 schema**:
@@ -284,15 +286,15 @@ src-tauri/src/subsystems/memory/ranker.rs      🔴 P1 三因子排序 + LLM 摘
 | **ADR-025** | Agent 工具沙盒规则 (path whitelist + denylist + capability + grant UX) | C | Section 11 提供 MVP 默认作为参考,完整 ADR 独立提交 (Phase C 阻塞前置) |
 | **ADR-026** | Companion Agent Runtime 顶层架构 + MVP Phasing (本 spec 摘要) | A | 本 spec 通过后归档为 ADR-026 |
 | **ADR-027** | Memory MVP vs P1 (Phase A KV+window+rolling 与 Phase C episodic+FTS5 的分界) | A/C | Section 9 提供完整草案, 独立 ADR 撰写 |
-| **🆕 ADR-028** | Soul Package Format (`.soul/` 多文件包 + `.soulpack` 分发 + SoulCompiler + PersonaSnapshot) | A | Section 2.6 + Section 8 提供 MVP 默认, 独立 ADR 撰写 |
+| **🆕 ADR-028** | Persona source format（候选 `.soul/` / `.soul.md` / GUI schema / imported package）+ SoulRuntimeProfile + PersonaSnapshot | A | **Superseded 2026-06-18**: source format 未决；运行时只拍 `SoulRuntimeProfile` / `PersonaSnapshot` |
 | **🆕 ADR-029** | Context Awareness Permission (默认全 deny + 显式授权 + ContextProvider + 审计) | A (框架) + P1 (实施) | Section 11 + Section 2.4 提供权限模型, 独立 ADR 撰写 |
 
 **Updated ADR** (4 条):
 
 | ADR | 现状 | 本 spec 影响 |
 |---|---|---|
-| **ADR-003** | "用户角色定义 `.soul.md` schema v2 + 3 内置人格 + 安全前缀拼装" | Updated: 底层格式扩为 `.soul/` 多文件包;`.soul.md` 作为简单模式仍可被 SoulCompiler 消费 (内置 3 人格 Phase A 迁移到 `.soul/` 目录);Conversation 必须绑定 PersonaSnapshot |
-| **ADR-006** | "安全前缀 v1.0,通用核心 + 地区补充" | Updated: prefix 实际注入路径明确化(SafetyGuard.wrap_messages,kernel-owned trait,subsystem 无法 bypass);**新增 7-state FSM** (pending → streaming → final_ok/final_redacted/final_blocked) 与流式 UI 替换语义 |
+| **ADR-003** | "用户角色定义 `.soul.md` schema v2 + 3 内置人格 + 安全前缀拼装" | Updated: Conversation 必须绑定 PersonaSnapshot；source format 由 2026-06-18 runtime contract 降级为未决，运行时只依赖 `SoulRuntimeProfile` |
+| **ADR-006** | "安全前缀 v1.0,通用核心 + 地区补充" | Updated: prefix / scan 路径由 SafetyGuard + SafetyPolicy 控制；4 scope 出厂全 OFF；FSM 为 8-state（含 `disabled`） |
 | **ADR-015** | "对话面板三形态架构" | Updated: ConversationStore 升级为 ConversationSubsystem;三 surface(pet/chat/workspace)共享 data layer 通过 EventBus 多 surface broadcast;**新增 `persona_snapshot_id` 强绑定** |
 | **ADR-018** | "LLM 三层抽象 + AgentService 工具调用框架" | Updated: Layer 2 ChatService → ConversationSubsystem;Layer 3 AgentService → ToolSubsystem (本 spec **Phase C P1** 才接入);Phase A 保留现有 `service.rs:338` 主动忽略 tool_call 行为不变;沙盒细则推到 ADR-025 |
 
@@ -487,19 +489,8 @@ pub enum ConvPersonaStatus {
 **v2/v3 解法**:
 
 ```
-.soul/ package (源, 用户编辑) — 一等格式
-├── manifest.toml           ← schema / id / name / version / author
-├── identity.md             ← LLM 用 system prompt 来源
-├── style.toml              ← 语气 / 口头禅 / 表情 token (ToneShaper 用)
-├── initiative.toml         ← proactivity / quiet hours 默认 (InitiativeWeights 用)
-├── memory.toml             ← KV preference / scope 偏好 (MemoryPolicy 用)
-├── examples.md             ← few-shot 对话样本
-└── (P1) assets/ voice/ outfits/ games/
-
-         ↓ SoulPackageParser + SoulValidator
-         ↓ schema_version check / required fields
-         ↓ deny manifest 篡改 SAFETY_PREFIX / 系统约束 / permissions / tools
-         ↓ SoulCompiler (PersonaSub-internal service)
+persona source format (未决; examples: .soul/ / .soul.md / GUI schema / imported package)
+         ↓ PersonaSub-owned parser / compiler
 
 SoulRuntimeProfile { identity_prompt, style_prompt, initiative_config,
                      memory_policy, examples, ui_metadata, source_hash }
@@ -515,22 +506,22 @@ PersonaSnapshot (运行时锚, conversation 绑定, audit 锚)
 - ToneShaper 读 `style_prompt`
 - InitiativeWeights 读 `initiative_config`
 - MemorySub 读 `memory_policy`
-- UI 读 `ui_metadata` + 原始 `.soul/` 文件用于编辑器
+- UI 读 `ui_metadata` + source-format specific editor data（source format 仍未决）
 
 #### 2.6.1 Soul Package Terminology (v3 新增, 统一术语)
 
 | 术语 | 定义 | 状态 | 谁产 / 谁消费 |
 |---|---|---|---|
-| **`.soul/` 目录** | 底层**一等格式**, 多文件目录 (manifest.toml + identity.md + style.toml + initiative.toml + memory.toml + examples.md + 可选 assets/) | 一等 (Phase A1 起) | 用户直接编辑 / SoulCompiler 输入 |
-| **`.soulpack` 文件** | **分发格式**, `.soul/` 目录的 zip 归档, 用户跨设备 / 跨用户分享, OpenClaw 路径兼容 | 一等 (Phase A1 起) | 用户导入导出 / 必经 SoulPackageImporter 安全 unzip → 之后等价 `.soul/` |
-| **`.soul.md` 单文件** | **legacy / simple 输入**, 仅 identity 部分 | 兼容支持 (P1+ 重新评估是否保留) | 用户简单模式 / SoulCompiler 的 `LegacyMd` 输入路径 → 内部转默认 `.soul/` 布局 |
-| **SoulPackage** | 解析后的中间数据结构 (Rust struct), 含 manifest + 各 section 原文 | 内部 (kernel/PersonaSub) | SoulPackageParser 产 / SoulValidator + SoulCompiler 消费 |
-| **SoulRuntimeProfile** | SoulCompiler 输出, 含 identity_prompt / style_prompt / initiative_config / memory_policy / examples / ui_metadata / source_hash | 内部 (PersonaSub + Soul Overlay) | SoulCompiler 产 / 4 Soul Overlay 组件消费 |
+| **Persona source format** | 未决源格式；可能是 `.soul/`、`.soul.md`、GUI schema、imported package 或其他格式 | 未决 | PersonaSub 解析 / 编译 |
+| **`.soul/` 目录** | 候选源格式之一；不再作为 2026-06-18 后的运行时前提 | Candidate | 后续 source-format spec 再定 |
+| **`.soul.md` 单文件** | 候选源格式之一；可作为 simple / legacy 输入保留 | Candidate | 后续 source-format spec 再定 |
+| **Imported package** | 候选分发 / 导入格式；是否继续使用 `.soulpack` 后续再定 | Candidate | 后续 source-format spec 再定 |
+| **SoulRuntimeProfile** | Source format 编译后的运行时 profile，PromptBuilder / ToneShaper / InitiativeWeights / MemorySub 消费它 | Active runtime contract | PersonaSub 产 / runtime 消费 |
 | **PersonaSnapshot** | 写入 `persona_snapshot_profiles` 表的稳定 row, 含 snapshot_id + SoulRuntimeProfile + created_at | 内部 (PersonaSub) | PersonaSub.activate / load_soul_package 产 / ConversationSub 强绑 (Constitution #10) |
 
 **v3 关键不混用**:
-- 严禁混用"`.soul.md` 是 schema v2" (旧措辞), v3 起 `.soul.md` 仅是 SoulCompiler 输入路径之一
-- 严禁说"导入 `.soul/` 文件" — 应说"导入 `.soulpack` 文件" 或 "打开 `.soul/` 目录"
+- 严禁让 PromptBuilder 解析 source files；PromptBuilder 只消费 `SoulRuntimeProfile`
+- 严禁让 source format 授予 permissions / tools / safety_prefix 控制权
 
 #### 2.6.2 `.soulpack` 安全导入规则 (v3 新增, P0)
 
@@ -650,7 +641,7 @@ pub enum ImportError {
 └──────────────────────────────│────────────────────────────────────────────┘
                                │ subsystem 之间禁止直接调用, 必须经 kernel
 ┌─────────────── KERNEL (7 件套, hard, never bypassable) ───────────────────┐
-│  SafetyGuard 7-state FSM | LifecycleManager | EventBus | Scheduler        │
+│  SafetyGuard 8-state FSM | LifecycleManager | EventBus | Scheduler        │
 │  StateStore (Repository) | PermissionService 🆕 | GrantBroker 🆕          │
 │  (ADR-006 真注入)        | (FSM 5 states)   | (typed pub/sub + 失败分级)  │
 │                          | (cron+idle      | (默认 deny Context Awareness │
@@ -720,7 +711,7 @@ pub enum ImportError {
 | 表名 | Owner (writer) | Readers | Phase | Lifecycle |
 |---|---|---|---|---|
 | `conversations` | ConversationSub (via repo) | InitiativeSub(last_activity) / MemorySub(摘要时) / PersonaSub(snapshot binding 校验) | A 改 schema | persistent (+ `persona_id` + `persona_snapshot_id` + `rolling_summary`) |
-| `messages` | ConversationSub | MemorySub(扫描转 episodic, Phase C) | A 改 schema | persistent(+ `token_count` / `safety_scan_status` 7-state 枚举) |
+| `messages` | ConversationSub | MemorySub(扫描转 episodic, Phase C) | A 改 schema | persistent(+ `token_count` / `safety_scan_status` 8-state 枚举) |
 | `personas` | PersonaSub | ConversationSub / InitiativeSub | — | persistent |
 | `persona_snapshots` | PersonaSub | ConversationSub (hot path read by snapshot_id) | A 改 schema (+ source_hash + compiled_profile_json + schema_version) 或拆 `persona_snapshot_profiles` 子表 | persistent |
 | 🆕 `persona_snapshot_profiles` (可选, 若 persona_snapshots 不扩展) | PersonaSub | ConversationSub / PromptBuilder / ToneShaper / InitiativeWeights | **A 新增** | persistent |
@@ -981,7 +972,7 @@ ConfigKvSafetyPolicy 持 4 个 `Arc<AtomicBool>`，boot 时同步读 KV 加载�
 
 **关键转移规则**:
 
-1. **streaming → final_***: stream finish (`FinishReason::Stop / Length / ContentFilter / Error / Unknown`) 触发 scan_final;**不论 reason 必扫**
+1. **streaming → final_***: stream finish (`FinishReason::Stop / Length / ContentFilter / Error / Unknown`) enters the `SafetyGuard.scan_final` path; if `SafetyPolicy.FinalOutput` is OFF, the path returns noop / always-pass and final status follows the 2026-06-18 priority table.
 2. **stream_soft_blocked → final_blocked**: 若 soft block 累积 ≥ 3 次同一规则, 终态升级 blocked
 3. **scan_failed**: 保守降级 = 视作 blocked (用户看到 fallback);**绝不**因 scan_failed 就放过原文
 4. **UI 替换协议**: ConversationSub emit 新 `StreamEvent::ReplaceMessage { msg_id, new_content, reason }` (Tauri Channel), 前端按 msg_id 覆盖现有显示。Phase A 已落地的 4 分支收尾不变, 新增 5th 分支 `safety_replace`。
@@ -1031,7 +1022,7 @@ v2 7-state vs 4 分支:
 | 2 | **assistant stream token** | LLM 流式 token chunk | — | ✅ | — | A0 / **OFF (KV `safety:scan_token_enabled`)** | soft hit → stream_soft_blocked (替换最近 N token 为 `[审核中…]`);hard hit → 强制 finish + scan_final |
 | 3 | **assistant final text** | LLM 流式终态全文 | — | — | ✅ | A0 / **OFF (KV `safety:scan_final_enabled`)** | 决定 final_ok / final_redacted / final_blocked / scan_failed (§6.6 8-state FSM) |
 | 4 | **memory KV** (从 `memory` 表读出, 拼入 system message 前) | MemorySub.retrieve_kv 输出 | — | — | ✅ (Phase A2 起) | A2 | hit → 该 KV bullet 不拼入 prompt + 写 error_logs (用户曾输入违禁内容到 KV 时防再次出现) |
-| 5 | **rolling_summary** (Phase A2 占位不扫;P1 真接入时必扫) | MemorySub.maybe_roll_summary 输出 | — | — | ✅ (P1 起) | P1 | hit → 整条摘要丢弃, conversations.rolling_summary 保持 NULL / 占位 + 写 safety.violation |
+| 5 | **rolling_summary** (Phase A2 占位不扫;P1 真接入时走 SafetyGuard path) | MemorySub.maybe_roll_summary 输出 | — | — | ✅ (P1 起, policy-gated) | P1 | hit → 整条摘要丢弃, conversations.rolling_summary 保持 NULL / 占位 + 写 safety.violation |
 | 6 | **tool result content** | ToolSub.execute 返回 (read 文件 / grep 命中行 etc.) | — | — | ✅ | C | hit → ToolError::ResultUnsafe + 不 inject 到 LLM messages + audit log 标记 |
 | 7 | **context snapshot** (Phase A0 全 deny, P1 启用后 OS context 读取的内容) | PermissionService.read_context 输出 | — | — | ✅ (P1 起) | P1 | hit → ContextValue::Redacted + 写 context_access_log + 不 inject 到 prompt |
 
@@ -1381,7 +1372,7 @@ pub trait RuntimeUnitOfWork: Send + Sync {
 
 ```rust
 //═══════════════════════════════════════════════════════════════════
-// 1. SafetyGuard — Constitution #1 + 7-state FSM (§6.6)
+// 1. SafetyGuard — Constitution #1 + 8-state FSM (§6.6)
 //═══════════════════════════════════════════════════════════════════
 pub trait SafetyGuard: Send + Sync {
     /// LLM 调用前包装(prefix 强制第一位 + 地区补充); subsystem 拿到的已是包装后
@@ -1390,7 +1381,7 @@ pub trait SafetyGuard: Send + Sync {
     /// 流式增量扫描(快速); 命中违禁 → ScanTokenResult { action: Pass/SoftBlock/HardEnd }
     fn scan_token(&self, partial: &str, accumulated: &str, finished: bool) -> ScanTokenResult;
 
-    /// 流终态全文二次扫描; 7-state FSM 终态决策
+    /// 流终态全文扫描路径; 8-state FSM 终态决策, actual scan is SafetyPolicy-gated
     fn scan_final(&self, full_text: &str, persona_snapshot_id: &str) -> ScanFinalResult;
 
     /// 用户输入扫描 (Phase A 简单黑词, 防 prompt injection)
@@ -1982,7 +1973,7 @@ MemorySub.compress_working_to_episodic
   2. 取这段 5-10 turn 拼 raw_dialog
   3. 调 LLM 用 "摘要 persona"(不污染 active persona)生成:
        { summary, entities, emotional_tags, emotional_weight }
-  4. SafetyGuard.scan_final(summary) 必扫 (Constitution #1)
+  4. SafetyGuard.scan_final(summary) path is required; actual scan is SafetyPolicy-gated.
   5. INSERT episodic_memory + source_message_ids
   6. working_memory[conv_id] compact (保留 last 3 turn for continuity)
 ```
@@ -2496,7 +2487,7 @@ CREATE TABLE tool_audit_log (...);
 ```
 ┌─ Phase A0: Safety & Secrets (~1 周, 任何对外分发版本前 P0 阻塞) ─────────┐
 │                                                                            │
-│ A0.1 kernel/safety_guard.rs ADR-006 真注入 + 7-state FSM + Scan Scope    │
+│ A0.1 kernel/safety_guard.rs SafetyGuard path + 8-state FSM + Scan Scope │
 │       Matrix scope 1+2+3 (user input / stream / final)        ~4 天        │
 │ A0.2 kernel/state_store.rs Repository pattern + raw Pool 私有  ~2 天      │
 │ A0.3 kernel/permission_service.rs DenyOnlyPermissionService              │
@@ -2510,8 +2501,8 @@ CREATE TABLE tool_audit_log (...);
 │ A0.8 264 cargo test 适配 (~10 个改)                         ~1 天         │
 │                                                                            │
 │ A0 DoD (任何对外分发版本必满足):                                          │
-│  ✅ LLM 每次调用带 ADR-006 safety prefix                                  │
-│  ✅ 7-state FSM 单测覆盖 (7 状态 + 流→终 + scan_failed 降级)            │
+│  ✅ SafetyGuard path completeness + SafetyPolicy 4 scope default OFF     │
+│  ✅ 8-state FSM 单测覆盖 (8 状态 + disabled + scan_failed 降级)          │
 │  ✅ StreamEvent::ReplaceMessage 协议前后端走通                            │
 │  ✅ DPAPI secrets 表落地, API Key 不再明文 (CryptoService 实施)         │
 │  ✅ 整个 src-tauri crate 不出现 GetForegroundWindow/getUserMedia/etc    │
@@ -2581,7 +2572,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 - A1 依赖 A0 (用 Repository + UoW + SafetyGuard 已落)
 - A2 依赖 A1 (用 persona_snapshot_id 取 SoulRuntimeProfile)
 
-**Phase A0 是任何对外分发版本前的 hard gate** — 即使 A1/A2 推迟, A0 也必须先落 (DPAPI secrets / safety prefix / 7-state FSM 是产品发布的 P0 条件)。
+**Phase A0 是任何对外分发版本前的 hard gate** — 即使 A1/A2 推迟, A0 也必须先落（DPAPI secrets / SafetyGuard path completeness / SafetyPolicy default OFF + configurable scopes / 8-state FSM 是产品发布的 P0 条件）。
 
 ---
 
@@ -2594,15 +2585,15 @@ Phase C: deferred, 视 M4-M5 节奏决定
 | **ADR-025** | Agent 工具沙盒规则 (path whitelist + denylist + capability + GrantBroker UX + Audit log) | C | 草案 (本 spec §11 提供 MVP 默认), 独立 ADR 文档需撰写; Phase C 阻塞前置 |
 | **ADR-030** | Companion Agent Runtime 顶层架构 + MVP Phasing (本 spec v2 摘要 + 四阶段 + 14 Constitution) | A | 本 spec 通过后归档为 ADR-030（编号让位 2026-05-26: ADR-026 已用于 SafetyPolicy 可配置化, 详 [`2026-05-26-safety-policy-configurable-design.md`](2026-05-26-safety-policy-configurable-design.md)） |
 | **ADR-027** | Memory MVP vs P1 (Phase A: KV+window+rolling_summary; Phase C: episodic+FTS5+RetrievalRanker+LLM 摘要) | A/C | 本 spec §9 提供完整草案 (含 Phase 分界 + 进入门槛), 独立 ADR 撰写 |
-| **🆕 ADR-028** | Soul Package Format (`.soul/` 多文件包 + `.soulpack` 分发 + SoulCompiler + SoulRuntimeProfile + PersonaSnapshot binding) | A | 本 spec §2.6 + §8.3 提供 MVP 默认 (含 schema + validator 黑名单 + 3 内置人格迁移路径), 独立 ADR 撰写 |
+| **🆕 ADR-028** | Persona source format + SoulRuntimeProfile + PersonaSnapshot binding | A | Source format 已由 2026-06-18 contract 降级为未决；后续独立 source-format spec 再定 |
 | **🆕 ADR-029** | Context Awareness Permission (默认全 deny + 显式授权 + PermissionService 收口 + context_access_log + 三权限域分离) | A 框架 / P1 实施 | 本 spec §2.4 + §11.1 + §11.6 提供权限模型, 独立 ADR 撰写; MVP 仅落 PermissionService stub + 审计表 + 设置面板 "未启用" 提示 |
 
 ### 13.2 Updated ADR (4 条)
 
 | ADR | 原状态 | Updated 内容 |
 |---|---|---|
-| **ADR-003** | "用户角色定义 `.soul.md` schema v2 + 3 内置人格 + 安全前缀拼装" | Updated 2026-05-24: 底层格式扩为 `.soul/` 多文件包 (manifest.toml + identity.md + style.toml + initiative.toml + memory.toml + examples.md);`.soul.md` 简单模式保留作为 SoulCompiler 的 LegacyMd 输入;**内置 3 人格 momo/joker/coach 在 Phase A 迁移到 `.soul/` 目录布局**;Conversation 必须强制绑定 PersonaSnapshot, 严禁 hot path 读 active persona |
-| **ADR-006** | "安全前缀 v1.0,通用核心 + 地区补充" | Updated 2026-05-24: prefix 实际注入路径明确化 (SafetyGuard.wrap_messages, kernel-owned trait, subsystem 无法 bypass);**新增 7-state FSM** (pending → streaming → final_ok/final_redacted/final_blocked, 含 scan_failed 保守降级) 与流式 UI 替换语义;新增 StreamEvent::ReplaceMessage 协议 (前端按 msg_id 覆盖);scan 消费范围扩展 (user input MVP 必扫;tool result + memory summary P1 必扫) **Updated 2026-05-26 二次**: SafetyGuard 注入路径由 SafetyPolicy 决定 4 scope toggle（出厂全 OFF，详 [`2026-05-26-safety-policy-configurable-design.md`](2026-05-26-safety-policy-configurable-design.md)）;7-state FSM 扩 8-state（加 `disabled` 终态）。原 "subsystem 无法 bypass" 语义保留, "永远第一位/必扫" 改为 "policy 决定 + noop-when-disabled 仍走路径"。 |
+| **ADR-003** | "用户角色定义 `.soul.md` schema v2 + 3 内置人格 + 安全前缀拼装" | Updated 2026-06-18: source format 未决；运行时只依赖 `SoulRuntimeProfile` / `PersonaSnapshot`;Conversation 必须强制绑定 PersonaSnapshot, 严禁 hot path 读 active persona |
+| **ADR-006** | "安全前缀 v1.0,通用核心 + 地区补充" | Updated 2026-06-18: SafetyGuard path remains mandatory, while prefix injection and scan behavior are controlled by SafetyPolicy 4 scope toggles (default OFF). FSM is 8-state with `disabled`; `StreamEvent::ReplaceMessage` remains the UI replacement protocol. |
 | **ADR-015** | "对话面板三形态架构" | Updated 2026-05-24: ConversationStore 升级为 ConversationSubsystem;三 surface(pet/chat/workspace)共享 data layer 通过 EventBus 多 surface broadcast;**新增 `persona_snapshot_id` 强绑定** — 用户切换 active persona 不污染历史会话, 历史会话风格稳定 |
 | **ADR-018** | "LLM 三层抽象 + AgentService 工具调用框架" | Updated 2026-05-24: Layer 2 ChatService → ConversationSubsystem;Layer 3 AgentService → ToolSubsystem (本 spec **Phase C P1** 才接入, 不在 MVP);**Phase A 保留** 现有 `service.rs:338` 主动忽略 tool_call 行为不变 (LLM 调用 tools=vec![]);Phase C 启动时增量改造;沙盒细则推到 ADR-025 |
 
@@ -2618,7 +2609,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 
 **MUST**:
 - SafetyGuard ADR-006 真注入 (`SAFETY_PREFIX = None` → kernel 注入)
-- SafetyGuard 7-state FSM + Scan Scope Matrix scope 1+2+3 (user input + stream token + final text)
+- SafetyGuard 8-state FSM + Scan Scope Matrix scope 1+2+3 (user input + stream token + final text), actual scan policy-gated
 - SafetyGuard 区分 SafetyPrefix vs SafetyScanRules (Constitution #1)
 - StreamEvent::ReplaceMessage 协议 (前端按 msg_id 覆盖)
 - DPAPI secrets 表 + CryptoService (API Key 不再明文)
@@ -2777,7 +2768,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 | Repository pattern 仍可绕 (subsystem 拿到自己 repo 后将其传给他人 / kernel 暴露 raw Pool) | Single Writer 实质保护变弱 | Phase A 严格 code review;P1 hardening 上 WriterCap 类型期 token | A |
 | SoulCompiler schema 演进 (manifest.toml v1 → v2 兼容) | 用户分享 `.soulpack` 跨版本无法用 | SoulValidator 强制 schema_version 字段;PersonaSnapshot 持久 source_hash 不动 | A |
 | 3 内置人格 momo/joker/coach 迁移 `.soul/` 目录 | 现有用户已有自定义 `.soul.md` 文件 | Phase A 提供 LegacyMd → `.soul/` 自动 compile 路径 (单 .md 落到默认布局);用户文件保留, runtime 用 compile 后的 PersonaSnapshot | A |
-| SafetyGuard 7-state FSM 流式 UI 替换协议 (StreamEvent::ReplaceMessage) 前后端时序 | 用户看到一闪而过的违禁内容然后被替换 | scan_token 在 chunk 命中时立即 SoftBlock (本地替换最近 N token, UI 看到 `[审核中…]`);final scan 再判 | A |
+| SafetyGuard 8-state FSM 流式 UI 替换协议 (StreamEvent::ReplaceMessage) 前后端时序 | 用户看到一闪而过的命中内容然后被替换 | scan_token 在 chunk 命中时立即 SoftBlock (本地替换最近 N token, UI 看到 `[审核中…]`);final scan path policy-gated 再判 | A |
 | GrantBroker UI modal 在 surface 不在前台时弹不出 | tool 调用阻塞或被 timeout 自动 deny | MVP timeout 5s, 超时返 GrantError::Timeout → ToolError::Denied;Surface 增强: pet window 跳出 modal 自带 focus 抢占 (P1) | C |
 | FTS5 中文分词效果 | Memory retrieval 精度低 | Phase C 沿用 SQLite FTS5 默认 unicode61 tokenizer + 关键词重叠;P1 评估 jieba-rs 集成 | C |
 | LLM 摘要任务的 token 成本 | 用户账单 | Phase A rolling_summary 仅在阈值触发, 限制 prompt token + max_tokens output;Phase C episodic 仅在 chat session 静默 30min 后触发 | A/C |
@@ -2810,7 +2801,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 - **Tool 沙盒逃逸** (Phase C): ADR-025 path whitelist + denylist + canonicalize 防 `..` 跳出;**symlink 不跟随** (MVP 拒绝)
 - **API Key 明文**: M1 期 config 表明文是已知技术债, **Phase A P0** 落地 DPAPI;任何对外分发版本必须先修
 - **🆕 Context Awareness 权限扩散**: PermissionService 统一收口防 Soul/Tool 各自申请;`context_access_log` 表所有访问可审计;**默认 deny** 是最强防线
-- **🆕 PersonaSnapshot 写入审计**: 用户编辑 .soul/ 文件可能含恶意 prompt injection (要求 LLM "忘记安全约束");SafetyGuard.scan_final 必扫 user input + SoulValidator 拒绝 manifest 出现 permissions/tools 字段
+- **🆕 PersonaSnapshot 写入审计**: 用户编辑 persona source 可能含恶意 prompt injection（要求 LLM "忘记安全约束"）；SafetyGuard scan path is SafetyPolicy-gated; PersonaSub still rejects source fields that try to grant permissions/tools/safety_prefix control.
 
 ---
 
@@ -2838,7 +2829,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 
 ### 🆕 v2 新 Open Questions (审核者重点关注)
 
-7. 🆕 **Phase A 3 周窗是否够 SoulCompiler + 3 内置人格迁移 + Repository pattern + SafetyGuard 7-state FSM 一次到位?**
+7. 🆕 **Phase A 3 周窗是否够 PersonaSnapshot runtime contract + Repository pattern + SafetyGuard 8-state FSM 一次到位?**
    - 作者预设(待审核): SoulCompiler + 内置人格迁移是最大不确定项 (~1 周);若超时, 优先级排序: SafetyGuard FSM > DPAPI > persona_snapshot binding > Memory KV > SoulCompiler 落地。SoulCompiler 简化为 `.soul.md` 单文件 → 默认 `.soul/` 布局 (LegacyMd compile 路径), 内置 3 人格暂不显式拆多文件, P1 再做完整目录布局编辑器。
 
 8. 🆕 **Phase C 完全 deferred 后, M5 W9-10 LLMGameRunner 游戏依赖 Tool 吗?**
@@ -2884,7 +2875,7 @@ Phase C: deferred, 视 M4-M5 节奏决定
 | **🆕 SoulCompiler** | PersonaSub 内部模块: `.soul/` → SoulRuntimeProfile + PersonaSnapshot | §2.6 / §8.3 |
 | **🆕 SoulRuntimeProfile** | SoulCompiler 输出, 含 identity_prompt + style_prompt + initiative_config + memory_policy + examples | §8.3 |
 | **🆕 PersonaSnapshot** | Conversation 绑定的稳定锚, 包含 SoulRuntimeProfile + source_hash, 写入 persona_snapshot_profiles | §2.5 / §8.3 |
-| **🆕 SafetyGuard 7-state FSM** | pending / streaming / stream_soft_blocked / final_ok / final_redacted / final_blocked / scan_failed | §6.6 |
+| **🆕 SafetyGuard 8-state FSM** | pending / streaming / stream_soft_blocked / final_ok / final_redacted / final_blocked / scan_failed / disabled | §6.6 |
 
 ---
 
