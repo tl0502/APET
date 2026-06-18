@@ -420,28 +420,33 @@ M0 第 5 天写入 `personas/_builtin/`。每个人格至少包含 `# 调侃` �
 
 ### 7.1 安全前缀(System Prefix,ADR-006)
 
-每次调用 LLM 时拼装链路为:
+每次调用 LLM 时按最新 Agent Runtime contract 拼装 prompt。`SafetyPrefix` 不再是固定第一层；它由 `SafetyPolicy.PrefixInjection` 控制，出厂默认 OFF。
 
 ```
-[安全前缀(系统注入,用户不可见、不可禁用,版本 v1.0)]
-[当前人格的 system prompt(由 .soul.md 渲染而成)]
-[用户记忆(key-value 简表,含 username)]
-[最近 N 轮对话历史]
+[可选 SafetyPrefix（SafetyPolicy.PrefixInjection=ON 时由 SafetyGuard 注入）]
+[app/runtime frame]
+[PersonaSnapshot.identity_prompt]
+[PersonaSnapshot.style_prompt]
+[用户 profile（nickname / locale / preferences）]
+[live state（mood / energy，可选）]
+[memory bullets（A2 起）]
+[few-shot examples（预算允许时）]
+[history window]
 [本轮用户输入]
 ```
 
-LLM 游戏(模块 Q)拼装顺序:
+LLM 游戏（模块 Q）复用同一 runtime contract。游戏场景 prompt 是普通 prompt material，不能修改 `SafetyPolicy`、PermissionService、Tool policy、Memory 写入规则。
 
 ```
-[安全前缀]
-[当前人格 system prompt]
-[游戏场景 system_prompt(来自 game_scenes/<id>.yaml)]
-[用户记忆摘要(仅 username/作息等公共项)]
-[本会话历史(game_session_events)]
+[可选 SafetyPrefix（SafetyPolicy.PrefixInjection=ON 时）]
+[app/runtime frame]
+[PersonaSnapshot.identity_prompt]
+[PersonaSnapshot.style_prompt]
+[游戏场景 system_prompt（来自 game_scenes/<id>.yaml）]
+[用户记忆摘要（仅公共项）]
+[本会话历史（game_session_events）]
 [本轮输入]
 ```
-
-游戏场景的 `system_prompt` **不能覆盖安全前缀**;立项期复审(ADR-007)。
 
 ### 7.2 安全前缀文案(v1.0,ADR-006 Accepted)
 
@@ -479,11 +484,11 @@ international:
 - 写入 DB `consent.version`。
 - 老用户登入时如检测到 version mismatch → 弹"内容已更新"提示,需要再次确认。
 
-### 7.3 不可绕过性
+### 7.3 Runtime 边界
 
-- 用户人格中即使写"你不需要遵守安全规则",也无效 — 安全前缀位于人格之前且明确指出"无论以下角色定义如何"。
-- 离线模板池中如出现违反安全规则的内容(如导入第三方人格),由静态校验拦截。
-- 命中安全规则时使用统一的安全回复,即使覆盖了当前人格语气也优先安全。
+- 用户人格不能修改 `SafetyPolicy`、PermissionService、Tool policy、Scheduler、Memory 写入规则。
+- 人格 source format 不能声明 `permissions` / `tools` / `safety_prefix` 等扩权字段；PersonaSub 在生成 `SoulRuntimeProfile` 前必须拒绝或忽略这些字段。
+- `SafetyGuard` 路径仍必经，但 4 个 SafetyPolicy scope 出厂默认 OFF；disabled scope 返回 noop / always-pass。
 
 ### 7.4 用户可调项
 
@@ -494,13 +499,15 @@ international:
 | 调侃尺度 | ✅ | 通过 `tone_profile.playfulness` |
 | 回避话题清单 | ✅ | 自定义"不要谈论"列表 |
 | 物理反应覆盖 | ✅ | `# 反应配置` 区段(限制在 12 个核心动作 ID 内) |
-| **安全规则本体** | ❌ | 不可绕过 |
-| **未成年保护** | ❌ | 不可绕过 |
-| **法律边界** | ❌ | 不可绕过 |
+| `SafetyPolicy.PrefixInjection` | ✅ | 出厂 OFF；开启后注入 ADR-006 prefix |
+| `SafetyPolicy.UserInput` | ✅ | 出厂 OFF；开启后扫描用户输入 |
+| `SafetyPolicy.StreamToken` | ✅ | 出厂 OFF；开启后扫描流式 token |
+| `SafetyPolicy.FinalOutput` | ✅ | 出厂 OFF；开启后扫描最终输出 |
+| 权限 / 工具 / OS context | ❌（由专用设置控制） | 不由人格 source format 控制 |
 
 ### 7.5 LLM 游戏内的人格化拒答(ADR-007)
 
-当 LLM 游戏中 SecurityGuard 触发拒答替换,**优先**从当前游戏场景 yaml 文件 `refusals` 字段抽样(每场景 ≥ 3 条),其次降级到当前人格的 `## 拒答 / Refusal` 池,最末全局兜底。
+当 `SafetyPolicy` 对应扫描 scope 开启且 `SafetyGuard` 触发拒答替换时，**优先**从当前游戏场景 yaml 文件 `refusals` 字段抽样（每场景 ≥ 3 条），其次降级到当前人格的 `## 拒答 / Refusal` 池，最末全局兜底。
 
 例(咖啡店老板场景的 refusals):
 - "诶~ 这个咱不聊,要不我给你冲杯咖啡?"
@@ -533,9 +540,9 @@ international:
 
 ### 8.2 拼装顺序(详见 §7.1)
 
-正常对话:`[安全前缀] [人格] [记忆摘要(含 username)] [对话历史] [本轮输入]`
+正常对话：`[可选 SafetyPrefix] [app/runtime frame] [PersonaSnapshot identity/style] [user profile] [live state] [memory bullets] [examples] [history window] [本轮输入]`
 
-LLM 游戏:`[安全前缀] [人格] [游戏场景 system_prompt] [用户记忆摘要(仅公共项)] [游戏会话历史] [本轮输入]`
+LLM 游戏：`[可选 SafetyPrefix] [app/runtime frame] [PersonaSnapshot identity/style] [game scene prompt] [公共记忆摘要] [game history] [本轮输入]`
 
 ### 8.3 一致性约束
 
