@@ -2,6 +2,8 @@
 title: 我的工作约定（WORKFLOW）
 updated: 2026-05-05
 related:
+  - ../AGENTS.md
+  - ../CLAUDE.md
   - README.md
   - decisions.md
 ---
@@ -125,7 +127,7 @@ type 自由：`feat / fix / refactor / docs / chore`，不强制。
 
 ### 8.1 为什么有这个文件
 
-AI 对话不持久。新 session 是空白页。[STATUS.md](STATUS.md) 是写给下次 Claude 看的便条 —— "上次到哪、下一步、阻塞"。
+AI 对话不持久。新 session 是空白页。[STATUS.md](STATUS.md) 是写给下次 Claude / Codex 看的便条 —— "上次到哪、下一步、阻塞"。
 
 ### 8.2 什么时候更新
 
@@ -134,7 +136,7 @@ AI 对话不持久。新 session 是空白页。[STATUS.md](STATUS.md) 是写给
 
 ### 8.3 怎么更新
 
-session 结束前调用 `/sync-status`。Claude 会按**三层分离**结构操作：
+session 结束前同步状态。Claude 调用 `/sync-status`；Codex 按根目录 [AGENTS.md](../AGENTS.md) 的 `Codex sync-status` 等价流程执行。同步时按**三层分离**结构操作：
 
 1. **关闭已完成 issue**：close-comment 必须**自包含**（commit hash + 做了什么 + 关键偏离/取舍 + 实测 + follow-up），不能写"详见 STATUS.md"指针
 2. **更新 STATUS.md**：只改"当前状态"四行 + "Milestone 进度"一行（如 13/18 → 14/18）；**不**写本 session 详细流水（详情已在 issue closing comment）
@@ -145,9 +147,9 @@ session 结束前调用 `/sync-status`。Claude 会按**三层分离**结构操�
 
 ### 8.4 新 session 怎么入场
 
-打开新 session 后输入 `/resumex`，Claude 会读 STATUS + README + 当前 milestone 章节，回报状态。
+打开新 session 后，Claude 输入 `/resumex`；Codex 输入 `resumex` 或直接说“读状态进入开发模式”。两者都应读 STATUS + README + 当前 milestone 章节，回报状态。
 
-或直接对 Claude 说：「读 docs/STATUS.md 然后告诉我现在该做什么」。
+或直接对 AI agent 说：「读 docs/STATUS.md 然后告诉我现在该做什么」。
 
 ### 8.5 STATUS.md 写得太厚怎么办
 
@@ -170,9 +172,9 @@ STATUS.md 当前结构（三层分离后）只装"当前状态快照"+"Milestone
 
 | 场景 | 命令 |
 |---|---|
-| 开始 session | `/resumex`（读 STATUS + 最近 5 个开放 issue） |
-| 接到新任务 | `/new-task <一句话描述>` |
-| Session 结束 | `/sync-status`（关闭完成的 issue + 更新 STATUS） |
+| 开始 session | Claude: `/resumex`；Codex: `resumex` |
+| 接到新任务 | Claude: `/new-task <一句话描述>`；Codex: `new-task <一句话描述>` |
+| Session 结束 | Claude: `/sync-status`；Codex: `sync-status` |
 
 ### 9.2 远端未接入时
 

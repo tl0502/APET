@@ -4,9 +4,9 @@
 - 适用阶段：**MVP 实施期**（M1-M5，10 周）
 
 > **新人路径**：先读本页 §一句话定位 → §五份对齐文档 → 路线图，5 分钟可入场。
-> **实施期入场**：直接读 [STATUS.md](STATUS.md)（当前进度 / 下一步 / 阻塞）；新 session 用 `/resumex` 召回上下文。
-> **任务跟踪**：GitHub Issues（详见 [github-workflow.md](github-workflow.md)）；用 `/new-task` 与 `/sync-status` 维护。
-> **工作约定**：见 [WORKFLOW.md](WORKFLOW.md)；术语解释见 [GLOSSARY.md](GLOSSARY.md)；决策记录见 [decisions.md](decisions.md)。
+> **实施期入场**：直接读 [STATUS.md](STATUS.md)（当前进度 / 下一步 / 阻塞）；Claude 用 `/resumex`，Codex 按根目录 [AGENTS.md](../AGENTS.md) 的 `Codex resumex` 召回上下文。
+> **任务跟踪**：GitHub Issues（详见 [github-workflow.md](github-workflow.md)）；Claude 用 `/new-task` 与 `/sync-status`，Codex 按 `Codex new-task` 与 `Codex sync-status` 等价流程维护。
+> **工作约定**：见 [WORKFLOW.md](WORKFLOW.md)；长期协作记忆见 [agent-memory.md](agent-memory.md)；术语解释见 [GLOSSARY.md](GLOSSARY.md)；决策记录见 [decisions.md](decisions.md)。
 
 ---
 
@@ -107,6 +107,7 @@ docs/
 ├── README.md              ← 本文件（单一权威入口）
 ├── STATUS.md              ← 项目进度（实施期入场先读）
 ├── WORKFLOW.md            ← 我的工作约定
+├── agent-memory.md        ← Agent 长期协作记忆（Claude memory 迁移）
 ├── GLOSSARY.md            ← 项目术语表
 ├── github-workflow.md     ← GitHub Issues 工作流
 ├── decisions.md           ← 决策记录（ADR-001 ... ADR-015）

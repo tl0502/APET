@@ -2,6 +2,7 @@
 title: GitHub Issues 工作流
 updated: 2026-05-05
 related:
+  - ../AGENTS.md
   - ../CLAUDE.md
   - WORKFLOW.md
   - STATUS.md
@@ -123,15 +124,15 @@ GitHub 原生 milestones 对应路线图 M1-M5：
 
 ---
 
-## 6. 自定义 slash 命令
+## 6. Claude slash 命令与 Codex 等价流程
 
 | 命令 | 用途 |
 |---|---|
-| `/resumexx` | 召回项目上下文（读 STATUS + 当前 milestone + 最近 5 个开放 issue） |
+| `/resumex` | 召回项目上下文（读 STATUS + 当前 milestone + 最近 5 个开放 issue） |
 | `/new-task` | 从对话创建 issue（自动推断 type/module label，写反向链接） |
 | `/sync-status` | session 末同步：关闭已完成 issue + 更新 STATUS |
 
-详见 `.claude/commands/` 各命令说明文件。
+Claude 的自定义 slash command 详见 `.claude/commands/` 各命令说明文件。Codex 不依赖 slash command，按根目录 [AGENTS.md](../AGENTS.md) 中的 `Codex resumex`、`Codex new-task`、`Codex sync-status` 等价流程执行。
 
 ---
 
@@ -143,7 +144,7 @@ GitHub 原生 milestones 对应路线图 M1-M5：
 /resumex
 ```
 
-Claude 会读 STATUS + 最近开放 issue + 当前 milestone 章节，回报状态。
+Claude 会读 STATUS + 最近开放 issue + 当前 milestone 章节，回报状态。Codex 可直接说 `resumex` 或“读状态进入开发模式”，按 [AGENTS.md](../AGENTS.md) 执行同等流程。
 
 ### 7.2 接到新任务
 
@@ -153,11 +154,11 @@ Claude 会读 STATUS + 最近开放 issue + 当前 milestone 章节，回报状�
 /new-task <一句话描述>
 ```
 
-Claude 会推断 label 并调 `gh issue create` 创建。
+Claude / Codex 会先推断 label 并展示草稿，用户确认后再调 `gh issue create` 创建。
 
 ### 7.3 干完一个 task
 
-让 Claude 调 `gh issue close <number> --comment "<完成摘要>"`。
+让 Claude / Codex 调 `gh issue close <number> --comment "<完成摘要>"`。close-comment 必须自包含，不能只写“详见 STATUS.md”。
 
 ### 7.4 session 结束
 
@@ -165,10 +166,10 @@ Claude 会推断 label 并调 `gh issue create` 创建。
 /sync-status
 ```
 
-Claude 会：
+Claude / Codex 会：
 
 1. 列出本 session 关闭的 issue 编号
-2. 更新 STATUS.md「当前状态」与「历史 session 摘要」
+2. 更新 STATUS.md「当前状态」与 milestone 进度索引
 3. 提示是否要 commit & push
 
 ---
