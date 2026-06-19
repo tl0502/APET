@@ -2,6 +2,7 @@
 title: AIPET 项目进度
 updated: 2026-06-19
 related:
+  - ../AGENTS.md
   - ../CLAUDE.md
   - WORKFLOW.md
   - github-workflow.md
@@ -11,7 +12,7 @@ related:
 
 # 项目进度（STATUS.md）
 
-> 每个 session 末由 Claude 更新（建议用 `/sync-status` 命令）。新 session 入场先读这个文件，再扫一眼 [lessons.md](lessons.md) 避免重复掉同一个坑。
+> 每个 session 末由 Claude / Codex 更新。Claude 用 `/sync-status`；Codex 按 [AGENTS.md](../AGENTS.md) 的 `Codex sync-status` 等价流程执行。新 session 入场先读这个文件，再扫一眼 [lessons.md](lessons.md) 避免重复掉同一个坑。
 >
 > **任务级清单在 GitHub Issues**（[https://github.com/tl0502/APET/issues](https://github.com/tl0502/APET/issues)）。本文件只保留**当前状态快照**与**里程碑进度索引**。**历史 session 详情**已归档至 [_archive/sessions/](_archive/sessions/)。
 
