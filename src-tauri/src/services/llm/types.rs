@@ -185,6 +185,15 @@ pub enum FinishReason {
     Unknown(String),
 }
 
+/// `prompt_tokens_details` 子对象（OpenAI / Qwen / Moonshot 的缓存命中走这里）。
+/// 上游可能还带 audio_tokens / reasoning_tokens 等字段，serde 默认忽略未知字段。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptTokensDetails {
+    /// prompt 中命中缓存的 token 数（automatic prompt caching）
+    #[serde(default)]
+    pub cached_tokens: u32,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     #[serde(default)]
@@ -193,6 +202,38 @@ pub struct Usage {
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
+    // === 缓存命中可观测（T3-6）===
+    // 各 provider 缓存字段名不同；下面三者按 provider 选择性出现，统一由 cached_tokens() 归一化。
+    // 此前 Usage 只有上面三字段，serde 默认丢弃未知字段 → 缓存命中信息被静默吞掉、无法检测。
+    /// OpenAI / Qwen / Moonshot 风格：`{ prompt_tokens_details: { cached_tokens } }`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+    /// DeepSeek 风格：`prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_hit_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_miss_tokens: Option<u32>,
+}
+
+impl Usage {
+    /// 归一化的缓存命中 token 数（屏蔽 provider 协议差异）。
+    /// OpenAI/Qwen/Moonshot → `prompt_tokens_details.cached_tokens`；DeepSeek → `prompt_cache_hit_tokens`；
+    /// 都没有（Ollama / 未命中）→ 0。
+    pub fn cached_tokens(&self) -> u32 {
+        self.prompt_tokens_details
+            .map(|d| d.cached_tokens)
+            .filter(|&n| n > 0)
+            .or(self.prompt_cache_hit_tokens)
+            .unwrap_or(0)
+    }
+
+    /// 缓存命中率 = cached_tokens / prompt_tokens（prompt_tokens=0 → 0.0）。
+    pub fn cache_hit_rate(&self) -> f32 {
+        if self.prompt_tokens == 0 {
+            return 0.0;
+        }
+        self.cached_tokens() as f32 / self.prompt_tokens as f32
+    }
 }
 
 /// chat_stream 完成后返回的汇总（与最末 Finish delta 信息一致；调用方二选一消费）。
@@ -260,5 +301,49 @@ mod tests {
         assert_eq!(v, "\"tool_calls\"");
         let r: FinishReason = serde_json::from_str("\"content_filter\"").unwrap();
         assert_eq!(r, FinishReason::ContentFilter);
+    }
+
+    #[test]
+    fn usage_parses_openai_cached_tokens() {
+        // OpenAI / Qwen / Moonshot：prompt_tokens_details.cached_tokens
+        let u: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":2006,"completion_tokens":300,"total_tokens":2306,"prompt_tokens_details":{"cached_tokens":1920}}"#,
+        )
+        .unwrap();
+        assert_eq!(u.cached_tokens(), 1920);
+        assert!((u.cache_hit_rate() - 1920.0 / 2006.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn usage_parses_deepseek_cache_hit_tokens() {
+        // DeepSeek：另一套字段名，prompt_tokens = hit + miss
+        let u: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}"#,
+        )
+        .unwrap();
+        assert_eq!(u.cached_tokens(), 80);
+        assert_eq!(u.prompt_cache_miss_tokens, Some(20));
+        assert!((u.cache_hit_rate() - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn usage_without_cache_fields_reports_zero() {
+        // 旧三字段响应（Ollama / 未命中）仍正常解析，缓存视为 0，不破坏既有路径。
+        let u: Usage =
+            serde_json::from_str(r#"{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}"#)
+                .unwrap();
+        assert_eq!(u.cached_tokens(), 0);
+        assert_eq!(u.cache_hit_rate(), 0.0);
+        assert!(u.prompt_tokens_details.is_none());
+    }
+
+    #[test]
+    fn usage_openai_cold_cache_reports_zero() {
+        // OpenAI 返了 prompt_tokens_details 但 cached_tokens=0（冷启动 / 未命中）→ 归一化为 0。
+        let u: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":50,"completion_tokens":5,"total_tokens":55,"prompt_tokens_details":{"cached_tokens":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(u.cached_tokens(), 0);
     }
 }

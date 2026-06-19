@@ -181,10 +181,22 @@ impl SafetyGuard for SafetyGuardImpl {
         // Phase A0: locale 暂未分流; P1 评估 zh-CN / en-US 切不同 prefix 文件 (asset 多语言)。
         match messages.first_mut() {
             Some(first) if first.role == Role::System => {
-                let prefix_part = ContentPart::Text {
-                    text: format!("{}\n\n", self.prefix),
-                };
-                first.content.insert(0, prefix_part);
+                // T3-7：把 prefix 合并进首个 Text part，而不是 insert 成独立的第二个 part。
+                // 插成第二个 part 会让 serialize_message 把 system 的 content 从 string 降级成
+                // array —— 部分 OpenAI 兼容端点 / 老模型不接受 array system content（兼容雷），
+                // 且 array 与 string 字节形状不同会打断前缀缓存。合并后仍是单 Text part → string。
+                // 仅当首个 part 是 Text 时可合并；否则（罕见：system 以非文本 part 起头）退回插入。
+                match first.content.first_mut() {
+                    Some(ContentPart::Text { text }) => {
+                        *text = format!("{}\n\n{}", self.prefix, text);
+                    }
+                    _ => first.content.insert(
+                        0,
+                        ContentPart::Text {
+                            text: format!("{}\n\n", self.prefix),
+                        },
+                    ),
+                }
             }
             _ => {
                 let new_system = ChatMessage::text(Role::System, self.prefix.clone());
@@ -370,9 +382,28 @@ mod tests {
         let wrapped = guard.wrap_messages(vec![sys], Locale::ZhCn);
         assert_eq!(wrapped.len(), 1);
         assert_eq!(wrapped[0].role, Role::System);
+        // T3-7：prefix 合并进同一个 Text part，不新增 part。
+        assert_eq!(wrapped[0].content.len(), 1);
         assert!(
             matches!(&wrapped[0].content[0], ContentPart::Text { text } if text.starts_with("TEST_PREFIX"))
         );
+    }
+
+    #[test]
+    fn wrap_messages_keeps_system_content_as_string_not_array() {
+        // T3-7 回归守卫：prefix 注入后，system 消息经 serialize_message 必须仍是 string content
+        // （而非 array）——否则触发 OpenAI 兼容端点/老模型兼容雷 + 打断前缀缓存。
+        use crate::services::llm::openai::serialize_message;
+        let guard = make_guard();
+        let sys = ChatMessage::text(Role::System, "you are momo");
+        let wrapped = guard.wrap_messages(vec![sys], Locale::ZhCn);
+        let v = serialize_message(&wrapped[0]);
+        assert!(
+            v["content"].is_string(),
+            "system content 应为 string，实际: {}",
+            v["content"]
+        );
+        assert_eq!(v["content"], "TEST_PREFIX\n\nyou are momo");
     }
 
     #[test]

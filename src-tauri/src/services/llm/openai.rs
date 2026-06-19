@@ -350,6 +350,21 @@ impl LLMProvider for OpenAIProvider {
         let bytes_stream = response.bytes_stream();
         let (reason, usage) = process_event_stream(bytes_stream, cancel, &*on_delta).await?;
 
+        // T3-6：把 token 用量 + 缓存命中打到日志，让"prompt 有没有命中缓存"可观测。
+        // 各 provider 缓存字段名不同，cached_tokens()/cache_hit_rate() 已在 types.rs 归一化。
+        // 同一长前缀第二轮起 cached 应从 0 跳升 → 即可确认缓存生效。
+        if let Some(u) = usage.as_ref() {
+            eprintln!(
+                "[llm] usage provider={} prompt={} completion={} total={} cached={} hit_rate={:.0}%",
+                self.id,
+                u.prompt_tokens,
+                u.completion_tokens,
+                u.total_tokens,
+                u.cached_tokens(),
+                u.cache_hit_rate() * 100.0,
+            );
+        }
+
         // 末尾 emit Finish delta，让 callback 消费方知道流已结束 + 拿 token 用量
         // FinishReason 不再 Copy（Unknown(String) 持有堆数据），双用必须显式 clone。
         on_delta(StreamDelta::Finish {
@@ -508,7 +523,8 @@ data: [DONE]\n\n";
             Some(Usage {
                 prompt_tokens: 3,
                 completion_tokens: 2,
-                total_tokens: 5
+                total_tokens: 5,
+                ..Default::default()
             })
         );
         let deltas = collected.lock().unwrap().clone();
