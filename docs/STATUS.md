@@ -21,8 +21,8 @@ related:
 ## 当前状态
 
 - **当前 milestone**：Companion Agent Runtime v3 Phase A0（Safety & Secrets）✅ 完成；M2 W3 [#23] 物理交互仍待开始
-- **当前 session 在做**：修复 workspace chat 消息区容器适配与自绘 chrome 三按钮视觉问题（未关联 issue）
-- **下一步**：用户复测 workspace 主窗；确认后可进入 (A) Phase A1 Persona Snapshot & Soul Package brainstorming（~1.5w）/ (B) M2 [#23] 物理交互 + 心情/精力 + 摸鱼 / (C) 其他
+- **当前 session 在做**：Phase A1 Persona Snapshot Minimal Closure 已完成代码落地（未关联 issue）：Workshop 草稿校验/保存/保存并激活、snapshot profile 存储、conversation snapshot 绑定、Chat prompt 按会话快照读取；人格工坊 `persona-inspector` 已从抽屉改为触发式毛玻璃编辑卡片
+- **下一步**：用户在 `pnpm tauri:dev` 桌面应用复测人格工坊保存/激活、旧会话稳定性与编辑卡片小窗口显示；通过后可进入 (A) A2 PromptBuilder 消费 `SoulRuntimeProfile` / (B) M2 [#23] 物理交互 + 心情/精力 + 摸鱼
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 

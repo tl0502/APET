@@ -6,13 +6,24 @@
 // - 错误类型映射 thiserror enum → 前端拿到的 IpcError.message 含语义前缀
 
 use crate::services::persona::{
-    activate_persona, list_personas, load_active_persona, load_persona, PersonaError,
-    PersonaListItem, PersonaLookupError, PersonaSummary,
+    activate_persona, activate_snapshot, get_snapshot_profile, list_personas, load_active_persona,
+    load_persona, save_draft, validate_draft, PersonaDraftValidationResult, PersonaError,
+    PersonaListItem, PersonaLookupError, PersonaSaveResult, PersonaSourceDraft, PersonaSummary,
+    SoulRuntimeProfile,
 };
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 const PERSONA_ACTIVATED_EVENT: &str = "persona:activated";
+const PERSONA_SNAPSHOT_ACTIVATED_EVENT: &str = "persona:snapshot-activated";
 const PERSONA_ID_MAX_LEN: usize = 64;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersonaSnapshotActivatedPayload {
+    persona_id: String,
+    snapshot_id: String,
+}
 
 fn validate_persona_id(id: &str) -> Result<&str, String> {
     let trimmed = id.trim();
@@ -46,7 +57,9 @@ pub async fn persona_load(app: AppHandle, id: String) -> Result<PersonaSummary, 
 /// 排序由后端保证（active 优先 + id ASC）；前端直接渲染即可，不需要再 sort。
 #[tauri::command]
 pub async fn persona_list(app: AppHandle) -> Result<Vec<PersonaListItem>, String> {
-    list_personas(&app).await.map_err(|e: PersonaError| e.to_string())
+    list_personas(&app)
+        .await
+        .map_err(|e: PersonaError| e.to_string())
 }
 
 /// 读当前激活人格 summary（含 raw_markdown）。
@@ -70,8 +83,76 @@ pub async fn persona_activate(app: AppHandle, id: String) -> Result<(), String> 
     // emit 失败仅 eprintln 不向上抛：DB 写入已成功（active 已切换），把 emit 故障暴露给前端
     // 会让用户误以为 activate 没生效并触发 retry；retry 在 DB 端是 idempotent，但 UI 上会闪
     // 误报 toast，体验更糟。emit 故障本身极罕见（webview event 通道挂掉），降级为日志即可。
-    if let Err(e) = app.emit(PERSONA_ACTIVATED_EVENT, &id) {
-        eprintln!("[persona_activate] emit persona:activated failed: {e}");
-    }
+    let active = load_active_persona(&app)
+        .await
+        .map_err(lookup_err_to_string)?;
+    emit_persona_activation_events(&app, &id, &active.snapshot_id);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn persona_validate_draft(
+    draft: PersonaSourceDraft,
+) -> Result<PersonaDraftValidationResult, String> {
+    Ok(validate_draft(&draft))
+}
+
+#[tauri::command]
+pub async fn persona_save_draft(
+    app: AppHandle,
+    draft: PersonaSourceDraft,
+) -> Result<PersonaSaveResult, String> {
+    save_draft(&app, draft, false)
+        .await
+        .map_err(|e: PersonaError| e.to_string())
+}
+
+#[tauri::command]
+pub async fn persona_save_and_activate_draft(
+    app: AppHandle,
+    draft: PersonaSourceDraft,
+) -> Result<PersonaSaveResult, String> {
+    let result = save_draft(&app, draft, true)
+        .await
+        .map_err(|e: PersonaError| e.to_string())?;
+    emit_persona_activation_events(&app, &result.persona_id, &result.snapshot_id);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn persona_activate_snapshot(
+    app: AppHandle,
+    #[allow(non_snake_case)] snapshotId: i64,
+) -> Result<(), String> {
+    activate_snapshot(&app, snapshotId)
+        .await
+        .map_err(|e: PersonaError| e.to_string())?;
+    let active = load_active_persona(&app)
+        .await
+        .map_err(lookup_err_to_string)?;
+    emit_persona_activation_events(&app, &active.id, &active.snapshot_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn persona_get_snapshot_profile(
+    app: AppHandle,
+    #[allow(non_snake_case)] snapshotId: i64,
+) -> Result<SoulRuntimeProfile, String> {
+    get_snapshot_profile(&app, snapshotId)
+        .await
+        .map_err(|e: PersonaError| e.to_string())
+}
+
+fn emit_persona_activation_events(app: &AppHandle, persona_id: &str, snapshot_id: &str) {
+    if let Err(e) = app.emit(PERSONA_ACTIVATED_EVENT, persona_id) {
+        eprintln!("[persona] emit persona:activated failed: {e}");
+    }
+    let payload = PersonaSnapshotActivatedPayload {
+        persona_id: persona_id.to_string(),
+        snapshot_id: snapshot_id.to_string(),
+    };
+    if let Err(e) = app.emit(PERSONA_SNAPSHOT_ACTIVATED_EVENT, payload) {
+        eprintln!("[persona] emit persona:snapshot-activated failed: {e}");
+    }
 }

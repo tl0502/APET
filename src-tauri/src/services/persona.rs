@@ -20,6 +20,8 @@ use chrono::Utc;
 use gray_matter::engine::YAML;
 use gray_matter::Matter;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::{Connection, Transaction};
 use tauri::{AppHandle, Runtime};
 use thiserror::Error;
@@ -46,6 +48,15 @@ const BUILTIN_SEEDS: &[(&str, &str, bool)] = &[
 ];
 
 const SUPPORTED_SCHEMAS: &[u32] = &[1, 2];
+const WORKSHOP_FILE_PATH_PREFIX: &str = "<workshop>:";
+const PERSONA_DANGEROUS_FIELDS: &[&str] = &[
+    "permissions",
+    "tools",
+    "safety_prefix",
+    "system_prefix",
+    "clipboard",
+    "screen_capture",
+];
 
 #[derive(Debug, Deserialize, Default)]
 pub struct PersonaFrontmatter {
@@ -80,6 +91,12 @@ pub enum PersonaError {
     Database(String),
     #[error("config dir resolution failed: {0}")]
     AppConfigDir(String),
+    #[error("validation failed: {0}")]
+    Validation(String),
+    #[error("snapshot not found: {0}")]
+    SnapshotNotFound(i64),
+    #[error("serialization error: {0}")]
+    Serialization(String),
 }
 
 impl From<sqlx::Error> for PersonaError {
@@ -94,6 +111,12 @@ impl From<DbError> for PersonaError {
             DbError::AppConfigDir(s) => PersonaError::AppConfigDir(s),
             DbError::Database(s) => PersonaError::Database(s),
         }
+    }
+}
+
+impl From<serde_json::Error> for PersonaError {
+    fn from(e: serde_json::Error) -> Self {
+        PersonaError::Serialization(e.to_string())
     }
 }
 
@@ -120,6 +143,101 @@ pub struct PersonaListItem {
     pub version: String,
     pub source: String,
     pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonaSimpleDraft {
+    pub name: String,
+    pub tagline: String,
+    pub relationship_style: String,
+    pub warmth: u8,
+    pub playfulness: u8,
+    pub formality: u8,
+    pub proactivity: u8,
+    pub brevity: u8,
+    pub speech_length: String,
+    pub initiative: String,
+    pub dislikes: Vec<String>,
+    pub examples: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonaStructuredDraft {
+    pub identity: String,
+    pub personality: String,
+    pub capabilities: String,
+    pub rules_do: Vec<String>,
+    pub rules_dont: Vec<String>,
+    pub offline_templates: String,
+    pub reactions: String,
+    pub examples: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonaSourceDraft {
+    pub persona_id: String,
+    pub version: String,
+    pub source: String,
+    pub simple: PersonaSimpleDraft,
+    pub structured: PersonaStructuredDraft,
+    #[allow(dead_code)]
+    pub source_text: String,
+    pub preserved_unknown_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PersonaDiagnosticSeverity {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersonaDiagnostic {
+    pub code: String,
+    pub severity: PersonaDiagnosticSeverity,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonaDraftValidationResult {
+    pub diagnostics: Vec<PersonaDiagnostic>,
+    pub blocking: bool,
+    pub token_estimate: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonaSaveResult {
+    pub persona_id: String,
+    pub snapshot_id: String,
+    pub version: String,
+    pub activated: bool,
+    pub diagnostics: Vec<PersonaDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoulRuntimeProfile {
+    pub identity_prompt: String,
+    pub style_prompt: String,
+    pub examples: Vec<String>,
+    pub initiative_config: serde_json::Value,
+    pub memory_policy: serde_json::Value,
+    pub ui_metadata: serde_json::Value,
+    pub source_kind: String,
+    pub source_hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledPersonaDraft {
+    source_text: String,
+    runtime_profile: SoulRuntimeProfile,
+    diagnostics: Vec<PersonaDiagnostic>,
+    source_hash: String,
+    token_estimate: u32,
 }
 
 #[derive(Debug, Error)]
@@ -180,6 +298,337 @@ pub fn parse_persona(content: &str) -> Result<ParsedPersona, PersonaError> {
         frontmatter,
         raw_markdown: parsed.content,
     })
+}
+
+fn diagnostic(code: &str, severity: PersonaDiagnosticSeverity, message: &str) -> PersonaDiagnostic {
+    PersonaDiagnostic {
+        code: code.to_string(),
+        severity,
+        message: message.to_string(),
+    }
+}
+
+fn has_blocking_diagnostics(diagnostics: &[PersonaDiagnostic]) -> bool {
+    diagnostics
+        .iter()
+        .any(|d| d.severity == PersonaDiagnosticSeverity::Error)
+}
+
+fn sanitize_bullets(items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn join_section(parts: &mut Vec<String>, heading: &str, body: &str) {
+    parts.push(format!("{heading}\n{}", body.trim()));
+}
+
+fn project_draft_to_source(draft: &PersonaSourceDraft) -> String {
+    let rules_do = sanitize_bullets(&draft.structured.rules_do);
+    let rules_dont = sanitize_bullets(&draft.structured.rules_dont);
+    let mut parts = Vec::new();
+
+    join_section(&mut parts, "# 身份", &draft.structured.identity);
+    join_section(&mut parts, "# 性格", &draft.structured.personality);
+    join_section(&mut parts, "# 能力", &draft.structured.capabilities);
+
+    let rules = format!(
+        "## Do\n{}\n\n## Don't\n{}",
+        rules_do
+            .iter()
+            .map(|item| format!("- {item}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        rules_dont
+            .iter()
+            .map(|item| format!("- {item}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    join_section(&mut parts, "# 行为规则", &rules);
+    join_section(
+        &mut parts,
+        "# 离线模板",
+        &draft.structured.offline_templates,
+    );
+    join_section(&mut parts, "# 反应配置", &draft.structured.reactions);
+
+    if !draft.structured.examples.trim().is_empty() {
+        join_section(&mut parts, "# 例对话", &draft.structured.examples);
+    }
+    if !draft.preserved_unknown_text.trim().is_empty() {
+        parts.push(draft.preserved_unknown_text.trim().to_string());
+    }
+
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn source_hash(source_text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source_text.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn estimate_tokens(source_text: &str) -> u32 {
+    source_text.chars().count().div_ceil(3) as u32
+}
+
+fn split_examples(draft: &PersonaSourceDraft) -> Vec<String> {
+    let structured = draft
+        .structured
+        .examples
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim_start_matches("- ").trim().to_string());
+    structured
+        .chain(
+            draft
+                .simple
+                .examples
+                .iter()
+                .map(|example| example.trim().to_string()),
+        )
+        .filter(|example| !example.is_empty())
+        .collect()
+}
+
+fn extract_markdown_section(markdown: &str, label: &str) -> String {
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|line| line.trim().starts_with(&format!("# {label}")));
+    let Some(start) = start else {
+        return String::new();
+    };
+    let mut body = Vec::new();
+    for line in lines.iter().skip(start + 1) {
+        if line.starts_with("# ") && !line.starts_with("## ") {
+            break;
+        }
+        body.push(*line);
+    }
+    body.join("\n").trim().to_string()
+}
+
+fn extract_markdown_list_items(markdown: &str) -> Vec<String> {
+    markdown
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("- "))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn split_markdown_rules(rules: &str) -> (Vec<String>, Vec<String>) {
+    let do_index = rules.find("## Do");
+    let dont_index = rules.find("## Don't");
+    let do_text = do_index
+        .map(|idx| &rules[idx..dont_index.unwrap_or(rules.len())])
+        .unwrap_or("");
+    let dont_text = dont_index.map(|idx| &rules[idx..]).unwrap_or("");
+    (
+        extract_markdown_list_items(do_text),
+        extract_markdown_list_items(dont_text),
+    )
+}
+
+fn compile_parsed_persona(parsed: &ParsedPersona, source: &str) -> CompiledPersonaDraft {
+    let rules = extract_markdown_section(&parsed.raw_markdown, "行为规则");
+    let (rules_do, rules_dont) = split_markdown_rules(&rules);
+    let examples = extract_markdown_section(&parsed.raw_markdown, "例对话");
+    let draft = PersonaSourceDraft {
+        persona_id: parsed.frontmatter.id.clone(),
+        version: parsed.frontmatter.version.clone(),
+        source: source.to_string(),
+        simple: PersonaSimpleDraft {
+            name: parsed.frontmatter.name.clone(),
+            tagline: extract_markdown_section(&parsed.raw_markdown, "身份")
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            relationship_style: "companion".to_string(),
+            warmth: 3,
+            playfulness: 3,
+            formality: 2,
+            proactivity: 3,
+            brevity: 4,
+            speech_length: "short".to_string(),
+            initiative: "sometimes".to_string(),
+            dislikes: rules_dont.iter().take(3).cloned().collect(),
+            examples: extract_markdown_list_items(&examples),
+        },
+        structured: PersonaStructuredDraft {
+            identity: extract_markdown_section(&parsed.raw_markdown, "身份"),
+            personality: extract_markdown_section(&parsed.raw_markdown, "性格"),
+            capabilities: extract_markdown_section(&parsed.raw_markdown, "能力"),
+            rules_do,
+            rules_dont,
+            offline_templates: extract_markdown_section(&parsed.raw_markdown, "离线模板"),
+            reactions: extract_markdown_section(&parsed.raw_markdown, "反应配置"),
+            examples,
+        },
+        source_text: parsed.raw_markdown.clone(),
+        preserved_unknown_text: String::new(),
+    };
+    compile_persona_draft(&draft)
+}
+
+fn compile_persona_draft(draft: &PersonaSourceDraft) -> CompiledPersonaDraft {
+    let source_text = project_draft_to_source(draft);
+    let source_hash = source_hash(&source_text);
+    let token_estimate = estimate_tokens(&source_text);
+    let rules_do = sanitize_bullets(&draft.structured.rules_do);
+    let rules_dont = sanitize_bullets(&draft.structured.rules_dont);
+    let mut diagnostics = Vec::new();
+
+    if draft.simple.name.trim().is_empty() {
+        diagnostics.push(diagnostic(
+            "name.empty",
+            PersonaDiagnosticSeverity::Error,
+            "名字不能为空",
+        ));
+    }
+    if draft.structured.identity.trim().is_empty() {
+        diagnostics.push(diagnostic(
+            "identity.empty",
+            PersonaDiagnosticSeverity::Error,
+            "身份不能为空",
+        ));
+    }
+    if draft.structured.personality.trim().is_empty() {
+        diagnostics.push(diagnostic(
+            "personality.empty",
+            PersonaDiagnosticSeverity::Error,
+            "性格不能为空",
+        ));
+    }
+    if draft.structured.capabilities.trim().is_empty() {
+        diagnostics.push(diagnostic(
+            "capabilities.empty",
+            PersonaDiagnosticSeverity::Error,
+            "能力不能为空",
+        ));
+    }
+    if rules_do.is_empty() && rules_dont.is_empty() {
+        diagnostics.push(diagnostic(
+            "rules.empty",
+            PersonaDiagnosticSeverity::Error,
+            "至少需要 1 条行为规则",
+        ));
+    } else {
+        if rules_do.is_empty() {
+            diagnostics.push(diagnostic(
+                "rules.do.empty",
+                PersonaDiagnosticSeverity::Warning,
+                "建议至少写 1 条 Do 规则",
+            ));
+        }
+        if rules_dont.is_empty() {
+            diagnostics.push(diagnostic(
+                "rules.dont.empty",
+                PersonaDiagnosticSeverity::Warning,
+                "建议至少写 1 条 Don't 规则",
+            ));
+        }
+    }
+
+    let source_lower = source_text.to_ascii_lowercase();
+    for field in PERSONA_DANGEROUS_FIELDS {
+        if source_lower.contains(field) {
+            diagnostics.push(diagnostic(
+                "source.dangerous_field",
+                PersonaDiagnosticSeverity::Error,
+                &format!("源码包含不允许的人格字段：{field}"),
+            ));
+        }
+    }
+
+    if token_estimate > 1200 {
+        diagnostics.push(diagnostic(
+            "budget.high",
+            PersonaDiagnosticSeverity::Warning,
+            "人格定义偏长，会挤压聊天历史",
+        ));
+    }
+
+    let examples = split_examples(draft);
+    if examples.is_empty() {
+        diagnostics.push(diagnostic(
+            "examples.empty",
+            PersonaDiagnosticSeverity::Warning,
+            "建议补充至少 1 条示例对话（不影响保存）",
+        ));
+    }
+
+    let style_prompt = format!(
+        "{}\n\n# 行为规则\n## Do\n{}\n\n## Don't\n{}\n\n# 语气参数\nwarmth={} playfulness={} formality={} proactivity={} brevity={} speech_length={}",
+        draft.structured.personality.trim(),
+        rules_do
+            .iter()
+            .map(|item| format!("- {item}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        rules_dont
+            .iter()
+            .map(|item| format!("- {item}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        draft.simple.warmth,
+        draft.simple.playfulness,
+        draft.simple.formality,
+        draft.simple.proactivity,
+        draft.simple.brevity,
+        draft.simple.speech_length
+    );
+
+    let runtime_profile = SoulRuntimeProfile {
+        identity_prompt: draft.structured.identity.trim().to_string(),
+        style_prompt,
+        examples,
+        initiative_config: json!({ "mode": draft.simple.initiative.as_str() }),
+        memory_policy: json!({ "mode": "default" }),
+        ui_metadata: json!({
+            "name": draft.simple.name.trim(),
+            "source": draft.source.as_str(),
+            "version": draft.version.trim(),
+            "relationshipStyle": draft.simple.relationship_style.as_str(),
+            "tagline": draft.simple.tagline.trim(),
+            "dislikes": draft.simple.dislikes.clone(),
+        }),
+        source_kind: "legacy_soul_md".to_string(),
+        source_hash: source_hash.clone(),
+    };
+
+    CompiledPersonaDraft {
+        source_text,
+        runtime_profile,
+        diagnostics,
+        source_hash,
+        token_estimate,
+    }
+}
+
+pub fn validate_draft(draft: &PersonaSourceDraft) -> PersonaDraftValidationResult {
+    let compiled = compile_persona_draft(draft);
+    PersonaDraftValidationResult {
+        blocking: has_blocking_diagnostics(&compiled.diagnostics),
+        diagnostics: compiled.diagnostics,
+        token_estimate: compiled.token_estimate,
+    }
 }
 
 /// 启动入口:解析所有内置人格 → 依次 UPSERT personas + idempotent INSERT persona_snapshots。
@@ -261,13 +710,20 @@ pub(crate) async fn list_personas_with_conn(
 pub(crate) async fn load_active_persona_with_conn(
     conn: &mut sqlx::SqliteConnection,
 ) -> Result<PersonaSummary, PersonaLookupError> {
-    let active: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM personas WHERE is_active = 1 LIMIT 1")
+    let active: Option<(String, Option<i64>)> =
+        sqlx::query_as("SELECT id, active_snapshot_id FROM personas WHERE is_active = 1 LIMIT 1")
             .fetch_optional(&mut *conn)
             .await
             .map_err(PersonaError::from)?;
-    let id = active.ok_or_else(|| PersonaLookupError::NotFound("active persona".to_string()))?;
-    load_persona_with_conn(conn, &id.0).await
+    let (id, snapshot_id) =
+        active.ok_or_else(|| PersonaLookupError::NotFound("active persona".to_string()))?;
+    if let Some(snapshot_id) = snapshot_id {
+        return load_persona_snapshot_with_conn(conn, snapshot_id).await;
+    }
+    let latest = latest_snapshot_id_with_conn(conn, &id)
+        .await?
+        .ok_or_else(|| PersonaLookupError::NotFound(format!("active snapshot for {id}")))?;
+    load_persona_snapshot_with_conn(conn, latest).await
 }
 
 pub(crate) async fn load_persona_with_conn(
@@ -281,24 +737,100 @@ pub(crate) async fn load_persona_with_conn(
             .await?;
     let (pid, name, version, source) =
         row.ok_or_else(|| PersonaLookupError::NotFound(id.to_string()))?;
-    let snap: Option<(i64, String)> = sqlx::query_as(
-        "SELECT id, content FROM persona_snapshots          WHERE persona_id = ? AND version = ?          ORDER BY id DESC LIMIT 1",
+    let mut snap: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, version, content FROM persona_snapshots \
+         WHERE persona_id = ? AND version = ? \
+         ORDER BY id DESC LIMIT 1",
     )
     .bind(&pid)
     .bind(&version)
     .fetch_optional(&mut *conn)
     .await?;
+    if snap.is_none() {
+        snap = sqlx::query_as(
+            "SELECT id, version, content FROM persona_snapshots \
+             WHERE persona_id = ? \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(&pid)
+        .fetch_optional(&mut *conn)
+        .await?;
+    }
     Ok(PersonaSummary {
         id: pid,
         name,
-        version,
+        version: snap
+            .as_ref()
+            .map(|(_, version, _)| version.clone())
+            .unwrap_or(version),
         source,
         snapshot_id: snap
             .as_ref()
-            .map(|(id, _)| id.to_string())
+            .map(|(id, _, _)| id.to_string())
             .unwrap_or_default(),
-        raw_markdown: snap.map(|(_, c)| c).unwrap_or_default(),
+        raw_markdown: snap.map(|(_, _, c)| c).unwrap_or_default(),
     })
+}
+
+pub(crate) async fn load_persona_snapshot_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    snapshot_id: i64,
+) -> Result<PersonaSummary, PersonaLookupError> {
+    let row: Option<(String, String, String, String, String, String)> = sqlx::query_as(
+        r#"
+        SELECT p.id, p.name, s.version, p.source, CAST(s.id AS TEXT), s.content
+        FROM persona_snapshots s
+        INNER JOIN personas p ON p.id = s.persona_id
+        WHERE s.id = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(snapshot_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (id, name, version, source, snapshot_id, raw_markdown) =
+        row.ok_or_else(|| PersonaLookupError::NotFound(format!("snapshot {snapshot_id}")))?;
+    Ok(PersonaSummary {
+        id,
+        name,
+        version,
+        source,
+        snapshot_id,
+        raw_markdown,
+    })
+}
+
+pub(crate) async fn load_persona_for_conversation_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    conversation_id: &str,
+) -> Result<PersonaSummary, PersonaLookupError> {
+    let row: Option<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT persona_id, persona_snapshot_id FROM conversations WHERE id = ? AND archived = 0",
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (persona_id, snapshot_id) =
+        row.ok_or_else(|| PersonaLookupError::NotFound(format!("conversation {conversation_id}")))?;
+    let snapshot_id = snapshot_id.ok_or_else(|| {
+        PersonaLookupError::NotFound(format!(
+            "conversation {conversation_id} missing persona snapshot binding for {persona_id}"
+        ))
+    })?;
+    load_persona_snapshot_with_conn(conn, snapshot_id).await
+}
+
+async fn latest_snapshot_id_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    persona_id: &str,
+) -> Result<Option<i64>, PersonaError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM persona_snapshots WHERE persona_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(persona_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|(id,)| id))
 }
 
 /// 把目标 persona 设为 active（其他全部清零）。NotFound 时报 PersonaLookupError::NotFound。
@@ -316,19 +848,279 @@ pub(crate) async fn activate_persona_with_conn(
     conn: &mut sqlx::SqliteConnection,
     id: &str,
 ) -> Result<(), PersonaLookupError> {
+    let snapshot_id = latest_snapshot_id_with_conn(conn, id)
+        .await?
+        .ok_or_else(|| PersonaLookupError::NotFound(format!("snapshot for {id}")))?;
     let mut tx = conn.begin().await?;
     sqlx::query("UPDATE personas SET is_active = 0")
         .execute(&mut *tx)
         .await?;
-    let result = sqlx::query("UPDATE personas SET is_active = 1, updated_at = ? WHERE id = ?")
-        .bind(Utc::now().to_rfc3339())
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE personas SET is_active = 1, active_snapshot_id = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(snapshot_id)
+    .bind(Utc::now().to_rfc3339())
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(PersonaLookupError::NotFound(id.to_string()));
     }
     tx.commit().await?;
+    Ok(())
+}
+
+pub async fn save_draft<R: Runtime>(
+    app: &AppHandle<R>,
+    draft: PersonaSourceDraft,
+    activate: bool,
+) -> Result<PersonaSaveResult, PersonaError> {
+    let mut conn = open_app_db(app).await?;
+    let result = save_draft_with_conn(&mut conn, draft, activate).await?;
+    conn.close().await?;
+    Ok(result)
+}
+
+pub(crate) async fn save_draft_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    draft: PersonaSourceDraft,
+    activate: bool,
+) -> Result<PersonaSaveResult, PersonaError> {
+    let compiled = compile_persona_draft(&draft);
+    if has_blocking_diagnostics(&compiled.diagnostics) {
+        return Err(PersonaError::Validation(
+            compiled
+                .diagnostics
+                .iter()
+                .filter(|d| d.severity == PersonaDiagnosticSeverity::Error)
+                .map(|d| d.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
+    }
+
+    let persona_id = draft.persona_id.trim();
+    if persona_id.is_empty() {
+        return Err(PersonaError::Validation("persona id 不能为空".to_string()));
+    }
+    let version = next_available_version_with_conn(conn, persona_id, draft.version.trim()).await?;
+    let now = Utc::now().to_rfc3339();
+    let runtime_profile_json = serde_json::to_string(&compiled.runtime_profile)?;
+    let file_path = format!("{WORKSHOP_FILE_PATH_PREFIX}{persona_id}.soul.md");
+
+    let mut tx = conn.begin().await?;
+    sqlx::query(
+        r#"
+        INSERT INTO personas
+            (id, name, version, source, file_path, is_active, created_at, updated_at, active_snapshot_id)
+        VALUES (?, ?, ?, 'user', ?, 0, ?, ?, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            version = excluded.version,
+            source = excluded.source,
+            file_path = excluded.file_path,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(persona_id)
+    .bind(draft.simple.name.trim())
+    .bind(&version)
+    .bind(&file_path)
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+
+    let snapshot_id =
+        insert_snapshot(&mut tx, persona_id, &version, &compiled.source_text, &now).await?;
+    insert_snapshot_profile(
+        &mut tx,
+        snapshot_id,
+        persona_id,
+        &runtime_profile_json,
+        &compiled.source_hash,
+        &now,
+    )
+    .await?;
+
+    if activate {
+        activate_snapshot_in_tx(&mut tx, snapshot_id, &now).await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(PersonaSaveResult {
+        persona_id: persona_id.to_string(),
+        snapshot_id: snapshot_id.to_string(),
+        version,
+        activated: activate,
+        diagnostics: compiled.diagnostics,
+    })
+}
+
+pub async fn activate_snapshot<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot_id: i64,
+) -> Result<(), PersonaError> {
+    let mut conn = open_app_db(app).await?;
+    activate_snapshot_with_conn(&mut conn, snapshot_id).await?;
+    conn.close().await?;
+    Ok(())
+}
+
+pub(crate) async fn activate_snapshot_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    snapshot_id: i64,
+) -> Result<(), PersonaError> {
+    let now = Utc::now().to_rfc3339();
+    let mut tx = conn.begin().await?;
+    activate_snapshot_in_tx(&mut tx, snapshot_id, &now).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn get_snapshot_profile<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot_id: i64,
+) -> Result<SoulRuntimeProfile, PersonaError> {
+    let mut conn = open_app_db(app).await?;
+    let profile = get_snapshot_profile_with_conn(&mut conn, snapshot_id).await?;
+    conn.close().await?;
+    Ok(profile)
+}
+
+pub(crate) async fn get_snapshot_profile_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    snapshot_id: i64,
+) -> Result<SoulRuntimeProfile, PersonaError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT runtime_profile_json FROM persona_snapshot_profiles WHERE snapshot_id = ?",
+    )
+    .bind(snapshot_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let json = row
+        .map(|(json,)| json)
+        .ok_or(PersonaError::SnapshotNotFound(snapshot_id))?;
+    Ok(serde_json::from_str(&json)?)
+}
+
+async fn next_available_version_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    persona_id: &str,
+    requested: &str,
+) -> Result<String, PersonaError> {
+    let base = if requested.trim().is_empty() {
+        "1.0.0"
+    } else {
+        requested.trim()
+    };
+    let mut candidate = base.to_string();
+    loop {
+        let exists: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM persona_snapshots WHERE persona_id = ? AND version = ? LIMIT 1",
+        )
+        .bind(persona_id)
+        .bind(&candidate)
+        .fetch_optional(&mut *conn)
+        .await?;
+        if exists.is_none() {
+            return Ok(candidate);
+        }
+        candidate = bump_patch_version(&candidate);
+    }
+}
+
+fn bump_patch_version(version: &str) -> String {
+    let parts = version.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return format!("{version}.1");
+    }
+    let major = parts[0].parse::<u64>();
+    let minor = parts[1].parse::<u64>();
+    let patch = parts[2].parse::<u64>();
+    match (major, minor, patch) {
+        (Ok(major), Ok(minor), Ok(patch)) => format!("{major}.{minor}.{}", patch + 1),
+        _ => format!("{version}.1"),
+    }
+}
+
+async fn insert_snapshot(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    persona_id: &str,
+    version: &str,
+    content: &str,
+    created_at: &str,
+) -> Result<i64, PersonaError> {
+    let result = sqlx::query(
+        "INSERT INTO persona_snapshots (persona_id, version, content, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(persona_id)
+    .bind(version)
+    .bind(content)
+    .bind(created_at)
+    .execute(tx.as_mut())
+    .await?;
+    Ok(result.last_insert_rowid())
+}
+
+async fn insert_snapshot_profile(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    snapshot_id: i64,
+    persona_id: &str,
+    runtime_profile_json: &str,
+    source_hash: &str,
+    created_at: &str,
+) -> Result<(), PersonaError> {
+    sqlx::query(
+        r#"
+        INSERT INTO persona_snapshot_profiles
+            (snapshot_id, persona_id, runtime_profile_json, source_hash, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(snapshot_id) DO UPDATE SET
+            runtime_profile_json = excluded.runtime_profile_json,
+            source_hash = excluded.source_hash
+        "#,
+    )
+    .bind(snapshot_id)
+    .bind(persona_id)
+    .bind(runtime_profile_json)
+    .bind(source_hash)
+    .bind(created_at)
+    .execute(tx.as_mut())
+    .await?;
+    Ok(())
+}
+
+async fn activate_snapshot_in_tx(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    snapshot_id: i64,
+    now: &str,
+) -> Result<(), PersonaError> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT persona_id, version FROM persona_snapshots WHERE id = ?")
+            .bind(snapshot_id)
+            .fetch_optional(tx.as_mut())
+            .await?;
+    let (persona_id, version) = row.ok_or(PersonaError::SnapshotNotFound(snapshot_id))?;
+
+    sqlx::query("UPDATE personas SET is_active = 0")
+        .execute(tx.as_mut())
+        .await?;
+    let result = sqlx::query(
+        "UPDATE personas SET is_active = 1, active_snapshot_id = ?, version = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(snapshot_id)
+    .bind(&version)
+    .bind(now)
+    .bind(&persona_id)
+    .execute(tx.as_mut())
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(PersonaError::Validation(format!(
+            "snapshot {snapshot_id} belongs to missing persona {persona_id}"
+        )));
+    }
     Ok(())
 }
 
@@ -347,7 +1139,26 @@ pub(crate) async fn seed_persona_with_conn(
 ) -> Result<(), PersonaError> {
     let mut tx = conn.begin().await?;
     upsert_persona(&mut tx, parsed, source, file_path, set_active).await?;
-    insert_snapshot_if_new(&mut tx, &parsed.frontmatter.id, parsed).await?;
+    let snapshot_id = insert_snapshot_if_new(&mut tx, &parsed.frontmatter.id, parsed).await?;
+    let compiled = compile_parsed_persona(parsed, source);
+    let runtime_profile_json = serde_json::to_string(&compiled.runtime_profile)?;
+    let now = Utc::now().to_rfc3339();
+    insert_snapshot_profile(
+        &mut tx,
+        snapshot_id,
+        &parsed.frontmatter.id,
+        &runtime_profile_json,
+        &compiled.source_hash,
+        &now,
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE personas SET active_snapshot_id = COALESCE(active_snapshot_id, ?) WHERE id = ?",
+    )
+    .bind(snapshot_id)
+    .bind(&parsed.frontmatter.id)
+    .execute(tx.as_mut())
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -389,7 +1200,7 @@ async fn insert_snapshot_if_new(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     persona_id: &str,
     parsed: &ParsedPersona,
-) -> Result<(), PersonaError> {
+) -> Result<i64, PersonaError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         r#"
@@ -404,12 +1215,53 @@ async fn insert_snapshot_if_new(
     .bind(&now)
     .execute(tx.as_mut())
     .await?;
-    Ok(())
+    let row: (i64,) = sqlx::query_as(
+        "SELECT id FROM persona_snapshots WHERE persona_id = ? AND version = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(persona_id)
+    .bind(&parsed.frontmatter.version)
+    .fetch_one(tx.as_mut())
+    .await?;
+    Ok(row.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_workshop_draft(persona_id: &str, name: &str, version: &str) -> PersonaSourceDraft {
+        PersonaSourceDraft {
+            persona_id: persona_id.to_string(),
+            version: version.to_string(),
+            source: "builtin".to_string(),
+            simple: PersonaSimpleDraft {
+                name: name.to_string(),
+                tagline: "安静陪伴型伙伴".to_string(),
+                relationship_style: "companion".to_string(),
+                warmth: 3,
+                playfulness: 2,
+                formality: 2,
+                proactivity: 3,
+                brevity: 4,
+                speech_length: "short".to_string(),
+                initiative: "sometimes".to_string(),
+                dislikes: vec!["空洞鼓励".to_string()],
+                examples: vec!["用户：你好\n默默：我在。".to_string()],
+            },
+            structured: PersonaStructuredDraft {
+                identity: format!("你叫{name}，是一个安静的桌面伙伴。"),
+                personality: "- 温和\n- 克制".to_string(),
+                capabilities: "- 陪用户整理想法\n- 提醒用户休息".to_string(),
+                rules_do: vec!["用第二人称回应".to_string()],
+                rules_dont: vec!["不空洞鼓励".to_string()],
+                offline_templates: "## 拒答 / Refusal\n- 这个我现在不适合处理。".to_string(),
+                reactions: "- click.head: 轻声回应".to_string(),
+                examples: "- 用户：你好\n  默默：我在。".to_string(),
+            },
+            source_text: String::new(),
+            preserved_unknown_text: String::new(),
+        }
+    }
 
     #[test]
     fn parse_momo_succeeds() {
@@ -515,6 +1367,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seed_builtin_writes_snapshot_profile_and_active_snapshot() {
+        let (_dir, mut conn) = fresh_db().await;
+        let parsed = parse_persona(MOMO_RAW).unwrap();
+        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH, true)
+            .await
+            .unwrap();
+
+        let snapshot_id: i64 =
+            sqlx::query_scalar("SELECT active_snapshot_id FROM personas WHERE id = 'momo'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let profile = get_snapshot_profile_with_conn(&mut conn, snapshot_id)
+            .await
+            .unwrap();
+
+        assert_eq!(profile.source_kind, "legacy_soul_md");
+        assert!(profile.source_hash.starts_with("sha256:"));
+        assert!(profile.ui_metadata["name"]
+            .as_str()
+            .unwrap()
+            .contains("默默"));
+    }
+
+    #[tokio::test]
     async fn load_persona_summary_includes_snapshot_id() {
         let (_dir, mut conn) = fresh_db().await;
         let parsed = parse_persona(MOMO_RAW).unwrap();
@@ -592,6 +1469,141 @@ mod tests {
             result.is_err(),
             "direct duplicate INSERT must violate idx_persona_snapshots_unique_persona_version"
         );
+    }
+
+    #[test]
+    fn validate_draft_rejects_dangerous_source_fields() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.preserved_unknown_text = "# tools\n- screen_capture".to_string();
+
+        let result = validate_draft(&draft);
+
+        assert!(result.blocking);
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "source.dangerous_field"));
+    }
+
+    #[tokio::test]
+    async fn save_draft_creates_snapshot_and_profile() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("momo", "默默", "1.0.0");
+
+        let result = save_draft_with_conn(&mut conn, draft, false).await.unwrap();
+
+        assert_eq!(result.persona_id, "momo");
+        assert_eq!(result.version, "1.0.0");
+        assert!(!result.activated);
+
+        let snapshot_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM persona_snapshots WHERE persona_id = 'momo'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let profile_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM persona_snapshot_profiles WHERE snapshot_id = ?",
+        )
+        .bind(result.snapshot_id.parse::<i64>().unwrap())
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+
+        assert_eq!(snapshot_count, 1);
+        assert_eq!(profile_count, 1);
+    }
+
+    #[tokio::test]
+    async fn repeated_save_bumps_patch_version_on_conflict() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("momo", "默默", "1.0.0");
+
+        let first = save_draft_with_conn(&mut conn, draft.clone(), false)
+            .await
+            .unwrap();
+        let second = save_draft_with_conn(&mut conn, draft, false).await.unwrap();
+
+        assert_eq!(first.version, "1.0.0");
+        assert_eq!(second.version, "1.0.1");
+    }
+
+    #[tokio::test]
+    async fn save_and_activate_keeps_exactly_one_active_persona() {
+        let (_dir, mut conn) = fresh_db().await;
+        let momo = valid_workshop_draft("momo", "默默", "1.0.0");
+        let joker = valid_workshop_draft("joker", "阿吉", "1.0.0");
+
+        save_draft_with_conn(&mut conn, momo, true).await.unwrap();
+        let active_joker = save_draft_with_conn(&mut conn, joker, true).await.unwrap();
+
+        let active_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE is_active = 1")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let row: (String, i64) =
+            sqlx::query_as("SELECT id, active_snapshot_id FROM personas WHERE is_active = 1")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+
+        assert_eq!(active_count, 1);
+        assert_eq!(row.0, "joker");
+        assert_eq!(row.1.to_string(), active_joker.snapshot_id);
+    }
+
+    #[tokio::test]
+    async fn activate_snapshot_switches_active_snapshot() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        let first = save_draft_with_conn(&mut conn, draft.clone(), true)
+            .await
+            .unwrap();
+        let second = save_draft_with_conn(&mut conn, draft, true).await.unwrap();
+
+        activate_snapshot_with_conn(&mut conn, first.snapshot_id.parse::<i64>().unwrap())
+            .await
+            .unwrap();
+
+        let active_snapshot_id: i64 =
+            sqlx::query_scalar("SELECT active_snapshot_id FROM personas WHERE id = 'momo'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+
+        assert_ne!(first.snapshot_id, second.snapshot_id);
+        assert_eq!(active_snapshot_id.to_string(), first.snapshot_id);
+    }
+
+    #[tokio::test]
+    async fn conversation_load_keeps_bound_snapshot_after_active_changes() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        let first = save_draft_with_conn(&mut conn, draft.clone(), true)
+            .await
+            .unwrap();
+        let second = save_draft_with_conn(&mut conn, draft, true).await.unwrap();
+        let conv_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        sqlx::query(
+            "INSERT INTO conversations \
+             (id, persona_id, persona_snapshot_id, started_at, last_activity_at) \
+             VALUES (?, 'momo', ?, '2026-06-19T00:00:00Z', '2026-06-19T00:00:00Z')",
+        )
+        .bind(conv_id)
+        .bind(first.snapshot_id.parse::<i64>().unwrap())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        activate_snapshot_with_conn(&mut conn, second.snapshot_id.parse::<i64>().unwrap())
+            .await
+            .unwrap();
+        let persona = load_persona_for_conversation_with_conn(&mut conn, conv_id)
+            .await
+            .unwrap();
+
+        assert_eq!(persona.snapshot_id, first.snapshot_id);
+        assert_eq!(persona.version, first.version);
     }
 
     #[tokio::test]

@@ -4,9 +4,20 @@ import { ElButton } from 'element-plus'
 import PersonaCardStage from './PersonaCardStage.vue'
 import PersonaInspectorDrawer from './PersonaInspectorDrawer.vue'
 import { createPersonaDraft, estimateDraftTokens, validatePersonaDraft } from '@/features/persona-workshop/draft'
-import type { PersonaSourceDraft, PersonaWorkshopMode } from '@/features/persona-workshop/types'
-import { getActivePersona, listPersonas, loadPersona } from '@/services/persona'
-import type { PersonaListItem } from '@/types/persona'
+import type {
+  PersonaDiagnostic,
+  PersonaSourceDraft,
+  PersonaWorkshopMode,
+} from '@/features/persona-workshop/types'
+import {
+  getActivePersona,
+  listPersonas,
+  loadPersona,
+  saveAndActivatePersonaDraft,
+  savePersonaDraft,
+  validatePersonaDraft as validatePersonaDraftRemote,
+} from '@/services/persona'
+import type { PersonaListItem, PersonaSaveResult } from '@/types/persona'
 
 defineProps<{
   isActive?: boolean
@@ -19,8 +30,13 @@ const selectedId = shallowRef<string | null>(null)
 const mode = shallowRef<PersonaWorkshopMode>('simple')
 const draft = ref<PersonaSourceDraft | null>(null)
 const inspectorOpen = shallowRef(false)
+const validating = shallowRef(false)
+const saving = shallowRef(false)
+const serverDiagnostics = ref<PersonaDiagnostic[] | null>(null)
+const saveResult = shallowRef<PersonaSaveResult | null>(null)
 
-const diagnostics = computed(() => (draft.value ? validatePersonaDraft(draft.value) : []))
+const localDiagnostics = computed(() => (draft.value ? validatePersonaDraft(draft.value) : []))
+const diagnostics = computed(() => serverDiagnostics.value ?? localDiagnostics.value)
 const tokenEstimate = computed(() => (draft.value ? estimateDraftTokens(draft.value) : 0))
 const personaName = computed(() => draft.value?.simple.name ?? '未选择人格')
 
@@ -31,6 +47,8 @@ async function loadInitial() {
     personas.value = list
     selectedId.value = active.id
     draft.value = createPersonaDraft(active)
+    serverDiagnostics.value = null
+    saveResult.value = null
     errorMsg.value = null
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
@@ -47,9 +65,55 @@ async function selectPersona(id: string) {
     const persona = await loadPersona(id)
     draft.value = createPersonaDraft(persona)
     mode.value = 'simple'
+    serverDiagnostics.value = null
+    saveResult.value = null
     errorMsg.value = null
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+function updateDraft(nextDraft: PersonaSourceDraft) {
+  draft.value = nextDraft
+  serverDiagnostics.value = null
+  saveResult.value = null
+}
+
+async function validateCurrentDraft() {
+  if (!draft.value) return
+  validating.value = true
+  try {
+    const result = await validatePersonaDraftRemote(draft.value)
+    serverDiagnostics.value = result.diagnostics
+    errorMsg.value = null
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    validating.value = false
+  }
+}
+
+async function persistCurrentDraft(activate: boolean) {
+  if (!draft.value) return
+  saving.value = true
+  try {
+    const result = activate
+      ? await saveAndActivatePersonaDraft(draft.value)
+      : await savePersonaDraft(draft.value)
+    saveResult.value = result
+    serverDiagnostics.value = result.diagnostics
+    draft.value = {
+      ...draft.value,
+      version: result.version,
+      source: 'user',
+    }
+    personas.value = await listPersonas()
+    selectedId.value = result.persona_id
+    errorMsg.value = null
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    saving.value = false
   }
 }
 
@@ -70,11 +134,11 @@ onMounted(() => {
 
     <p v-if="errorMsg" class="persona-workshop__error">读取失败：{{ errorMsg }}</p>
 
-    <div
-      class="persona-workshop__layout"
-      :class="{ 'persona-workshop__layout--inspector-open': inspectorOpen }"
-    >
-      <main class="persona-workshop__stage">
+    <div class="persona-workshop__layout">
+      <main
+        class="persona-workshop__stage"
+        :class="{ 'persona-workshop__stage--obscured': inspectorOpen }"
+      >
         <PersonaCardStage
           :personas="personas"
           :selected-id="selectedId"
@@ -90,9 +154,15 @@ onMounted(() => {
         :persona-name="personaName"
         :diagnostics="diagnostics"
         :token-estimate="tokenEstimate"
+        :validating="validating"
+        :saving="saving"
+        :save-result="saveResult"
         @close="inspectorOpen = false"
+        @validate="validateCurrentDraft"
+        @save="persistCurrentDraft(false)"
+        @save-and-activate="persistCurrentDraft(true)"
         @update:mode="mode = $event"
-        @update:draft="draft = $event"
+        @update:draft="updateDraft"
       />
     </div>
   </section>
@@ -138,35 +208,24 @@ onMounted(() => {
   display: grid;
   position: relative;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--aipet-space-4);
   min-height: 0;
   flex: 1 1 auto;
+  container-name: persona-workshop;
+  container-type: inline-size;
   overflow: hidden;
-}
-
-.persona-workshop__layout--inspector-open {
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
 }
 
 .persona-workshop__stage {
   min-width: 0;
   min-height: 0;
+  transition:
+    opacity var(--aipet-duration-base) var(--aipet-ease-standard),
+    transform var(--aipet-duration-base) var(--aipet-ease-standard);
 }
 
-@media (max-width: 900px) {
-  .persona-workshop__layout--inspector-open {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .persona-workshop__layout--inspector-open :deep(.persona-inspector) {
-    position: absolute;
-    inset: 0 0 0 auto;
-    z-index: 1;
-    width: min(380px, 100%);
-    padding: var(--aipet-space-4);
-    border-left: 1px solid var(--aipet-color-border-faint);
-    background: var(--aipet-color-surface);
-    box-shadow: -18px 0 32px rgb(0 0 0 / 12%);
-  }
+.persona-workshop__stage--obscured {
+  opacity: 0.82;
+  transform: scale(0.992);
+  pointer-events: none;
 }
 </style>

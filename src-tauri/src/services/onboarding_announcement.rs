@@ -27,7 +27,7 @@ use sqlx::Connection;
 use tauri::{AppHandle, Runtime};
 use thiserror::Error;
 
-use crate::services::chat::conversation::ensure_active_conversation_with_conn;
+use crate::services::chat::conversation::ensure_active_conversation_with_snapshot_with_conn;
 use crate::services::db::{open_app_db, DbError};
 use crate::services::memory::{build_message_record, insert_message_with_conn, MemoryError};
 use crate::services::nickname::get_user_nickname_with_conn;
@@ -83,19 +83,26 @@ pub async fn inject_onboarding_complete<R: Runtime>(
 ) -> Result<(), OnboardingAnnouncementError> {
     let mut conn = open_app_db(app).await?;
 
-    let persona_id = match load_active_persona_with_conn(&mut conn).await {
-        Ok(p) => p.id,
+    let (persona_id, persona_snapshot_id) = match load_active_persona_with_conn(&mut conn).await {
+        Ok(p) => {
+            let snapshot_id = p.snapshot_id.parse::<i64>().ok();
+            (p.id, snapshot_id)
+        }
         Err(e) => {
             eprintln!(
                 "[onboarding_announcement] load active persona failed, fallback to '{DEFAULT_PERSONA}': {e}"
             );
-            DEFAULT_PERSONA.to_string()
+            (DEFAULT_PERSONA.to_string(), None)
         }
     };
 
-    let conv_id = ensure_active_conversation_with_conn(&mut conn, &persona_id)
-        .await
-        .map_err(|e| OnboardingAnnouncementError::EnsureConversation(e.to_string()))?;
+    let conv_id = ensure_active_conversation_with_snapshot_with_conn(
+        &mut conn,
+        &persona_id,
+        persona_snapshot_id,
+    )
+    .await
+    .map_err(|e| OnboardingAnnouncementError::EnsureConversation(e.to_string()))?;
 
     // 单次 SQL 拿幂等标志 + 消息总数;LIKE pattern 用 ANNOUNCEMENT_PREFIX/MARKER 双锚点
     // 防误命中用户自己写的"系统通知"开头消息（user role 不算；SUM 仅计 system role）。
@@ -122,10 +129,7 @@ pub async fn inject_onboarding_complete<R: Runtime>(
         return Ok(());
     }
 
-    let nickname = get_user_nickname_with_conn(&mut conn)
-        .await
-        .ok()
-        .flatten();
+    let nickname = get_user_nickname_with_conn(&mut conn).await.ok().flatten();
 
     let content = if msg_count == 0 {
         compose_first_chat(nickname.as_deref())
@@ -189,6 +193,7 @@ fn compose_reconsent(nickname: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::chat::conversation::ensure_active_conversation_with_conn;
     use crate::services::test_db::fresh_db;
 
     #[test]
@@ -307,7 +312,9 @@ mod tests {
             ONLINE_MODE.to_string(),
         )
         .unwrap();
-        insert_message_with_conn(&mut conn, &user_fake).await.unwrap();
+        insert_message_with_conn(&mut conn, &user_fake)
+            .await
+            .unwrap();
 
         let like_pattern = format!("{ANNOUNCEMENT_PREFIX}%{ANNOUNCEMENT_MARKER}%");
         let (has_inject, msg_count): (i64, i64) = sqlx::query_as(

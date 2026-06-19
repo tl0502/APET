@@ -40,7 +40,7 @@ use crate::kernel::repos::conversation_repo::SafetyScanStatus;
 use crate::kernel::safety_guard::{SafetyGuard, ScanFinalResult, ScanTokenResult};
 use crate::kernel::safety_policy::SafetyScope;
 use crate::services::chat::conversation::{
-    ensure_active_conversation_with_conn, update_last_activity,
+    ensure_active_conversation_with_snapshot_with_conn, update_last_activity,
 };
 use crate::services::chat::prompt::build_messages;
 use crate::services::chat::ChatError;
@@ -55,7 +55,9 @@ use crate::services::memory::{
     list_messages_by_conversation_with_conn, update_message_content_with_conn, MessageRecord,
 };
 use crate::services::nickname::get_user_nickname_with_conn;
-use crate::services::persona::{load_active_persona_with_conn, PersonaSummary};
+use crate::services::persona::{
+    load_active_persona_with_conn, load_persona_for_conversation_with_conn, PersonaSummary,
+};
 
 // === 业务常量 ===
 /// 历史窗口（M1 N=10 取最近 N 条；M3 接 ContextManager 改为 token 预算自适应）。
@@ -269,16 +271,28 @@ impl ChatService {
             }
         };
 
-        // 1. 加载 active persona + 解析或建 conversation
+        // 1. 加载 active persona 仅作为“无 conversation_id 且 active KV 不可用时新建会话”的 fallback。
+        //    真正用于 prompt 的 persona 必须来自 conversation.persona_snapshot_id，避免旧会话
+        //    随 active persona / active snapshot 改变而漂移。
         let active_persona = load_active_persona_with_conn(&mut conn).await?;
-        // caller-provided conv_id 的归属校验放到 tx 内做（缩小 race 窗口）；先记下意图，
-        // 真正的 SELECT/校验在 INSERT 之前同 tx 内执行。None 路径仍走 ensure_active 自愈。
-        let resolved_conv_id: Option<String> = match &conversation_id {
-            Some(id) => Some(id.clone()),
+        let active_snapshot_id = active_persona.snapshot_id.parse::<i64>().map_err(|_| {
+            ChatError::Persona(format!(
+                "active persona {} missing valid snapshot id",
+                active_persona.id
+            ))
+        })?;
+        let conv_id = match &conversation_id {
+            Some(id) => id.clone(),
             None => {
-                Some(ensure_active_conversation_with_conn(&mut conn, &active_persona.id).await?)
+                ensure_active_conversation_with_snapshot_with_conn(
+                    &mut conn,
+                    &active_persona.id,
+                    Some(active_snapshot_id),
+                )
+                .await?
             }
         };
+        let persona = load_persona_for_conversation_with_conn(&mut conn, &conv_id).await?;
 
         // 2. 加载用户昵称 + 历史 N=10（先读再写：LIMIT N 自然就是"不含当前轮的最近 N 条"，
         //    早先版本"先 INSERT user_record 再 LIMIT N 又过滤当前 ID"会让 LLM 实际只看到
@@ -288,13 +302,9 @@ impl ChatService {
         //    注：caller 传 conv_id 时这里读历史可能撞到"刚被另一窗口删掉"的状态——读不到
         //    历史就当空历史走，由后面的 tx 内 SELECT + INSERT FK 保护把致命错落地。
         let user_nick = get_user_nickname_with_conn(&mut conn).await?;
-        let conv_id_for_history = resolved_conv_id.as_deref().unwrap_or("");
-        let history = list_messages_by_conversation_with_conn(
-            &mut conn,
-            conv_id_for_history,
-            Some(HISTORY_LIMIT),
-        )
-        .await?;
+        let history =
+            list_messages_by_conversation_with_conn(&mut conn, &conv_id, Some(HISTORY_LIMIT))
+                .await?;
         // A6 修复（2026-05-09）：mode='offline_rule' 的 assistant 是断网时本地拒答模板（非
         // LLM 实际输出）。下次进 LLM history 会让 LLM 看到自己（伪装）说过这话，可能延续
         // 被动语气或反问"我刚才为什么这么说"。UI 仍正常展示（chat_history IPC 不受影响）。
@@ -322,9 +332,9 @@ impl ChatService {
         //    在 INSERT user_record 之前做完，任一失败直接 ?；不需要"先 INSERT 再回滚"路径
         //    （后者在 DELETE 也失败时会留孤儿 user 行）。
         let messages = build_messages(
-            &active_persona,
+            &persona,
             user_nick.as_deref(),
-            &active_persona.name,
+            &persona.name,
             &history_filtered,
             &input,
         )?;
@@ -344,7 +354,16 @@ impl ChatService {
             .map(|kernel| std::sync::Arc::clone(&kernel.secret_repo));
         let provider = build_provider_with_conn(&mut conn, secret_repo.as_ref()).await?;
 
-        // 5. caller 传 conv_id 时校验存在 + 归属（**在 tx 外做**）。
+        // 5. conversation 存在性与 snapshot binding 已在 load_persona_for_conversation_with_conn
+        //    里完成。这里不再用 active persona 做归属校验：A1 要求已有会话保持自己的
+        //    persona_snapshot_id，不随 active persona 改变而重绑。
+        //
+        //    历史说明：旧代码在此校验 conversation.persona_id == active_persona.id，会导致切换
+        //    active persona 后旧会话不可继续；这是 Persona Snapshot A1 明确要修掉的漂移点。
+        //
+        //    下面 INSERT 仍由 FK 兜底处理 SELECT 与 INSERT 之间的删除 race。
+        //
+        //    原并发背景：
         //    为什么不放 tx 内：sqlx 默认 `BEGIN DEFERRED`，tx 第一句是 SELECT 拿读锁，
         //    后续 INSERT 升级写锁；这种 read→write upgrade 模式下，若另一连接已 commit
         //    写入，本 tx 升级会**立即** SQLITE_BUSY，**busy_timeout 不保护此路径**
@@ -353,28 +372,6 @@ impl ChatService {
         //    busy_timeout = 5000 在 prepare 全程生效。
         //    SELECT 与下面 INSERT 之间有微秒级 race（另一窗口刚 archive/delete 这个 conv），
         //    INSERT 撞 FK 时由下方 FK 错误转译兜底，与 SELECT 路径返同款友好文案。
-        let conv_id = match &conversation_id {
-            Some(id) => {
-                let row: Option<(String,)> =
-                    sqlx::query_as("SELECT persona_id FROM conversations WHERE id = ?")
-                        .bind(id)
-                        .fetch_optional(&mut conn)
-                        .await?;
-                let row =
-                    row.ok_or_else(|| ChatError::Database(format!("对话不存在或已被删除：{id}")))?;
-                if row.0 != active_persona.id {
-                    return Err(ChatError::Database(format!(
-                        "会话归属不匹配：对话 {id} 属于 persona {}，当前 active 是 {}",
-                        row.0, active_persona.id
-                    )));
-                }
-                id.clone()
-            }
-            None => resolved_conv_id
-                .clone()
-                .expect("ensure_active_conversation_with_conn 已在前置步骤兜底产出 id"),
-        };
-
         // 6. 构造 user_record + placeholder（conv_id 已决议）。
         let user_record = MessageRecord {
             conversation_id: conv_id.clone(),
@@ -435,7 +432,7 @@ impl ChatService {
             assistant_id,
             user_id: user_record.id,
             conv_id,
-            persona: active_persona,
+            persona,
             messages,
             provider,
             cancel_token: cancel,

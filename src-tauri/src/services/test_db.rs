@@ -30,8 +30,11 @@ use crate::services::db::enforce_pragmas;
 /// - 001_init.sql: M1 D5 单文件初始化 schema（旧 persona_snapshot_unique 002 已 merge 进 001）
 /// - 002_phase_a0_safety_secrets.sql: Phase A0 新增（messages.safety_scan_status / secrets.created_at /
 ///   context_access_log 表）— 与 prod 同 apply，避免测试 schema 漂移导致 prod-only bug 静默潜伏。
+/// - 003_persona_snapshot_minimal_closure.sql: Phase A1 persona snapshot runtime binding.
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_phase_a0_safety_secrets.sql");
+const MIGRATION_003: &str =
+    include_str!("../../migrations/003_persona_snapshot_minimal_closure.sql");
 
 /// 创建一个全新的临时 sqlite DB,apply 所有 migrations,返回 (TempDir, SqliteConnection)。
 ///
@@ -64,6 +67,9 @@ pub async fn fresh_db() -> (TempDir, SqliteConnection) {
     conn.execute(MIGRATION_002)
         .await
         .expect("apply 002_phase_a0_safety_secrets.sql");
+    conn.execute(MIGRATION_003)
+        .await
+        .expect("apply 003_persona_snapshot_minimal_closure.sql");
 
     // 与 prod 行为对齐：每个连接显式 PRAGMA foreign_keys = ON
     // （sqlx 默认 ON，但显式调用一次能保证未来 prod 加 PRAGMA 时测试同步生效）

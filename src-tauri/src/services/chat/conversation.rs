@@ -38,6 +38,14 @@ pub(crate) async fn ensure_active_conversation_with_conn(
     conn: &mut SqliteConnection,
     persona_id: &str,
 ) -> Result<String, ChatError> {
+    ensure_active_conversation_with_snapshot_with_conn(conn, persona_id, None).await
+}
+
+pub(crate) async fn ensure_active_conversation_with_snapshot_with_conn(
+    conn: &mut SqliteConnection,
+    persona_id: &str,
+    persona_snapshot_id: Option<i64>,
+) -> Result<String, ChatError> {
     // 1. 读 config KV
     let stored: Option<String> = config_get(conn, CONFIG_KEY_ACTIVE_CONVERSATION).await?;
 
@@ -60,12 +68,13 @@ pub(crate) async fn ensure_active_conversation_with_conn(
     sqlx::query(
         r#"
         INSERT INTO conversations
-            (id, persona_id, title, archived, started_at, last_activity_at, is_sandbox)
-        VALUES (?, ?, NULL, 0, ?, ?, 0)
+            (id, persona_id, persona_snapshot_id, title, archived, started_at, last_activity_at, is_sandbox)
+        VALUES (?, ?, ?, NULL, 0, ?, ?, 0)
         "#,
     )
     .bind(&new_id)
     .bind(persona_id)
+    .bind(persona_snapshot_id)
     .bind(&now)
     .bind(&now)
     .execute(&mut *conn)
@@ -163,21 +172,46 @@ pub async fn create_conversation<R: Runtime>(
     Ok(id)
 }
 
+pub async fn create_conversation_for_snapshot<R: Runtime>(
+    app: &AppHandle<R>,
+    persona_id: &str,
+    persona_snapshot_id: i64,
+) -> Result<String, ChatError> {
+    let mut conn = open_app_db(app).await?;
+    let id = create_conversation_with_snapshot_with_conn(
+        &mut conn,
+        persona_id,
+        Some(persona_snapshot_id),
+    )
+    .await?;
+    conn.close().await?;
+    Ok(id)
+}
+
 pub(crate) async fn create_conversation_with_conn(
     conn: &mut SqliteConnection,
     persona_id: &str,
+) -> Result<String, ChatError> {
+    create_conversation_with_snapshot_with_conn(conn, persona_id, None).await
+}
+
+pub(crate) async fn create_conversation_with_snapshot_with_conn(
+    conn: &mut SqliteConnection,
+    persona_id: &str,
+    persona_snapshot_id: Option<i64>,
 ) -> Result<String, ChatError> {
     let new_id = Ulid::new().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         r#"
         INSERT INTO conversations
-            (id, persona_id, title, archived, started_at, last_activity_at, is_sandbox)
-        VALUES (?, ?, NULL, 0, ?, ?, 0)
+            (id, persona_id, persona_snapshot_id, title, archived, started_at, last_activity_at, is_sandbox)
+        VALUES (?, ?, ?, NULL, 0, ?, ?, 0)
         "#,
     )
     .bind(&new_id)
     .bind(persona_id)
+    .bind(persona_snapshot_id)
     .bind(&now)
     .bind(&now)
     .execute(&mut *conn)
@@ -705,10 +739,7 @@ mod tests {
         let id2 = ensure_active_conversation_with_conn(&mut conn, "momo")
             .await
             .unwrap();
-        assert_ne!(
-            id1, id2,
-            "归档 KV 必须触发 fallback 建新，不能复用归档行"
-        );
+        assert_ne!(id1, id2, "归档 KV 必须触发 fallback 建新，不能复用归档行");
 
         // KV 已被切到新行
         let kv = config_get(&mut conn, CONFIG_KEY_ACTIVE_CONVERSATION)

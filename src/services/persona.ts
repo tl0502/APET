@@ -1,5 +1,12 @@
 import { invoke } from './ipc'
-import type { PersonaListItem, PersonaSummary } from '@/types/persona'
+import type { PersonaSourceDraft } from '@/features/persona-workshop/types'
+import type {
+  PersonaDraftValidationResult,
+  PersonaListItem,
+  PersonaSaveResult,
+  PersonaSummary,
+  SoulRuntimeProfile,
+} from '@/types/persona'
 
 /** 读取 personas + persona_snapshots，返回完整 raw markdown 与元信息。 */
 export function loadPersona(id: string): Promise<PersonaSummary> {
@@ -19,4 +26,28 @@ export function activatePersona(id: string): Promise<void> {
 /** 读当前激活人格 summary（含 raw_markdown）。#14 ChatPanel header 标题、设置面板提示用。 */
 export function getActivePersona(): Promise<PersonaSummary> {
   return invoke<PersonaSummary>('persona_get_active')
+}
+
+export function validatePersonaDraft(
+  draft: PersonaSourceDraft,
+): Promise<PersonaDraftValidationResult> {
+  return invoke<PersonaDraftValidationResult>('persona_validate_draft', { draft })
+}
+
+export function savePersonaDraft(draft: PersonaSourceDraft): Promise<PersonaSaveResult> {
+  return invoke<PersonaSaveResult>('persona_save_draft', { draft })
+}
+
+export function saveAndActivatePersonaDraft(
+  draft: PersonaSourceDraft,
+): Promise<PersonaSaveResult> {
+  return invoke<PersonaSaveResult>('persona_save_and_activate_draft', { draft })
+}
+
+export function activatePersonaSnapshot(snapshotId: number): Promise<void> {
+  return invoke<void>('persona_activate_snapshot', { snapshotId })
+}
+
+export function getPersonaSnapshotProfile(snapshotId: number): Promise<SoulRuntimeProfile> {
+  return invoke<SoulRuntimeProfile>('persona_get_snapshot_profile', { snapshotId })
 }

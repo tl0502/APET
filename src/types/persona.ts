@@ -30,3 +30,41 @@ export interface PersonaListItem {
  * 监听场景：M3 设置面板（独立窗口）切人格 → 角色窗 listen 后刷新 PetCanvas / system prompt。
  */
 export type PersonaActivatedPayload = string
+
+export type PersonaDiagnosticSeverity = 'error' | 'warning' | 'info'
+
+export interface PersonaDiagnostic {
+  code: string
+  severity: PersonaDiagnosticSeverity
+  message: string
+}
+
+export interface PersonaDraftValidationResult {
+  diagnostics: PersonaDiagnostic[]
+  blocking: boolean
+  token_estimate: number
+}
+
+export interface PersonaSaveResult {
+  persona_id: string
+  snapshot_id: string
+  version: string
+  activated: boolean
+  diagnostics: PersonaDiagnostic[]
+}
+
+export interface SoulRuntimeProfile {
+  identity_prompt: string
+  style_prompt: string
+  examples: string[]
+  initiative_config: Record<string, unknown>
+  memory_policy: Record<string, unknown>
+  ui_metadata: Record<string, unknown>
+  source_kind: string
+  source_hash: string
+}
+
+export interface PersonaSnapshotActivatedPayload {
+  personaId: string
+  snapshotId: string
+}

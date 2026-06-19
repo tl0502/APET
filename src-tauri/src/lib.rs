@@ -11,8 +11,7 @@ use std::sync::Arc;
 use services::shortcuts::ShortcutRegistry;
 use services::window_actions::{
     emit_visibility_changed, CHAT_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL,
-    PET_REMINDER_OVERLAY_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL,
-    WORKSPACE_WINDOW_LABEL,
+    PET_REMINDER_OVERLAY_LABEL, PET_WINDOW_LABEL, POMODORO_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL,
 };
 use services::window_state::{PomodoroSaveDebouncer, SaveDebouncer, WorkspaceSaveDebouncer};
 use tauri::{Listener, Manager};
@@ -25,11 +24,8 @@ const DB_URL: &str = "sqlite:aipet.db";
 /// 集中维护，新增窗口只需在此添加一项，避免漏改条件分支）。
 /// #33 phase E：删 SETTINGS_WINDOW_LABEL / TASKS_WINDOW_LABEL（独立窗已删，迁入 workspace）。
 /// pomodoro 不在此列：它有独立 hide + OS 通知 + KV 标记的复合逻辑（见 CloseRequested 分支）。
-const HIDE_ON_CLOSE_LABELS: &[&str] = &[
-    PET_WINDOW_LABEL,
-    CHAT_WINDOW_LABEL,
-    WORKSPACE_WINDOW_LABEL,
-];
+const HIDE_ON_CLOSE_LABELS: &[&str] =
+    &[PET_WINDOW_LABEL, CHAT_WINDOW_LABEL, WORKSPACE_WINDOW_LABEL];
 
 /// SQLite migrations。
 ///
@@ -53,6 +49,12 @@ fn migrations() -> Vec<Migration> {
             version: 2,
             description: "Phase A0 safety + secrets",
             sql: include_str!("../migrations/002_phase_a0_safety_secrets.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "Phase A1 persona snapshot minimal closure",
+            sql: include_str!("../migrations/003_persona_snapshot_minimal_closure.sql"),
             kind: MigrationKind::Up,
         },
     ]
@@ -559,6 +561,11 @@ pub fn run() {
             commands::persona::persona_list,
             commands::persona::persona_activate,
             commands::persona::persona_get_active,
+            commands::persona::persona_validate_draft,
+            commands::persona::persona_save_draft,
+            commands::persona::persona_save_and_activate_draft,
+            commands::persona::persona_activate_snapshot,
+            commands::persona::persona_get_snapshot_profile,
             // #5 nickname（2026-05-09：删 pet 系列，加 announce 开关）
             commands::nickname::nickname_get_user,
             commands::nickname::nickname_set_user,

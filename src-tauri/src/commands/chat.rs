@@ -37,13 +37,13 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
 use crate::services::chat::conversation::{
-    archive_conversation, create_conversation, delete_conversation, list_conversations,
-    rename_conversation, set_active_conversation, ConversationSummary,
+    archive_conversation, create_conversation_for_snapshot, delete_conversation,
+    list_conversations, rename_conversation, set_active_conversation, ConversationSummary,
 };
 use crate::services::chat::service::{ChatService, SendResult, StreamEvent};
 use crate::services::config;
 use crate::services::memory::MessageRecord;
-use crate::services::persona::load_active_persona;
+use crate::services::persona::{load_active_persona, load_persona};
 
 const INPUT_MAX_LEN: usize = 8000;
 const HISTORY_LIMIT_MAX: u32 = 1000;
@@ -169,20 +169,23 @@ pub async fn chat_create_conversation(
     app: AppHandle,
     #[allow(non_snake_case)] personaId: Option<String>,
 ) -> Result<String, String> {
-    let pid = match personaId
+    let persona = match personaId
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        Some(p) => p.to_string(),
-        None => {
-            load_active_persona(&app)
-                .await
-                .map_err(|e| format!("load active persona: {e}"))?
-                .id
-        }
+        Some(p) => load_persona(&app, p)
+            .await
+            .map_err(|e| format!("load persona: {e}"))?,
+        None => load_active_persona(&app)
+            .await
+            .map_err(|e| format!("load active persona: {e}"))?,
     };
-    create_conversation(&app, &pid)
+    let snapshot_id = persona
+        .snapshot_id
+        .parse::<i64>()
+        .map_err(|_| format!("persona {} 缺少可用 snapshot", persona.id))?;
+    create_conversation_for_snapshot(&app, &persona.id, snapshot_id)
         .await
         .map_err(|e| format!("{e}"))
 }
