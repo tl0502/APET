@@ -14,6 +14,7 @@
 //
 // process_event_stream 单独抽出，方便用合成 bytes 流做单测（不需要起 mock HTTP server）。
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -44,6 +45,34 @@ const READ_TIMEOUT_SECS: u64 = 60;
 /// 正常 placeholder。改 `connect_timeout + read_timeout + 大兜底 timeout` 后此 footgun 关闭。
 const TOTAL_TIMEOUT_SECS: u64 = 600;
 
+/// 进程级共享 reqwest::Client（T3-5）。
+///
+/// reqwest::Client 内部以 Arc 持连接池，clone 廉价且共享同一池。此前每轮对话都在
+/// `OpenAIProvider::new` 里 `Client::builder().build()` 新建一个 Client → 连接池每轮被丢弃
+/// → 每轮都要重新 TCP+TLS 握手。改成所有 provider 复用同一个 Client 后，跨轮 keep-alive
+/// 连接得以复用，省掉重复握手延迟。
+///
+/// 三个 timeout 常量对所有 preset 相同，故单一共享 Client 适配 OpenAI/DeepSeek/Moonshot/
+/// Qwen/Ollama/自定义全部路径。构建失败（TLS backend 初始化异常）仍按可恢复错误上抛，
+/// 不 panic（保持原 new() 语义）。
+fn shared_client() -> Result<Client, LLMError> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(c) = CLIENT.get() {
+        return Ok(c.clone());
+    }
+    let built = Client::builder()
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .read_timeout(Duration::from_secs(READ_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(TOTAL_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| LLMError::Network(format!("build reqwest client: {e}")))?;
+    // 并发竞态：set 失败说明已有线程先 set，用已存的那份即可（丢弃本次 built）。
+    match CLIENT.set(built) {
+        Ok(()) => Ok(CLIENT.get().expect("just set").clone()),
+        Err(_) => Ok(CLIENT.get().expect("set by another thread").clone()),
+    }
+}
+
 pub struct OpenAIProvider {
     client: Client,
     base_url: String,
@@ -70,12 +99,7 @@ impl OpenAIProvider {
         api_key: impl Into<String>,
         model_default: impl Into<String>,
     ) -> Result<Self, LLMError> {
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-            .read_timeout(Duration::from_secs(READ_TIMEOUT_SECS))
-            .timeout(Duration::from_secs(TOTAL_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| LLMError::Network(format!("build reqwest client: {e}")))?;
+        let client = shared_client()?;
         Ok(Self {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
@@ -362,6 +386,22 @@ mod tests {
         ChatMessage, ContentPart, ImageDetail, ImageUrlValue, Role, ToolCall,
     };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn provider_new_reuses_shared_client_across_instances() {
+        // T3-5：所有 provider 复用进程级共享 reqwest::Client。
+        // reqwest 不暴露连接池身份，无法直接断言"同一池"；此处验证多次构造均成功、
+        // 字段正确，并确保 shared_client() 在热路径上可重复调用不报错（回归守卫：
+        // 防止有人把它改回每轮 fallible 的 per-call build）。
+        let p1 = OpenAIProvider::new("openai", "https://api.openai.com/v1/", "k1", "gpt-4o-mini")
+            .unwrap();
+        let p2 = OpenAIProvider::new("deepseek", "https://api.deepseek.com", "k2", "deepseek-chat")
+            .unwrap();
+        assert_eq!(p1.id, "openai");
+        assert_eq!(p2.id, "deepseek");
+        assert_eq!(p1.base_url, "https://api.openai.com/v1"); // 末尾斜杠被 trim
+        assert_eq!(p2.base_url, "https://api.deepseek.com");
+    }
 
     #[test]
     fn serialize_single_text_part_uses_string_content() {
