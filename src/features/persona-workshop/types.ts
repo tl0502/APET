@@ -1,4 +1,4 @@
-export type PersonaWorkshopMode = 'simple' | 'structured' | 'source'
+export type PersonaWorkshopMode = 'simple' | 'structured' | 'examples' | 'source'
 
 export type PersonaDiagnosticSeverity = 'error' | 'warning' | 'info'
 
@@ -6,6 +6,11 @@ export interface PersonaDiagnostic {
   code: string
   severity: PersonaDiagnosticSeverity
   message: string
+}
+
+export interface PersonaExamplePair {
+  user: string
+  assistant: string
 }
 
 export interface PersonaSimpleDraft {

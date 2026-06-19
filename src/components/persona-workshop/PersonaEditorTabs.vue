@@ -1,8 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ElButton, ElInput, ElSlider } from 'element-plus'
-import type { PersonaSourceDraft, PersonaWorkshopMode } from '@/features/persona-workshop/types'
-import { projectDraftToSource } from '@/features/persona-workshop/draft'
+import PersonaExampleEditor from './PersonaExampleEditor.vue'
+import {
+  getDraftExamplePairs,
+  MAX_PERSONA_EXAMPLES,
+  projectDraftToSource,
+  withDraftExamplePairs,
+} from '@/features/persona-workshop/draft'
+import type {
+  PersonaExamplePair,
+  PersonaSourceDraft,
+  PersonaWorkshopMode,
+} from '@/features/persona-workshop/types'
 
 const props = defineProps<{
   draft: PersonaSourceDraft
@@ -17,10 +27,12 @@ const emit = defineEmits<{
 const modeItems: Array<{ id: PersonaWorkshopMode; label: string }> = [
   { id: 'simple', label: '塑形' },
   { id: 'structured', label: '结构' },
+  { id: 'examples', label: '示例' },
   { id: 'source', label: '源码' },
 ]
 
 const sourceText = computed(() => projectDraftToSource(props.draft))
+const examplePairs = computed(() => getDraftExamplePairs(props.draft))
 
 function setMode(mode: PersonaWorkshopMode) {
   emit('update:mode', mode)
@@ -60,6 +72,10 @@ function updateRules(key: 'rulesDo' | 'rulesDont', value: string) {
       .map((line) => line.replace(/^- /, '').trim())
       .filter(Boolean),
   )
+}
+
+function updateExamples(pairs: PersonaExamplePair[]) {
+  emit('update:draft', withDraftExamplePairs(props.draft, pairs))
 }
 </script>
 
@@ -162,6 +178,15 @@ function updateRules(key: 'rulesDo' | 'rulesDont', value: string) {
           @update:model-value="updateRules('rulesDont', String($event))"
         />
       </label>
+    </div>
+
+    <div v-else-if="props.mode === 'examples'" class="persona-editor__body">
+      <PersonaExampleEditor
+        :pairs="examplePairs"
+        :persona-name="props.draft.simple.name"
+        :max-examples="MAX_PERSONA_EXAMPLES"
+        @update:pairs="updateExamples"
+      />
     </div>
 
     <div v-else class="persona-editor__body">

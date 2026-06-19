@@ -42,7 +42,7 @@ use crate::kernel::safety_policy::SafetyScope;
 use crate::services::chat::conversation::{
     ensure_active_conversation_with_snapshot_with_conn, update_last_activity,
 };
-use crate::services::chat::prompt::build_messages;
+use crate::services::chat::prompt::{build_messages_from_profile, PromptBuildInput};
 use crate::services::chat::ChatError;
 use crate::services::db::open_app_db;
 use crate::services::llm::{
@@ -56,7 +56,8 @@ use crate::services::memory::{
 };
 use crate::services::nickname::get_user_nickname_with_conn;
 use crate::services::persona::{
-    load_active_persona_with_conn, load_persona_for_conversation_with_conn, PersonaSummary,
+    get_snapshot_profile_with_conn, load_active_persona_with_conn,
+    load_persona_for_conversation_with_conn, PersonaSummary, SoulRuntimeProfile,
 };
 
 // === 业务常量 ===
@@ -328,16 +329,21 @@ impl ChatService {
             })
             .collect();
 
-        // 3. 拼 messages（含安全前缀占位 + 4 节人格 + 昵称 bullets + re-anchor + 历史 + 包装后的 user）。
+        // 3. 拼 messages：从 conversation 绑定的 snapshot profile 读取人格材料，
+        //    注入 identity/style/examples + 昵称 bullets + re-anchor + 历史 + 包装后的 user。
         //    在 INSERT user_record 之前做完，任一失败直接 ?；不需要"先 INSERT 再回滚"路径
         //    （后者在 DELETE 也失败时会留孤儿 user 行）。
-        let messages = build_messages(
-            &persona,
-            user_nick.as_deref(),
-            &persona.name,
-            &history_filtered,
-            &input,
-        )?;
+        // A2 invariant: do not fallback to persona.raw_markdown here. Missing profile means the
+        // snapshot is not runnable under the runtime contract and must fail before any DB message write.
+        let runtime_profile = load_runtime_profile_for_persona(&mut conn, &persona).await?;
+        let messages = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &runtime_profile,
+            persona_name: &persona.name,
+            user_nickname: user_nick.as_deref(),
+            pet_nickname: &persona.name,
+            history: &history_filtered,
+            current_input: &input,
+        })?;
 
         // Phase A0.7: SafetyGuard.wrap_messages 在 PrefixInjection ON 时注入 prefix。
         // 注入点在 build_messages 之后，启用时保证 prefix 是 system message 第一位。
@@ -836,6 +842,21 @@ async fn delete_assistant_msg<R: Runtime>(app: &AppHandle<R>, id: &str) -> Resul
     Ok(())
 }
 
+async fn load_runtime_profile_for_persona(
+    conn: &mut sqlx::SqliteConnection,
+    persona: &PersonaSummary,
+) -> Result<SoulRuntimeProfile, ChatError> {
+    let snapshot_id = persona.snapshot_id.parse::<i64>().map_err(|_| {
+        ChatError::Persona(format!(
+            "persona {} missing valid snapshot id {}",
+            persona.id, persona.snapshot_id
+        ))
+    })?;
+    get_snapshot_profile_with_conn(conn, snapshot_id)
+        .await
+        .map_err(|e| ChatError::Persona(e.to_string()))
+}
+
 async fn build_provider_with_conn(
     conn: &mut sqlx::SqliteConnection,
     secret_repo: Option<&std::sync::Arc<crate::kernel::repos::SecretRepo>>,
@@ -1109,6 +1130,125 @@ mod tests {
         let _ = error_kind_str(&LLMError::Cancelled {
             partial_usage: None,
         });
+    }
+
+    #[tokio::test]
+    async fn load_runtime_profile_for_persona_errors_when_profile_missing() {
+        use crate::services::test_db::fresh_db;
+
+        let (_dir, mut conn) = fresh_db().await;
+        sqlx::query(
+            "INSERT INTO personas \
+             (id, name, version, source, file_path, is_active, created_at, updated_at, active_snapshot_id) \
+             VALUES ('momo', '默默', '1.0.0', 'user', 'workshop://momo.soul.md', 1, \
+                     '2026-06-20T00:00:00Z', '2026-06-20T00:00:00Z', NULL)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let snapshot_id = sqlx::query(
+            "INSERT INTO persona_snapshots (persona_id, version, content, created_at) \
+             VALUES ('momo', '1.0.0', '# 身份\n旧源码', '2026-06-20T00:00:00Z')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        sqlx::query("UPDATE personas SET active_snapshot_id = ? WHERE id = 'momo'")
+            .bind(snapshot_id)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let persona =
+            crate::services::persona::load_persona_snapshot_with_conn(&mut conn, snapshot_id)
+                .await
+                .unwrap();
+
+        let result = load_runtime_profile_for_persona(&mut conn, &persona).await;
+
+        assert!(
+            matches!(result, Err(ChatError::Persona(message)) if message.contains("snapshot not found"))
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_profile_for_existing_conversation_uses_bound_snapshot_after_active_changes() {
+        use crate::services::persona::{
+            activate_snapshot_with_conn, get_snapshot_profile_with_conn, save_draft_with_conn,
+            PersonaSimpleDraft, PersonaSourceDraft, PersonaStructuredDraft,
+        };
+        use crate::services::test_db::fresh_db;
+
+        fn draft(version: &str, identity: &str) -> PersonaSourceDraft {
+            PersonaSourceDraft {
+                persona_id: "momo".to_string(),
+                version: version.to_string(),
+                source: "user".to_string(),
+                simple: PersonaSimpleDraft {
+                    name: "默默".to_string(),
+                    tagline: "安静陪伴".to_string(),
+                    relationship_style: "companion".to_string(),
+                    warmth: 3,
+                    playfulness: 2,
+                    formality: 2,
+                    proactivity: 3,
+                    brevity: 4,
+                    speech_length: "short".to_string(),
+                    initiative: "sometimes".to_string(),
+                    dislikes: vec!["空洞鼓励".to_string()],
+                    examples: vec!["用户：你好\n默默：我在。".to_string()],
+                },
+                structured: PersonaStructuredDraft {
+                    identity: identity.to_string(),
+                    personality: "- 温和\n- 克制".to_string(),
+                    capabilities: "- 陪伴".to_string(),
+                    rules_do: vec!["短句回应".to_string()],
+                    rules_dont: vec!["不空洞鼓励".to_string()],
+                    offline_templates: "## 拒答 / Refusal\n- 这个我现在不适合处理。"
+                        .to_string(),
+                    reactions: "- click.head: 轻声回应".to_string(),
+                    examples: "- 用户：你好\n  默默：我在。".to_string(),
+                },
+                source_text: String::new(),
+                preserved_unknown_text: String::new(),
+            }
+        }
+
+        let (_dir, mut conn) = fresh_db().await;
+        let first = save_draft_with_conn(&mut conn, draft("1.0.0", "第一版身份"), true)
+            .await
+            .unwrap();
+        let second = save_draft_with_conn(&mut conn, draft("1.0.0", "第二版身份"), true)
+            .await
+            .unwrap();
+        let conv_id = "01PROFILEBOUND000000000000001";
+        sqlx::query(
+            "INSERT INTO conversations \
+             (id, persona_id, persona_snapshot_id, started_at, last_activity_at) \
+             VALUES (?, 'momo', ?, '2026-06-20T00:00:00Z', '2026-06-20T00:00:00Z')",
+        )
+        .bind(conv_id)
+        .bind(first.snapshot_id.parse::<i64>().unwrap())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        activate_snapshot_with_conn(&mut conn, second.snapshot_id.parse::<i64>().unwrap())
+            .await
+            .unwrap();
+
+        let persona = load_persona_for_conversation_with_conn(&mut conn, conv_id)
+            .await
+            .unwrap();
+        let profile = load_runtime_profile_for_persona(&mut conn, &persona).await.unwrap();
+
+        assert_eq!(persona.snapshot_id, first.snapshot_id);
+        assert_eq!(profile.identity_prompt, "第一版身份");
+        let active_profile =
+            get_snapshot_profile_with_conn(&mut conn, second.snapshot_id.parse::<i64>().unwrap())
+                .await
+                .unwrap();
+        assert_eq!(active_profile.identity_prompt, "第二版身份");
     }
 
     #[test]

@@ -1,12 +1,14 @@
 import type { PersonaSummary } from '@/types/persona'
 import type {
   PersonaDiagnostic,
+  PersonaExamplePair,
   PersonaSimpleDraft,
   PersonaSourceDraft,
   PersonaStructuredDraft,
 } from './types'
 
 const SECTION_LABELS = ['身份', '性格', '能力', '行为规则', '离线模板', '反应配置', '例对话']
+export const MAX_PERSONA_EXAMPLES = 5
 
 function extractSection(markdown: string, label: string): string {
   const lines = markdown.split(/\r?\n/)
@@ -29,6 +31,31 @@ function extractListItems(markdown: string): string[] {
     .filter((line) => line.startsWith('- '))
     .map((line) => line.slice(2).trim())
     .filter(Boolean)
+}
+
+function stripSpeakerPrefix(line: string): { speaker: string; text: string } | null {
+  const normalized = line.trim().replace(/^- /, '').trim()
+  const match = normalized.match(/^([^：:]{1,24})[：:]\s*(.*)$/)
+  if (!match) return null
+  return { speaker: match[1].trim(), text: match[2].trim() }
+}
+
+function normalizeExampleText(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+function completePairs(pairs: PersonaExamplePair[]): PersonaExamplePair[] {
+  return pairs
+    .map((pair) => ({
+      user: normalizeExampleText(pair.user),
+      assistant: normalizeExampleText(pair.assistant),
+    }))
+    .filter((pair) => pair.user.length > 0 && pair.assistant.length > 0)
+    .slice(0, MAX_PERSONA_EXAMPLES)
 }
 
 function splitRules(rules: string): { rulesDo: string[]; rulesDont: string[] } {
@@ -58,7 +85,9 @@ function buildSimpleDraft(
     speechLength: 'short',
     initiative: 'sometimes',
     dislikes: structured.rulesDont.slice(0, 3),
-    examples: extractListItems(structured.examples).slice(0, 3),
+    examples: parsePersonaExamplePairs(structured.examples)
+      .map((pair) => `用户：${pair.user}\n${persona.name}：${pair.assistant}`)
+      .slice(0, MAX_PERSONA_EXAMPLES),
   }
 }
 
@@ -106,6 +135,103 @@ export function createPersonaDraft(persona: PersonaSummary): PersonaSourceDraft 
   }
 }
 
+export function parsePersonaExamplePairs(markdown: string): PersonaExamplePair[] {
+  const pairs: PersonaExamplePair[] = []
+  let current: PersonaExamplePair | null = null
+  let target: 'user' | 'assistant' | null = null
+
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    const line = rawLine.trimEnd()
+    if (!line.trim()) continue
+
+    const parsed = stripSpeakerPrefix(line)
+    if (parsed?.speaker === '用户') {
+      if (current) pairs.push(current)
+      current = { user: parsed.text, assistant: '' }
+      target = 'user'
+      continue
+    }
+
+    if (parsed && current) {
+      current.assistant = parsed.text
+      target = 'assistant'
+      continue
+    }
+
+    if (current && target) {
+      current[target] = `${current[target]}\n${line.trim()}`
+    }
+  }
+
+  if (current) pairs.push(current)
+  return pairs.slice(0, MAX_PERSONA_EXAMPLES)
+}
+
+export function formatPersonaExamplePairs(
+  pairs: PersonaExamplePair[],
+  personaName: string,
+  options: { includeIncomplete?: boolean } = {},
+): string {
+  const assistantName = personaName.trim() || '助手'
+  const selectedPairs = options.includeIncomplete
+    ? pairs
+        .map((pair) => ({
+          user: normalizeExampleText(pair.user),
+          assistant: normalizeExampleText(pair.assistant),
+        }))
+        .slice(0, MAX_PERSONA_EXAMPLES)
+    : completePairs(pairs)
+
+  return selectedPairs
+    .map((pair) => {
+      const userLines = pair.user.split(/\r?\n/).filter(Boolean)
+      const assistantLines = pair.assistant.split(/\r?\n/).filter(Boolean)
+      const user =
+        options.includeIncomplete && userLines.length === 0
+          ? '- 用户：'
+          : userLines
+              .map((line, index) => (index === 0 ? `- 用户：${line}` : `  ${line}`))
+              .join('\n')
+      const assistant = assistantLines
+        .map((line, index) => (index === 0 ? `  ${assistantName}：${line}` : `  ${line}`))
+        .join('\n')
+      return [user, assistant].filter(Boolean).join('\n')
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+export function getDraftExamplePairs(draft: PersonaSourceDraft): PersonaExamplePair[] {
+  const structuredPairs = parsePersonaExamplePairs(draft.structured.examples)
+  if (completePairs(structuredPairs).length > 0 || structuredPairs.length > 0) {
+    return structuredPairs
+  }
+  return draft.simple.examples.flatMap((example) => parsePersonaExamplePairs(example))
+}
+
+export function withDraftExamplePairs(
+  draft: PersonaSourceDraft,
+  pairs: PersonaExamplePair[],
+): PersonaSourceDraft {
+  const limitedPairs = pairs.slice(0, MAX_PERSONA_EXAMPLES)
+  const structuredExamples = formatPersonaExamplePairs(limitedPairs, draft.simple.name, {
+    includeIncomplete: true,
+  })
+  return {
+    ...draft,
+    simple: {
+      ...draft.simple,
+      examples: completePairs(limitedPairs).map(
+        (pair) => `用户：${pair.user}\n${draft.simple.name.trim() || '助手'}：${pair.assistant}`,
+      ),
+    },
+    structured: {
+      ...draft.structured,
+      examples: structuredExamples,
+    },
+  }
+}
+
 export function applySimplePatch(
   draft: PersonaSourceDraft,
   patch: Partial<PersonaSimpleDraft>,
@@ -120,6 +246,7 @@ export function applySimplePatch(
 }
 
 export function projectDraftToSource(draft: PersonaSourceDraft): string {
+  const examples = formatPersonaExamplePairs(getDraftExamplePairs(draft), draft.simple.name)
   const parts = [
     '# 身份',
     draft.structured.identity,
@@ -138,8 +265,8 @@ export function projectDraftToSource(draft: PersonaSourceDraft): string {
     draft.structured.reactions,
   ]
 
-  if (draft.structured.examples.trim()) {
-    parts.push('# 例对话', draft.structured.examples)
+  if (examples.trim()) {
+    parts.push('# 例对话', examples)
   }
   if (draft.preservedUnknownText.trim()) {
     parts.push(draft.preservedUnknownText)
@@ -179,6 +306,23 @@ export function validatePersonaDraft(draft: PersonaSourceDraft): PersonaDiagnost
       code: 'budget.high',
       severity: 'warning',
       message: '人格定义偏长，会挤压聊天历史',
+    })
+  }
+
+  const pairs = getDraftExamplePairs(draft)
+  const complete = completePairs(pairs)
+  if (pairs.length === 0) {
+    diagnostics.push({
+      code: 'examples.empty',
+      severity: 'warning',
+      message: '建议补充 1-3 条示例对话；没有示例时，AI 只能靠身份与规则判断语气。',
+    })
+  }
+  if (pairs.some((pair) => pair.user.trim() === '' || pair.assistant.trim() === '')) {
+    diagnostics.push({
+      code: 'examples.partial',
+      severity: 'warning',
+      message: '存在未写完整的示例对话，保存时会跳过不完整样本',
     })
   }
 

@@ -1,8 +1,8 @@
 // ChatService 业务编排层（M1 W2 #13，ADR-018 Layer 2）。
 //
 // 子模块：
-// - prompt: 切人格 4 节（# 身份 / # 性格 / # 能力 / # 行为规则）→ 拼 system message →
-//           build_messages 输出 Vec<ChatMessage>（含 inline re-anchor 包装当前 user 输入）
+// - prompt: build_messages_from_profile consumes SoulRuntimeProfile for the formal Chat hot path;
+//           legacy markdown parsing remains only as compatibility/test code.
 // - conversation: 活跃会话 KV（config 表 `chat:active_conversation_id`）+ get-or-create
 // - service: ChatService::{send, cancel, history}（#23 任务加入；本 commit 暂不存在）
 //

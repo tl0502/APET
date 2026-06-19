@@ -382,23 +382,128 @@ fn estimate_tokens(source_text: &str) -> u32 {
     source_text.chars().count().div_ceil(3) as u32
 }
 
-fn split_examples(draft: &PersonaSourceDraft) -> Vec<String> {
-    let structured = draft
-        .structured
-        .examples
-        .lines()
+#[derive(Debug, Clone, PartialEq)]
+struct PersonaExamplePair {
+    user: String,
+    assistant: String,
+}
+
+fn strip_speaker_prefix(line: &str) -> Option<(&str, &str)> {
+    let normalized = line.trim().trim_start_matches("- ").trim();
+    let split_at = normalized.find('：').or_else(|| normalized.find(':'))?;
+    let (speaker, rest) = normalized.split_at(split_at);
+    let text = rest
+        .trim_start_matches('：')
+        .trim_start_matches(':')
+        .trim();
+    if speaker.trim().is_empty() {
+        return None;
+    }
+    Some((speaker.trim(), text))
+}
+
+fn normalize_example_text(text: &str) -> String {
+    text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .map(|line| line.trim_start_matches("- ").trim().to_string());
-    structured
-        .chain(
-            draft
-                .simple
-                .examples
-                .iter()
-                .map(|example| example.trim().to_string()),
-        )
-        .filter(|example| !example.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_example_pairs(markdown: &str) -> Vec<PersonaExamplePair> {
+    let mut pairs = Vec::new();
+    let mut current: Option<PersonaExamplePair> = None;
+    let mut target: Option<&'static str> = None;
+
+    for raw_line in markdown.lines() {
+        let line = raw_line.trim_end();
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        if let Some((speaker, text)) = strip_speaker_prefix(line) {
+            if speaker == "用户" {
+                if let Some(pair) = current.take() {
+                    pairs.push(pair);
+                }
+                current = Some(PersonaExamplePair {
+                    user: text.to_string(),
+                    assistant: String::new(),
+                });
+                target = Some("user");
+                continue;
+            }
+
+            if let Some(pair) = current.as_mut() {
+                pair.assistant = text.to_string();
+                target = Some("assistant");
+                continue;
+            }
+        }
+
+        if let (Some(pair), Some(target)) = (current.as_mut(), target) {
+            match target {
+                "user" => {
+                    pair.user.push('\n');
+                    pair.user.push_str(line.trim());
+                }
+                "assistant" => {
+                    pair.assistant.push('\n');
+                    pair.assistant.push_str(line.trim());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(pair) = current {
+        pairs.push(pair);
+    }
+    pairs
+}
+
+fn complete_example_pairs(pairs: Vec<PersonaExamplePair>) -> Vec<PersonaExamplePair> {
+    pairs
+        .into_iter()
+        .map(|pair| PersonaExamplePair {
+            user: normalize_example_text(&pair.user),
+            assistant: normalize_example_text(&pair.assistant),
+        })
+        .filter(|pair| !pair.user.is_empty() && !pair.assistant.is_empty())
+        .take(5)
+        .collect()
+}
+
+fn pair_to_runtime_example(pair: PersonaExamplePair, assistant_name: &str) -> String {
+    let assistant_name = assistant_name.trim();
+    let assistant_name = if assistant_name.is_empty() {
+        "助手"
+    } else {
+        assistant_name
+    };
+    format!("用户：{}\n{}：{}", pair.user, assistant_name, pair.assistant)
+}
+
+fn split_examples(draft: &PersonaSourceDraft) -> Vec<String> {
+    let assistant_name = draft.simple.name.trim();
+    let structured_pairs = parse_example_pairs(&draft.structured.examples);
+    let complete_structured = complete_example_pairs(structured_pairs);
+    if !complete_structured.is_empty() {
+        return complete_structured
+            .into_iter()
+            .map(|pair| pair_to_runtime_example(pair, assistant_name))
+            .collect();
+    }
+
+    let simple_pairs = draft
+        .simple
+        .examples
+        .iter()
+        .flat_map(|example| parse_example_pairs(example))
+        .collect::<Vec<_>>();
+    complete_example_pairs(simple_pairs)
+        .into_iter()
+        .map(|pair| pair_to_runtime_example(pair, assistant_name))
         .collect()
 }
 
@@ -566,11 +671,30 @@ fn compile_persona_draft(draft: &PersonaSourceDraft) -> CompiledPersonaDraft {
     }
 
     let examples = split_examples(draft);
-    if examples.is_empty() {
+    let structured_pairs = parse_example_pairs(&draft.structured.examples);
+    let simple_pairs = draft
+        .simple
+        .examples
+        .iter()
+        .flat_map(|example| parse_example_pairs(example))
+        .collect::<Vec<_>>();
+    let has_any_example_pair = !structured_pairs.is_empty() || !simple_pairs.is_empty();
+    if structured_pairs
+        .iter()
+        .chain(simple_pairs.iter())
+        .any(|pair| pair.user.trim().is_empty() || pair.assistant.trim().is_empty())
+    {
+        diagnostics.push(diagnostic(
+            "examples.partial",
+            PersonaDiagnosticSeverity::Warning,
+            "存在未写完整的示例对话，保存时会跳过不完整样本",
+        ));
+    }
+    if examples.is_empty() && !has_any_example_pair {
         diagnostics.push(diagnostic(
             "examples.empty",
             PersonaDiagnosticSeverity::Warning,
-            "建议补充至少 1 条示例对话（不影响保存）",
+            "建议补充 1-3 条示例对话；没有示例时，AI 只能靠身份与规则判断语气。",
         ));
     }
 
@@ -1483,6 +1607,66 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.code == "source.dangerous_field"));
+    }
+
+    #[test]
+    fn compile_draft_keeps_structured_example_pair_as_one_runtime_example() {
+        let draft = valid_workshop_draft("momo", "默默", "1.0.0");
+
+        let compiled = compile_persona_draft(&draft);
+
+        assert_eq!(compiled.runtime_profile.examples.len(), 1);
+        assert_eq!(
+            compiled.runtime_profile.examples[0],
+            "用户：你好\n默默：我在。"
+        );
+    }
+
+    #[test]
+    fn compile_draft_prefers_structured_examples_over_simple_examples() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.simple.examples = vec!["用户：simple\n默默：simple reply".to_string()];
+        draft.structured.examples = "- 用户：structured\n  默默：structured reply".to_string();
+
+        let compiled = compile_persona_draft(&draft);
+
+        assert_eq!(
+            compiled.runtime_profile.examples,
+            vec!["用户：structured\n默默：structured reply".to_string()]
+        );
+    }
+
+    #[test]
+    fn compile_draft_falls_back_to_simple_examples_when_structured_examples_empty() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.structured.examples = String::new();
+        draft.simple.examples = vec!["用户：simple\n默默：simple reply".to_string()];
+
+        let compiled = compile_persona_draft(&draft);
+
+        assert_eq!(
+            compiled.runtime_profile.examples,
+            vec!["用户：simple\n默默：simple reply".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_draft_warns_for_partial_examples_without_blocking() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.simple.examples.clear();
+        draft.structured.examples = "- 用户：只有用户".to_string();
+
+        let result = validate_draft(&draft);
+
+        assert!(!result.blocking);
+        assert!(!result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "examples.empty"));
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "examples.partial"));
     }
 
     #[tokio::test]

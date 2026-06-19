@@ -69,6 +69,7 @@ __pycache__/
 
 # Superpowers 瞬态状态（PID / server marker），content/ HTML 设计资产正常入库
 .superpowers/**/state/
+docs/superpowers/
 
 
 codex文件

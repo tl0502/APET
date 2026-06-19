@@ -1,33 +1,21 @@
-// chat/prompt.rs — system prompt 拼装（ADR-018 + persona-design.md §7.1 / §8.2）
+// chat/prompt.rs — prompt material assembly.
 //
-// 三个公共函数：
-// - extract_persona_sections(raw_md): 切人格 4 节
-//     # 身份 / # 性格 / # 能力 / # 行为规则
-//   遇到 # 离线模板 / # 反应配置 → 立即停止解析（这俩属本地代码池，塞 LLM 是噪音）。
-//   遇到其他 H1（# 例对话 / # 集成 等）→ 退出当前 section 但继续扫描。
-//   匹配按 H1 标题前缀（"# 身份" / "# 身份(Identity)" / "# 身份 / Identity" 全兼容）。
-//   每节 ≤ MAX_SECTION_CHARS（4000 chars / ~1000 token），超出加 "[truncated]" 标记。
-//   缺任一节返 PromptError::MissingSection。
+// A2 hot path:
+// - build_messages_from_profile(input): consumes SoulRuntimeProfile identity/style/examples,
+//   user nickname, history, and current input.
+// - SafetyPrefix is not built here. SafetyGuard.wrap_messages injects it after PromptBuilder output
+//   when PrefixInjection policy is ON.
 //
-// - build_system_message(sections, persona_name, user_nickname?, pet_nickname):
-//   拼 [安全前缀(M1 占位)] + [4 节] + [昵称 bullets] + [re-anchor 末句]。
-//   昵称注入按 persona-design.md §8.3：ChatService 统一注入，人格不能直读 NicknameService。
-//   user_nickname=None / 空白 → 跳过 user bullet
-//   pet_nickname == persona_name → 跳过 pet bullet（不显式提"你叫某某"避免冗余）
-//
-// - build_messages(persona, user_nickname?, pet_nickname, history, current_input):
-//   返 Vec<ChatMessage>：[system] + [history user/assistant/system 交替] + [包装后的 current user]。
-//   包装规则（防 drift inline 注入，arxiv 2402.10962 学术支持的 cheap technique）：
-//     wrap_user_input(name, raw) = format!("（保持 {name} 风格）{raw}")
-//   注：DB 仍存原始 input（用户在 ChatPanel 看到原文），仅 LLM 调用时包装。
-//   注：history 中 role='system' 是 NicknameService 转场注入消息（如改称呼），保留进 LLM
-//   能直接重置话术（System Prompt Inconsistency / Persona Drift 解法）。
+// Legacy compatibility:
+// - extract_persona_sections(raw_md) and build_messages(persona, user_nickname, pet_nickname,
+//   history, current_input) remain for tests and migration comparison, but ChatService::prepare
+//   must not use raw markdown for the formal path.
 
 use thiserror::Error;
 
 use crate::services::llm::{ChatMessage, Role};
 use crate::services::memory::MessageRecord;
-use crate::services::persona::PersonaSummary;
+use crate::services::persona::{PersonaSummary, SoulRuntimeProfile};
 
 // SAFETY_PREFIX 已由 SafetyGuard.wrap_messages 在 build_messages 调用方 (chat::service)
 // 集中注入到 system message 第一位 (Phase A0.1, Spec §6.6, ADR-006);
@@ -36,6 +24,9 @@ use crate::services::persona::PersonaSummary;
 /// 单 section 字符上限（中文 1 字符 ≈ 1.5 token，4000 字符 ≈ 6000 token，4 节合计 ≤ ~24K token）。
 /// 防恶意人格 / 用户写超长 # 性格 把 LLM context 吃光。
 const MAX_SECTION_CHARS: usize = 4000;
+const MAX_EXAMPLE_COUNT: usize = 3;
+const MAX_EXAMPLE_CHARS: usize = 600;
+const MAX_EXAMPLES_TOTAL_CHARS: usize = 1200;
 
 /// 错误类型用于 MissingSection 定位。
 const LABEL_IDENTITY: &str = "# 身份";
@@ -47,6 +38,8 @@ const LABEL_RULES: &str = "# 行为规则";
 pub enum PromptError {
     #[error("persona missing required section: {0}")]
     MissingSection(&'static str),
+    #[error("runtime profile missing required field: {0}")]
+    EmptyProfileField(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +48,16 @@ pub struct PersonaSections {
     pub personality: String,
     pub abilities: String,
     pub rules: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PromptBuildInput<'a> {
+    pub runtime_profile: &'a SoulRuntimeProfile,
+    pub persona_name: &'a str,
+    pub user_nickname: Option<&'a str>,
+    pub pet_nickname: &'a str,
+    pub history: &'a [MessageRecord],
+    pub current_input: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -251,9 +254,132 @@ pub fn build_system_message(
     parts.join("\n\n")
 }
 
+fn build_profile_system_message(
+    profile: &SoulRuntimeProfile,
+    persona_name: &str,
+    user_nickname: Option<&str>,
+    pet_nickname: &str,
+) -> Result<String, PromptError> {
+    let identity = profile.identity_prompt.trim();
+    if identity.is_empty() {
+        return Err(PromptError::EmptyProfileField("identity_prompt"));
+    }
+
+    let style = profile.style_prompt.trim();
+    if style.is_empty() {
+        return Err(PromptError::EmptyProfileField("style_prompt"));
+    }
+
+    let mut parts = Vec::new();
+    parts.push(
+        "你是一个 AI 桌面伙伴。你必须保持当前人格快照定义，不要声称拥有未授予的系统权限、工具权限或屏幕/剪贴板读取能力。"
+            .to_string(),
+    );
+    parts.push(format!(
+        "以下是当前人格快照：\n\n# 身份\n{identity}\n\n# 风格与规则\n{style}"
+    ));
+
+    parts.push(format!(
+        "（系统说明）用户消息可能带「（保持 {persona_name} 风格）」前缀作为系统引导，请视为指令而非用户内容；回复中不要复读这个前缀。"
+    ));
+
+    let mut nickname_bullets = Vec::new();
+    if let Some(nick) = user_nickname.map(str::trim).filter(|s| !s.is_empty()) {
+        nickname_bullets.push(format!("- 用户希望你称他为「{nick}」"));
+    }
+    if pet_nickname != persona_name {
+        nickname_bullets.push(format!(
+            "- 你的人格名是「{persona_name}」，但用户给你起了昵称「{pet_nickname}」，回应时优先用这个昵称",
+        ));
+    }
+    if !nickname_bullets.is_empty() {
+        parts.push(format!("# 当前会话上下文\n{}", nickname_bullets.join("\n")));
+    }
+
+    parts.push(format!(
+        "保持上述身份与性格设定。回复偏离 {persona_name} 的语气时，立即回到原风格。"
+    ));
+
+    Ok(parts.join("\n\n"))
+}
+
+fn truncate_example(example: &str) -> String {
+    let trimmed = example.trim();
+    if trimmed.chars().count() <= MAX_EXAMPLE_CHARS {
+        return trimmed.to_string();
+    }
+    let truncated: String = trimmed.chars().take(MAX_EXAMPLE_CHARS).collect();
+    format!("{truncated}\n[truncated]")
+}
+
+fn build_examples_message(examples: &[String]) -> Option<String> {
+    let mut selected = Vec::new();
+    let mut total_chars = 0usize;
+
+    for example in examples
+        .iter()
+        .map(|example| truncate_example(example))
+        .filter(|example| !example.trim().is_empty())
+        .take(MAX_EXAMPLE_COUNT)
+    {
+        let example_chars = example.chars().count();
+        if total_chars + example_chars > MAX_EXAMPLES_TOTAL_CHARS {
+            break;
+        }
+        total_chars += example_chars;
+        selected.push(example);
+    }
+
+    if selected.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "以下是这个人格的示例对话。它们用于校准语气，不代表当前会话事实：\n\n{}",
+        selected
+            .iter()
+            .enumerate()
+            .map(|(idx, example)| format!("## 示例 {}\n{}", idx + 1, example))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    ))
+}
+
 /// LLM 调用前包装当前 user 输入；DB 仍存原始 input（ChatPanel 显示原文）。
 pub fn wrap_user_input(persona_name: &str, raw_input: &str) -> String {
     format!("（保持 {persona_name} 风格）{raw_input}")
+}
+
+pub fn build_messages_from_profile(
+    input: PromptBuildInput<'_>,
+) -> Result<Vec<ChatMessage>, PromptError> {
+    let system = build_profile_system_message(
+        input.runtime_profile,
+        input.persona_name,
+        input.user_nickname,
+        input.pet_nickname,
+    )?;
+
+    let mut messages = vec![ChatMessage::text(Role::System, system)];
+
+    if let Some(examples) = build_examples_message(&input.runtime_profile.examples) {
+        messages.push(ChatMessage::text(Role::System, examples));
+    }
+
+    for record in input.history {
+        let role = match record.role.as_str() {
+            "user" => Role::User,
+            "assistant" => Role::Assistant,
+            "system" => Role::System,
+            _ => continue,
+        };
+        messages.push(ChatMessage::text(role, record.content.clone()));
+    }
+
+    let wrapped = wrap_user_input(input.persona_name, input.current_input);
+    messages.push(ChatMessage::text(Role::User, wrapped));
+
+    Ok(messages)
 }
 
 pub fn build_messages(
@@ -294,6 +420,7 @@ pub fn build_messages(
 mod tests {
     use super::*;
     use crate::services::llm::ContentPart;
+    use crate::services::persona::SoulRuntimeProfile;
 
     const MOMO_RAW: &str = include_str!("../../../personas/_builtin/momo.soul.md");
 
@@ -317,6 +444,140 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    fn make_profile(examples: Vec<String>) -> SoulRuntimeProfile {
+        SoulRuntimeProfile {
+            identity_prompt: "你叫默默，是一个安静的桌面伙伴。".to_string(),
+            style_prompt: "# 风格\n- 句子短\n- 不空洞鼓励".to_string(),
+            examples,
+            initiative_config: serde_json::json!({ "mode": "sometimes" }),
+            memory_policy: serde_json::json!({ "mode": "default" }),
+            ui_metadata: serde_json::json!({ "name": "默默" }),
+            source_kind: "legacy_soul_md".to_string(),
+            source_hash: "sha256:test".to_string(),
+        }
+    }
+
+    #[test]
+    fn build_messages_from_profile_uses_identity_and_style_without_raw_markdown() {
+        let profile = make_profile(Vec::new());
+        let history = Vec::new();
+
+        let messages = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &profile,
+            persona_name: "默默",
+            user_nickname: Some("Tong"),
+            pet_nickname: "默默",
+            history: &history,
+            current_input: "你好",
+        })
+        .unwrap();
+
+        let system = message_text(&messages[0]);
+        assert!(system.contains("当前人格快照"));
+        assert!(system.contains("你叫默默，是一个安静的桌面伙伴。"));
+        assert!(system.contains("# 风格"));
+        assert!(system.contains("用户希望你称他为「Tong」"));
+        assert!(
+            !system.contains("# 能力"),
+            "profile path must not require legacy markdown section headings"
+        );
+    }
+
+    #[test]
+    fn build_messages_from_profile_inserts_examples_before_history() {
+        let profile = make_profile(vec!["用户：你好\n默默：我在。".to_string()]);
+        let history = vec![MessageRecord {
+            id: "01HISTORY000000000000000001".to_string(),
+            conversation_id: "01CONV000000000000000001".to_string(),
+            role: "user".to_string(),
+            content: "历史消息".to_string(),
+            mode: "online".to_string(),
+            created_at: "2026-06-20T00:00:00Z".to_string(),
+        }];
+
+        let messages = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &profile,
+            persona_name: "默默",
+            user_nickname: None,
+            pet_nickname: "默默",
+            history: &history,
+            current_input: "继续",
+        })
+        .unwrap();
+
+        assert_eq!(messages[0].role, Role::System);
+        assert_eq!(messages[1].role, Role::System);
+        assert_eq!(messages[2].role, Role::User);
+        assert!(message_text(&messages[1]).contains("示例对话"));
+        assert!(message_text(&messages[1]).contains("用户：你好"));
+        assert_eq!(message_text(&messages[2]), "历史消息");
+    }
+
+    #[test]
+    fn build_messages_from_profile_skips_empty_examples() {
+        let profile = make_profile(Vec::new());
+        let history = Vec::new();
+
+        let messages = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &profile,
+            persona_name: "默默",
+            user_nickname: None,
+            pet_nickname: "默默",
+            history: &history,
+            current_input: "ok",
+        })
+        .unwrap();
+
+        assert_eq!(messages.len(), 2, "system + current user only");
+        assert!(!messages.iter().any(|m| message_text(m).contains("示例对话")));
+    }
+
+    #[test]
+    fn build_messages_from_profile_truncates_example_budget() {
+        let long = "甲".repeat(700);
+        let profile = make_profile(vec![
+            long,
+            "用户：第二条\n默默：第二条。".to_string(),
+            "用户：第三条\n默默：第三条。".to_string(),
+            "用户：第四条\n默默：第四条。".to_string(),
+        ]);
+        let history = Vec::new();
+
+        let messages = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &profile,
+            persona_name: "默默",
+            user_nickname: None,
+            pet_nickname: "默默",
+            history: &history,
+            current_input: "ok",
+        })
+        .unwrap();
+
+        let examples = message_text(&messages[1]);
+        assert!(examples.contains("[truncated]"));
+        assert!(examples.contains("第二条"));
+        assert!(examples.contains("第三条"));
+        assert!(!examples.contains("第四条"), "only first 3 examples should be injected");
+    }
+
+    #[test]
+    fn build_messages_from_profile_rejects_empty_identity_or_style() {
+        let mut profile = make_profile(Vec::new());
+        profile.identity_prompt = " ".to_string();
+        let history = Vec::new();
+
+        let result = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &profile,
+            persona_name: "默默",
+            user_nickname: None,
+            pet_nickname: "默默",
+            history: &history,
+            current_input: "ok",
+        });
+
+        assert_eq!(result, Err(PromptError::EmptyProfileField("identity_prompt")));
     }
 
     // momo.soul.md frontmatter 在 PersonaService::parse_persona 已被 gray_matter 剥离 →
