@@ -21,8 +21,8 @@ related:
 ## 当前状态
 
 - **当前 milestone**：Companion Agent Runtime v3 Phase A0（Safety & Secrets）✅ 完成；M2 W3 [#23] 物理交互仍待开始
-- **当前 session 在做**：A2-C1 能力块闭环已完成：`# 能力` 编译为独立 `SoulRuntimeProfile.capabilities_prompt`，chat prompt 注入 `# 能力与边界` 并声明不代表系统/工具/本地环境权限；旧 snapshot 缺字段 default 兼容；结构 tab 增加能力编辑窗口并同步源码预览。
-- **下一步**：继续人格工坊 A2-C2 新建 / 复制内置 / 草稿状态；随后补快照历史与恢复、试聊沙盒、导入导出。
+- **当前 session 在做**：A2-C2 新建 / 复制内置 / 草稿状态已完成：工坊支持空白新建、复制当前人格为新人格、草稿状态标签；保存已有内置人格时覆盖同一 `persona_id` 并生成新 snapshot/version，不自动 fork；内置 seed 不再覆盖工坊用户修改后的内置人格 metadata。
+- **下一步**：继续人格工坊 A2-C3 快照历史与恢复；随后补试聊沙盒、导入导出。
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 
