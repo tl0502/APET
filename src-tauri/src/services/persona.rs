@@ -392,10 +392,7 @@ fn strip_speaker_prefix(line: &str) -> Option<(&str, &str)> {
     let normalized = line.trim().trim_start_matches("- ").trim();
     let split_at = normalized.find('：').or_else(|| normalized.find(':'))?;
     let (speaker, rest) = normalized.split_at(split_at);
-    let text = rest
-        .trim_start_matches('：')
-        .trim_start_matches(':')
-        .trim();
+    let text = rest.trim_start_matches('：').trim_start_matches(':').trim();
     if speaker.trim().is_empty() {
         return None;
     }
@@ -481,7 +478,10 @@ fn pair_to_runtime_example(pair: PersonaExamplePair, assistant_name: &str) -> St
     } else {
         assistant_name
     };
-    format!("用户：{}\n{}：{}", pair.user, assistant_name, pair.assistant)
+    format!(
+        "用户：{}\n{}：{}",
+        pair.user, assistant_name, pair.assistant
+    )
 }
 
 fn split_examples(draft: &PersonaSourceDraft) -> Vec<String> {
@@ -505,6 +505,223 @@ fn split_examples(draft: &PersonaSourceDraft) -> Vec<String> {
         .into_iter()
         .map(|pair| pair_to_runtime_example(pair, assistant_name))
         .collect()
+}
+
+struct ShapingPrompt {
+    text: String,
+    initiative_mode: String,
+}
+
+fn warn_unknown_option(
+    field: &str,
+    value: &str,
+    fallback: &str,
+    diagnostics: &mut Vec<PersonaDiagnostic>,
+) {
+    diagnostics.push(diagnostic(
+        "tone.option.unknown",
+        PersonaDiagnosticSeverity::Warning,
+        &format!(
+            "{field} 的值「{}」未识别，已按 {fallback} 处理",
+            value.trim()
+        ),
+    ));
+}
+
+fn clamp_tone_slider(
+    field: &str,
+    label: &str,
+    value: u8,
+    diagnostics: &mut Vec<PersonaDiagnostic>,
+) -> u8 {
+    if value <= 5 {
+        return value;
+    }
+
+    diagnostics.push(diagnostic(
+        "tone.slider.out_of_range",
+        PersonaDiagnosticSeverity::Warning,
+        &format!("{field}（{label}）应在 0-5 之间，已按 5 处理"),
+    ));
+    5
+}
+
+fn slider_description(
+    value: u8,
+    low: &'static str,
+    mid: &'static str,
+    high: &'static str,
+) -> &'static str {
+    match value {
+        0..=2 => low,
+        3 => mid,
+        _ => high,
+    }
+}
+
+fn tone_line(
+    field: &str,
+    label: &str,
+    value: u8,
+    low: &'static str,
+    mid: &'static str,
+    high: &'static str,
+    diagnostics: &mut Vec<PersonaDiagnostic>,
+) -> String {
+    let clamped = clamp_tone_slider(field, label, value, diagnostics);
+    format!(
+        "- {label} {clamped}/5：{}",
+        slider_description(clamped, low, mid, high)
+    )
+}
+
+fn relationship_style_description(value: &str, diagnostics: &mut Vec<PersonaDiagnostic>) -> String {
+    match value.trim() {
+        "companion" => "陪伴型搭档，优先站在用户身边一起想办法。".to_string(),
+        "buddy" => "朋友型损友，可以轻松互动，但不贬低用户。".to_string(),
+        "coach" => "教练型伙伴，目标清晰，提醒直接但不刻薄。".to_string(),
+        "custom" => "自定义关系风格，优先遵守身份、性格和行为规则中的具体描述。".to_string(),
+        other => {
+            warn_unknown_option("relationshipStyle", other, "companion", diagnostics);
+            "陪伴型搭档，优先站在用户身边一起想办法。".to_string()
+        }
+    }
+}
+
+fn initiative_details(value: &str, diagnostics: &mut Vec<PersonaDiagnostic>) -> (String, String) {
+    match value.trim() {
+        "quiet" => (
+            "quiet".to_string(),
+            "尽量等待用户开口，只做必要回应。".to_string(),
+        ),
+        "sometimes" => (
+            "sometimes".to_string(),
+            "偶尔主动推进话题，但不连续催促。".to_string(),
+        ),
+        "often" => (
+            "often".to_string(),
+            "更愿意主动推进话题和下一步，但不连续催促。".to_string(),
+        ),
+        other => {
+            warn_unknown_option("initiative", other, "sometimes", diagnostics);
+            (
+                "sometimes".to_string(),
+                "偶尔主动推进话题，但不连续催促。".to_string(),
+            )
+        }
+    }
+}
+
+fn speech_length_details(
+    value: &str,
+    diagnostics: &mut Vec<PersonaDiagnostic>,
+) -> (String, String) {
+    match value.trim() {
+        "short" => ("short".to_string(), "默认短句，必要时再展开。".to_string()),
+        "normal" => (
+            "normal".to_string(),
+            "默认一到三句，先回答重点。".to_string(),
+        ),
+        "detailed" => (
+            "detailed".to_string(),
+            "可以展开说明，但先给结论，再补细节。".to_string(),
+        ),
+        other => {
+            warn_unknown_option("speech_length", other, "normal", diagnostics);
+            (
+                "normal".to_string(),
+                "默认一到三句，先回答重点。".to_string(),
+            )
+        }
+    }
+}
+
+fn build_shaping_prompt(
+    simple: &PersonaSimpleDraft,
+    diagnostics: &mut Vec<PersonaDiagnostic>,
+) -> ShapingPrompt {
+    let mut parts = Vec::new();
+
+    let tagline = simple.tagline.trim();
+    if !tagline.is_empty() {
+        parts.push(format!("# 一句话定位\n{tagline}"));
+    }
+
+    let relationship = relationship_style_description(&simple.relationship_style, diagnostics);
+    let (initiative_mode, initiative_description) =
+        initiative_details(&simple.initiative, diagnostics);
+    let dislikes = sanitize_bullets(&simple.dislikes);
+    let mut interaction_lines = vec![
+        format!("- 关系风格：{relationship}"),
+        format!("- 主动性：{initiative_description}"),
+    ];
+    if !dislikes.is_empty() {
+        interaction_lines.push(format!(
+            "- 回避偏好：除非用户主动要求，否则避开：{}",
+            dislikes.join("；")
+        ));
+    }
+    parts.push(format!(
+        "# 关系与互动方式\n{}",
+        interaction_lines.join("\n")
+    ));
+
+    let (speech_length, speech_description) =
+        speech_length_details(&simple.speech_length, diagnostics);
+    let tone_lines = vec![
+        tone_line(
+            "warmth",
+            "温暖度",
+            simple.warmth,
+            "语气偏冷静，少做情绪延展。",
+            "语气温和，适度承接用户情绪。",
+            "语气偏温暖，会简短承接用户情绪。",
+            diagnostics,
+        ),
+        tone_line(
+            "playfulness",
+            "俏皮度",
+            simple.playfulness,
+            "基本不玩梗，保持端正。",
+            "可以轻微调侃，但不频繁玩梗。",
+            "可以频繁使用轻松调侃和小玩笑，但不伤人。",
+            diagnostics,
+        ),
+        tone_line(
+            "formality",
+            "正式度",
+            simple.formality,
+            "使用朋友口吻，避免商务腔。",
+            "保持自然礼貌，不太随意也不太正式。",
+            "表达更正式克制，减少口语化玩笑。",
+            diagnostics,
+        ),
+        tone_line(
+            "proactivity",
+            "主动度",
+            simple.proactivity,
+            "少主动推进，优先回应用户已经提出的内容。",
+            "偶尔补一个下一步建议，但不抢话题。",
+            "会主动推进话题或下一步，但不连续催促。",
+            diagnostics,
+        ),
+        tone_line(
+            "brevity",
+            "简洁度",
+            simple.brevity,
+            "允许适度解释，必要时用两三句说清。",
+            "默认简洁，复杂问题再分点说明。",
+            "优先短句和结论，避免长段铺陈。",
+            diagnostics,
+        ),
+        format!("- 回复长度 {speech_length}：{speech_description}"),
+    ];
+    parts.push(format!("# 语气参数\n{}", tone_lines.join("\n")));
+
+    ShapingPrompt {
+        text: parts.join("\n\n"),
+        initiative_mode,
+    }
 }
 
 fn extract_markdown_section(markdown: &str, label: &str) -> String {
@@ -698,32 +915,35 @@ fn compile_persona_draft(draft: &PersonaSourceDraft) -> CompiledPersonaDraft {
         ));
     }
 
-    let style_prompt = format!(
-        "{}\n\n# 行为规则\n## Do\n{}\n\n## Don't\n{}\n\n# 语气参数\nwarmth={} playfulness={} formality={} proactivity={} brevity={} speech_length={}",
-        draft.structured.personality.trim(),
-        rules_do
-            .iter()
-            .map(|item| format!("- {item}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        rules_dont
-            .iter()
-            .map(|item| format!("- {item}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        draft.simple.warmth,
-        draft.simple.playfulness,
-        draft.simple.formality,
-        draft.simple.proactivity,
-        draft.simple.brevity,
-        draft.simple.speech_length
-    );
+    let shaping_prompt = build_shaping_prompt(&draft.simple, &mut diagnostics);
+    let style_prompt = vec![
+        draft.structured.personality.trim().to_string(),
+        format!(
+            "# 行为规则\n## Do\n{}\n\n## Don't\n{}",
+            rules_do
+                .iter()
+                .map(|item| format!("- {item}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            rules_dont
+                .iter()
+                .map(|item| format!("- {item}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+        shaping_prompt.text,
+    ]
+    .into_iter()
+    .map(|part| part.trim().to_string())
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n");
 
     let runtime_profile = SoulRuntimeProfile {
         identity_prompt: draft.structured.identity.trim().to_string(),
         style_prompt,
         examples,
-        initiative_config: json!({ "mode": draft.simple.initiative.as_str() }),
+        initiative_config: json!({ "mode": shaping_prompt.initiative_mode.as_str() }),
         memory_policy: json!({ "mode": "default" }),
         ui_metadata: json!({
             "name": draft.simple.name.trim(),
@@ -1648,6 +1868,94 @@ mod tests {
             compiled.runtime_profile.examples,
             vec!["用户：simple\n默默：simple reply".to_string()]
         );
+    }
+
+    #[test]
+    fn compile_draft_style_prompt_explains_shaping_fields() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.simple.tagline = "安静但可靠".to_string();
+        draft.simple.relationship_style = "companion".to_string();
+        draft.simple.warmth = 4;
+        draft.simple.playfulness = 5;
+        draft.simple.formality = 1;
+        draft.simple.proactivity = 4;
+        draft.simple.brevity = 2;
+        draft.simple.speech_length = "detailed".to_string();
+        draft.simple.initiative = "often".to_string();
+        draft.simple.dislikes = vec!["空洞鼓励".to_string(), "连续追问私人情绪".to_string()];
+
+        let compiled = compile_persona_draft(&draft);
+        let style = &compiled.runtime_profile.style_prompt;
+
+        assert!(style.contains("# 一句话定位"));
+        assert!(style.contains("安静但可靠"));
+        assert!(style.contains("# 关系与互动方式"));
+        assert!(style.contains("关系风格：陪伴型搭档"));
+        assert!(style.contains("主动性：更愿意主动推进话题"));
+        assert!(style.contains("回避偏好：除非用户主动要求，否则避开：空洞鼓励；连续追问私人情绪"));
+        assert!(style.contains("# 语气参数"));
+        assert!(style.contains("温暖度 4/5：语气偏温暖"));
+        assert!(style.contains("俏皮度 5/5：可以频繁使用轻松调侃"));
+        assert!(style.contains("正式度 1/5：使用朋友口吻"));
+        assert!(style.contains("主动度 4/5：会主动推进话题"));
+        assert!(style.contains("简洁度 2/5：允许适度解释"));
+        assert!(style.contains("回复长度 detailed：可以展开说明"));
+        assert!(!style.contains("warmth=4"));
+        assert_eq!(compiled.runtime_profile.initiative_config["mode"], "often");
+    }
+
+    #[test]
+    fn compile_draft_clamps_out_of_range_tone_sliders_before_prompt() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.simple.warmth = 255;
+        draft.simple.proactivity = 9;
+
+        let compiled = compile_persona_draft(&draft);
+        let style = &compiled.runtime_profile.style_prompt;
+
+        assert!(style.contains("温暖度 5/5"));
+        assert!(style.contains("主动度 5/5"));
+        assert!(!style.contains("255/5"));
+        assert!(!style.contains("9/5"));
+
+        let warning_count = compiled
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "tone.slider.out_of_range"
+                    && diagnostic.severity == PersonaDiagnosticSeverity::Warning
+            })
+            .count();
+        assert_eq!(warning_count, 2);
+    }
+
+    #[test]
+    fn compile_draft_uses_safe_defaults_for_unknown_shaping_options() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.simple.relationship_style = "stranger".to_string();
+        draft.simple.speech_length = "verbose".to_string();
+        draft.simple.initiative = "pushy".to_string();
+
+        let compiled = compile_persona_draft(&draft);
+        let style = &compiled.runtime_profile.style_prompt;
+
+        assert!(style.contains("关系风格：陪伴型搭档"));
+        assert!(style.contains("主动性：偶尔主动推进话题"));
+        assert!(style.contains("回复长度 normal：默认一到三句"));
+        assert_eq!(
+            compiled.runtime_profile.initiative_config["mode"],
+            "sometimes"
+        );
+
+        let warning_count = compiled
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "tone.option.unknown"
+                    && diagnostic.severity == PersonaDiagnosticSeverity::Warning
+            })
+            .count();
+        assert_eq!(warning_count, 3);
     }
 
     #[test]
