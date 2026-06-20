@@ -3,7 +3,13 @@ import { computed, onMounted, ref, shallowRef } from 'vue'
 import { ElButton } from 'element-plus'
 import PersonaCardStage from './PersonaCardStage.vue'
 import PersonaInspectorDrawer from './PersonaInspectorDrawer.vue'
-import { createPersonaDraft, estimateDraftTokens, validatePersonaDraft } from '@/features/persona-workshop/draft'
+import {
+  createBlankPersonaDraft,
+  createPersonaDraft,
+  duplicatePersonaDraft,
+  estimateDraftTokens,
+  validatePersonaDraft,
+} from '@/features/persona-workshop/draft'
 import type {
   PersonaDiagnostic,
   PersonaSourceDraft,
@@ -34,11 +40,36 @@ const validating = shallowRef(false)
 const saving = shallowRef(false)
 const serverDiagnostics = ref<PersonaDiagnostic[] | null>(null)
 const saveResult = shallowRef<PersonaSaveResult | null>(null)
+const draftOrigin = shallowRef<'saved' | 'new' | 'copy'>('saved')
+const savedDraftFingerprint = shallowRef('')
 
 const localDiagnostics = computed(() => (draft.value ? validatePersonaDraft(draft.value) : []))
 const diagnostics = computed(() => serverDiagnostics.value ?? localDiagnostics.value)
 const tokenEstimate = computed(() => (draft.value ? estimateDraftTokens(draft.value) : 0))
 const personaName = computed(() => draft.value?.simple.name ?? '未选择人格')
+const draftStateLabel = computed(() => {
+  if (!draft.value) return '未选择'
+  if (draftOrigin.value === 'new') return '新建未保存'
+  if (draftOrigin.value === 'copy') return '复制未保存'
+  if (draftFingerprint(draft.value) !== savedDraftFingerprint.value) return '有未保存修改'
+  if (saveResult.value) return `已保存 v${saveResult.value.version}`
+  return '已保存'
+})
+
+function draftFingerprint(value: PersonaSourceDraft): string {
+  return JSON.stringify(value)
+}
+
+function rememberSavedDraft(nextDraft: PersonaSourceDraft) {
+  draftOrigin.value = 'saved'
+  savedDraftFingerprint.value = draftFingerprint(nextDraft)
+}
+
+function resetTransientState() {
+  serverDiagnostics.value = null
+  saveResult.value = null
+  errorMsg.value = null
+}
 
 async function loadInitial() {
   loading.value = true
@@ -47,9 +78,8 @@ async function loadInitial() {
     personas.value = list
     selectedId.value = active.id
     draft.value = createPersonaDraft(active)
-    serverDiagnostics.value = null
-    saveResult.value = null
-    errorMsg.value = null
+    rememberSavedDraft(draft.value)
+    resetTransientState()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -64,13 +94,37 @@ async function selectPersona(id: string) {
   try {
     const persona = await loadPersona(id)
     draft.value = createPersonaDraft(persona)
+    rememberSavedDraft(draft.value)
     mode.value = 'simple'
-    serverDiagnostics.value = null
-    saveResult.value = null
-    errorMsg.value = null
+    resetTransientState()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
   }
+}
+
+function createNewPersona() {
+  const existingIds = personas.value.map((persona) => persona.id)
+  const nextDraft = createBlankPersonaDraft(existingIds)
+  draft.value = nextDraft
+  selectedId.value = nextDraft.personaId
+  draftOrigin.value = 'new'
+  savedDraftFingerprint.value = ''
+  inspectorOpen.value = true
+  mode.value = 'simple'
+  resetTransientState()
+}
+
+function duplicateCurrentPersona() {
+  if (!draft.value) return
+  const existingIds = personas.value.map((persona) => persona.id)
+  const nextDraft = duplicatePersonaDraft(draft.value, existingIds)
+  draft.value = nextDraft
+  selectedId.value = nextDraft.personaId
+  draftOrigin.value = 'copy'
+  savedDraftFingerprint.value = ''
+  inspectorOpen.value = true
+  mode.value = 'simple'
+  resetTransientState()
 }
 
 function updateDraft(nextDraft: PersonaSourceDraft) {
@@ -102,11 +156,13 @@ async function persistCurrentDraft(activate: boolean) {
       : await savePersonaDraft(draft.value)
     saveResult.value = result
     serverDiagnostics.value = result.diagnostics
-    draft.value = {
+    const savedDraft = {
       ...draft.value,
       version: result.version,
       source: 'user',
     }
+    draft.value = savedDraft
+    rememberSavedDraft(savedDraft)
     personas.value = await listPersonas()
     selectedId.value = result.persona_id
     errorMsg.value = null
@@ -129,7 +185,10 @@ onMounted(() => {
         <p class="persona-workshop__eyebrow">Persona Workshop</p>
         <h2 class="persona-workshop__title">人格工坊</h2>
       </div>
-      <ElButton size="small" @click="loadInitial">刷新</ElButton>
+      <div class="persona-workshop__actions">
+        <ElButton size="small" type="primary" @click="createNewPersona">新建人格</ElButton>
+        <ElButton size="small" @click="loadInitial">刷新</ElButton>
+      </div>
     </header>
 
     <p v-if="errorMsg" class="persona-workshop__error">读取失败：{{ errorMsg }}</p>
@@ -157,8 +216,10 @@ onMounted(() => {
         :validating="validating"
         :saving="saving"
         :save-result="saveResult"
+        :draft-state-label="draftStateLabel"
         @close="inspectorOpen = false"
         @validate="validateCurrentDraft"
+        @duplicate="duplicateCurrentPersona"
         @save="persistCurrentDraft(false)"
         @save-and-activate="persistCurrentDraft(true)"
         @update:mode="mode = $event"
@@ -197,6 +258,14 @@ onMounted(() => {
   margin: 0;
   font-size: var(--aipet-font-size-xl);
   color: var(--aipet-color-text-1);
+}
+
+.persona-workshop__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--aipet-space-2);
 }
 
 .persona-workshop__error {

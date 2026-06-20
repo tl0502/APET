@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import { describe, expect, test, vi } from 'vitest'
 import PersonaWorkshopPanel from '../PersonaWorkshopPanel.vue'
-import { getActivePersona } from '@/services/persona'
+import { getActivePersona, savePersonaDraft } from '@/services/persona'
 
 const personaWithoutExamples = {
   id: 'momo',
@@ -92,7 +92,13 @@ vi.mock('@/services/persona', () => ({
     blocking: false,
     token_estimate: 80,
   })),
-  savePersonaDraft: vi.fn(),
+  savePersonaDraft: vi.fn(async (draft) => ({
+    persona_id: draft.personaId,
+    snapshot_id: '101',
+    version: draft.personaId === 'momo' ? '1.0.1' : '1.0.0',
+    activated: false,
+    diagnostics: [],
+  })),
   saveAndActivatePersonaDraft: vi.fn(),
 }))
 
@@ -259,6 +265,150 @@ describe('PersonaWorkshopPanel', () => {
     const sourceText = (wrapper.findAll('textarea').at(-1)?.element as HTMLTextAreaElement).value
     expect(sourceText).toContain('# 能力')
     expect(sourceText).toContain('- 帮用户拆任务\n- 提醒用户休息')
+  })
+
+  test('creates a new unsaved persona draft and saves it as a user persona', async () => {
+    const wrapper = mount(PersonaWorkshopPanel, {
+      props: { isActive: true },
+      global: {
+        stubs: {
+          ElButton: {
+            template: '<button :disabled="$attrs.disabled"><slot /></button>',
+          },
+          ElInput: defineComponent({
+            props: { modelValue: { type: String, default: '' } },
+            emits: ['update:modelValue'],
+            setup(props, { emit }) {
+              return () =>
+                h('textarea', {
+                  value: props.modelValue,
+                  onInput: (event: Event) =>
+                    emit('update:modelValue', (event.target as HTMLTextAreaElement).value),
+                })
+            },
+          }),
+          ElSlider: { template: '<input type="range" />' },
+          ElTag: { template: '<span><slot /></span>' },
+          ElIcon: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const newButton = wrapper.findAll('button').find((button) => button.text() === '新建人格')
+    expect(newButton).toBeTruthy()
+    await newButton?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[aria-label="人格编辑卡片"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('新建未保存')
+
+    const sourceTab = wrapper.findAll('button').find((button) => button.text() === '源码')
+    await sourceTab?.trigger('click')
+    await flushPromises()
+    const sourceText = (wrapper.findAll('textarea').at(-1)?.element as HTMLTextAreaElement).value
+    expect(sourceText).toContain('你叫新人格')
+
+    const saveButton = wrapper.findAll('button').find((button) => button.text() === '保存快照')
+    await saveButton?.trigger('click')
+    await flushPromises()
+
+    expect(savePersonaDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        personaId: 'user-persona',
+        source: 'user',
+        version: '1.0.0',
+      }),
+    )
+    expect(wrapper.text()).toContain('已保存')
+  })
+
+  test('duplicates the current persona as an unsaved user copy', async () => {
+    const wrapper = mount(PersonaWorkshopPanel, {
+      props: { isActive: true },
+      global: {
+        stubs: {
+          ElButton: {
+            template: '<button :disabled="$attrs.disabled"><slot /></button>',
+          },
+          ElInput: { template: '<textarea :value="$attrs.modelValue" />' },
+          ElSlider: { template: '<input type="range" />' },
+          ElTag: { template: '<span><slot /></span>' },
+          ElIcon: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const activeCard = wrapper.findAll('button').find((button) => button.text().includes('默默'))
+    await activeCard?.trigger('click')
+    await flushPromises()
+
+    const duplicateButton = wrapper
+      .findAll('button')
+      .find((button) => button.text() === '复制为新人格')
+    expect(duplicateButton).toBeTruthy()
+    await duplicateButton?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('复制未保存')
+    expect(wrapper.text()).toContain('默默 副本')
+
+    const saveButton = wrapper.findAll('button').find((button) => button.text() === '保存快照')
+    await saveButton?.trigger('click')
+    await flushPromises()
+
+    expect(savePersonaDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        personaId: 'momo-copy',
+        source: 'user',
+        version: '1.0.0',
+      }),
+    )
+  })
+
+  test('marks a loaded persona as dirty after editing', async () => {
+    const wrapper = mount(PersonaWorkshopPanel, {
+      props: { isActive: true },
+      global: {
+        stubs: {
+          ElButton: {
+            template: '<button :disabled="$attrs.disabled"><slot /></button>',
+          },
+          ElInput: defineComponent({
+            props: { modelValue: { type: String, default: '' } },
+            emits: ['update:modelValue'],
+            setup(props, { emit }) {
+              return () =>
+                h('textarea', {
+                  value: props.modelValue,
+                  onInput: (event: Event) =>
+                    emit('update:modelValue', (event.target as HTMLTextAreaElement).value),
+                })
+            },
+          }),
+          ElSlider: { template: '<input type="range" />' },
+          ElTag: { template: '<span><slot /></span>' },
+          ElIcon: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const activeCard = wrapper.findAll('button').find((button) => button.text().includes('默默'))
+    await activeCard?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已保存')
+
+    const simpleInputs = wrapper.findAll('textarea')
+    await simpleInputs[1].setValue('新的定位')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('有未保存修改')
   })
 
   test('adds the first example from an empty example state', async () => {

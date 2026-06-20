@@ -20,11 +20,13 @@ const props = defineProps<{
   validating: boolean
   saving: boolean
   saveResult: PersonaSaveResult | null
+  draftStateLabel: string
 }>()
 
 const emit = defineEmits<{
   close: []
   validate: []
+  duplicate: []
   save: []
   'save-and-activate': []
   'update:mode': [mode: PersonaWorkshopMode]
@@ -73,6 +75,7 @@ const titleId = 'persona-inspector-title'
             <h3 :id="titleId" class="persona-inspector__title">{{ props.personaName }}</h3>
             <div class="persona-inspector__meta">
               <ElTag size="small" effect="plain">{{ props.mode }}</ElTag>
+              <ElTag size="small" effect="plain">{{ props.draftStateLabel }}</ElTag>
               <ElTag size="small" effect="plain">~{{ props.tokenEstimate }} tokens</ElTag>
             </div>
           </div>
@@ -139,6 +142,12 @@ const titleId = 'persona-inspector-title'
           </section>
 
           <div class="persona-inspector__actions">
+            <ElButton
+              :disabled="!props.draft || props.saving"
+              @click="emit('duplicate')"
+            >
+              复制为新人格
+            </ElButton>
             <ElButton
               :disabled="!props.draft || props.validating || props.saving"
               :loading="props.validating"

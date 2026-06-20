@@ -55,6 +55,7 @@ export interface PersonaSaveResult {
 
 export interface SoulRuntimeProfile {
   identity_prompt: string
+  capabilities_prompt: string
   style_prompt: string
   examples: string[]
   initiative_config: Record<string, unknown>

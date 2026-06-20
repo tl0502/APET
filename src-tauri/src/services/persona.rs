@@ -1524,10 +1524,10 @@ async fn upsert_persona(
         INSERT INTO personas (id, name, version, source, file_path, is_active, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            version = excluded.version,
-            file_path = excluded.file_path,
-            updated_at = excluded.updated_at
+            name = CASE WHEN personas.source = 'user' AND personas.file_path LIKE '<workshop>:%' THEN personas.name ELSE excluded.name END,
+            version = CASE WHEN personas.source = 'user' AND personas.file_path LIKE '<workshop>:%' THEN personas.version ELSE excluded.version END,
+            file_path = CASE WHEN personas.source = 'user' AND personas.file_path LIKE '<workshop>:%' THEN personas.file_path ELSE excluded.file_path END,
+            updated_at = CASE WHEN personas.source = 'user' AND personas.file_path LIKE '<workshop>:%' THEN personas.updated_at ELSE excluded.updated_at END
         "#,
     )
     .bind(&parsed.frontmatter.id)
@@ -2279,6 +2279,33 @@ mod tests {
             active_id.0, "joker",
             "user's active choice must survive re-seed"
         );
+    }
+
+    #[tokio::test]
+    async fn repeat_seed_preserves_user_modified_builtin_metadata() {
+        let (_dir, mut conn) = fresh_db().await;
+        seed_all_builtins(&mut conn).await;
+
+        let mut draft = valid_workshop_draft("momo", "小默", "1.0.0");
+        draft.source = "builtin".to_string();
+        let saved = save_draft_with_conn(&mut conn, draft, true).await.unwrap();
+
+        assert_eq!(saved.persona_id, "momo");
+        assert_eq!(saved.version, "1.0.1");
+
+        seed_all_builtins(&mut conn).await;
+
+        let row: (String, String, String, String) = sqlx::query_as(
+            "SELECT name, version, source, file_path FROM personas WHERE id = 'momo'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+
+        assert_eq!(row.0, "小默");
+        assert_eq!(row.1, "1.0.1");
+        assert_eq!(row.2, "user");
+        assert_eq!(row.3, "<workshop>:momo.soul.md");
     }
 
     #[tokio::test]

@@ -2,10 +2,13 @@ import { describe, expect, test } from 'vitest'
 import type { PersonaSummary } from '@/types/persona'
 import {
   applySimplePatch,
+  createBlankPersonaDraft,
   createPersonaDraft,
+  duplicatePersonaDraft,
   estimateDraftTokens,
   formatPersonaExamplePairs,
   getDraftExamplePairs,
+  nextPersonaId,
   parsePersonaExamplePairs,
   projectDraftToSource,
   validatePersonaDraft,
@@ -55,6 +58,41 @@ describe('persona workshop draft helpers', () => {
     expect(draft.structured.identity).toContain('你叫**默默**')
     expect(draft.structured.personality).toContain('慵懒')
     expect(draft.sourceText).toContain('# 反应配置')
+  })
+
+  test('chooses a stable unique persona id', () => {
+    expect(nextPersonaId(['momo', 'user-persona'], 'user-persona')).toBe('user-persona-2')
+    expect(nextPersonaId(['momo', 'user-persona', 'user-persona-2'], 'user-persona')).toBe(
+      'user-persona-3',
+    )
+    expect(nextPersonaId(['momo'], 'momo-copy')).toBe('momo-copy')
+  })
+
+  test('creates a valid blank user persona draft', () => {
+    const draft = createBlankPersonaDraft(['user-persona'])
+
+    expect(draft.personaId).toBe('user-persona-2')
+    expect(draft.version).toBe('1.0.0')
+    expect(draft.source).toBe('user')
+    expect(draft.simple.name).toBe('新人格')
+    expect(draft.structured.identity).toContain('新人格')
+    expect(validatePersonaDraft(draft).some((diagnostic) => diagnostic.severity === 'error')).toBe(
+      false,
+    )
+    expect(projectDraftToSource(draft)).toContain('# 能力')
+  })
+
+  test('duplicates an existing draft as a user-owned copy', () => {
+    const draft = createPersonaDraft(persona)
+    const copy = duplicatePersonaDraft(draft, ['momo', 'momo-copy'])
+
+    expect(copy.personaId).toBe('momo-copy-2')
+    expect(copy.version).toBe('1.0.0')
+    expect(copy.source).toBe('user')
+    expect(copy.simple.name).toBe('默默 副本')
+    expect(copy.structured.identity).toContain('默默 副本')
+    expect(copy.structured.identity).not.toContain('你叫**默默**')
+    expect(copy.structured.capabilities).toBe(draft.structured.capabilities)
   })
 
   test('applies simple edits without deleting structured-only source text', () => {

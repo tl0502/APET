@@ -91,6 +91,85 @@ function buildSimpleDraft(
   }
 }
 
+export function nextPersonaId(existingIds: string[], baseId = 'user-persona'): string {
+  const used = new Set(existingIds.map((id) => id.trim()).filter(Boolean))
+  const base = baseId.trim() || 'user-persona'
+  if (!used.has(base)) return base
+
+  for (let index = 2; ; index += 1) {
+    const candidate = `${base}-${index}`
+    if (!used.has(candidate)) return candidate
+  }
+}
+
+export function createBlankPersonaDraft(existingIds: string[] = []): PersonaSourceDraft {
+  const name = '新人格'
+  const personaId = nextPersonaId(existingIds, 'user-persona')
+  return {
+    personaId,
+    version: '1.0.0',
+    source: 'user',
+    simple: {
+      name,
+      tagline: '由你塑造的桌面伙伴',
+      relationshipStyle: 'companion',
+      warmth: 3,
+      playfulness: 2,
+      formality: 2,
+      proactivity: 3,
+      brevity: 4,
+      speechLength: 'short',
+      initiative: 'sometimes',
+      dislikes: ['声称拥有未授权系统能力'],
+      examples: [],
+    },
+    structured: {
+      identity: `你叫${name}，是一个由用户塑造的桌面伙伴。`,
+      personality: '- 温和\n- 可靠',
+      capabilities: '- 陪用户聊天\n- 帮用户整理想法',
+      rulesDo: ['用第二人称回应', '先理解用户意图再给建议'],
+      rulesDont: ['不要声称拥有未授予的系统权限'],
+      offlineTemplates: '',
+      reactions: '',
+      examples: '',
+    },
+    sourceText: '',
+    preservedUnknownText: '',
+  }
+}
+
+function replaceFirstNameReference(text: string, oldName: string, nextName: string): string {
+  const trimmedOldName = oldName.trim()
+  if (!trimmedOldName) return text
+  return text.replace(trimmedOldName, nextName)
+}
+
+export function duplicatePersonaDraft(
+  draft: PersonaSourceDraft,
+  existingIds: string[] = [],
+): PersonaSourceDraft {
+  const nextName = `${draft.simple.name.trim() || '人格'} 副本`
+  return {
+    ...draft,
+    personaId: nextPersonaId(existingIds, `${draft.personaId}-copy`),
+    version: '1.0.0',
+    source: 'user',
+    simple: {
+      ...draft.simple,
+      name: nextName,
+    },
+    structured: {
+      ...draft.structured,
+      identity: replaceFirstNameReference(
+        draft.structured.identity,
+        draft.simple.name,
+        nextName,
+      ),
+    },
+    sourceText: '',
+  }
+}
+
 function collectUnknownTopLevelSections(markdown: string): string {
   const chunks: string[] = []
   const lines = markdown.split(/\r?\n/)
