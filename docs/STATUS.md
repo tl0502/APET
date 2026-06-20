@@ -21,7 +21,7 @@ related:
 ## 当前状态
 
 - **当前 milestone**：Companion Agent Runtime v3 Phase A0（Safety & Secrets）✅ 完成；M2 W3 [#23] 物理交互仍待开始
-- **当前 session 在做**：A2-B 示例对话 UI 已完成：人格工坊 `persona-inspector` 增加独立「示例」标签，支持 1-5 条 user/persona pair，保存后进入 `# 例对话` 与 `SoulRuntimeProfile.examples`；Rust 编译规则已改为完整 pair 注入，不再拆半截样本。
+- **当前 session 在做**：A2-C0 人格塑形收口已完成：工坊滑杆/tagline/relationshipStyle/dislikes/initiative 编译为自然语言 `SoulRuntimeProfile.style_prompt`；异常滑杆 clamp + warning；前端 name/capabilities 校验与 Rust blocking 口径对齐；momo/joker/coach 内置 `# 例对话` 补齐。
 - **下一步**：进入 A2-C 示例预览 / LLM 辅助生成评估，或回到 M2 [#23] 物理交互 + 心情/精力 + 摸鱼。
 - **阻塞**：无
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
