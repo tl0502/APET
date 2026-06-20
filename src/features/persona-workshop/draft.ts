@@ -395,7 +395,6 @@ export function validatePersonaDraft(draft: PersonaSourceDraft): PersonaDiagnost
   }
 
   const pairs = getDraftExamplePairs(draft)
-  const complete = completePairs(pairs)
   if (pairs.length === 0) {
     diagnostics.push({
       code: 'examples.empty',

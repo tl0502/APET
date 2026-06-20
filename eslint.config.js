@@ -14,6 +14,8 @@ export default [
       '.github/',
       '.vscode/',
       '.claude/',
+      '.worktrees/',
+      '.codex/',
       'docs/',
       'public/',
       '*.config.js',
@@ -43,6 +45,17 @@ export default [
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
       'vue/multi-word-component-names': 'off',
+    },
+  },
+  {
+    files: ['scripts/**/*.{js,mjs,cjs}'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        URL: 'readonly',
+        Buffer: 'readonly',
+      },
     },
   },
   prettier,

@@ -14,7 +14,6 @@
 // - 删除 anchor computed：无双重定位
 // - position: absolute + inset: 0 取代 position: fixed + top/left 算法
 
-import { computed } from 'vue'
 import { useToast } from '@/composables/useToast'
 import { bosskeyToggle } from '@/services/bosskey'
 import { showWorkspace } from '@/services/window'
@@ -24,7 +23,7 @@ interface Props {
   view?: 'root' | 'settings'
 }
 
-const props = withDefaults(defineProps<Props>(), { view: 'root' })
+withDefaults(defineProps<Props>(), { view: 'root' })
 const emit = defineEmits<{
   close: []
   'update:view': ['root' | 'settings']

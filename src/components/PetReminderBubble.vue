@@ -27,7 +27,7 @@ interface Props {
   trayOpen?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { trayOpen: false })
+withDefaults(defineProps<Props>(), { trayOpen: false })
 
 const anim = useReminderAnimation()
 

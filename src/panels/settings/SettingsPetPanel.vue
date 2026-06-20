@@ -29,10 +29,6 @@ async function onToggle(feature: DisableableFeature, enabled: boolean) {
     toast.error(`保存失败：${e instanceof Error ? e.message : String(e)}`)
   }
 }
-
-function msgOf(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
-}
 </script>
 
 <template>
