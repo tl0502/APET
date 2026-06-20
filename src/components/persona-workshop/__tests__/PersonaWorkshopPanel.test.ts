@@ -6,12 +6,15 @@ import { defineComponent, h } from 'vue'
 import { describe, expect, test, vi } from 'vitest'
 import PersonaWorkshopPanel from '../PersonaWorkshopPanel.vue'
 import {
+  activatePersonaSnapshot,
   deletePersona,
   exportPersonaSnapshot,
   getActivePersona,
   importPersonaFromPath,
+  listPersonaSnapshots,
   listPersonas,
   loadPersona,
+  saveAndActivatePersonaDraft,
   savePersonaDraft,
 } from '@/services/persona'
 
@@ -155,6 +158,11 @@ vi.mock('@/services/persona', () => ({
     filename: 'momo-1.0.0.soul.md',
     path: 'C:\\tmp\\momo-1.0.0.soul.md',
   })),
+  activatePersonaSnapshot: vi.fn(async () => undefined),
+  listPersonaSnapshots: vi.fn(async () => [
+    { id: 102, version: '1.0.1', created_at: '2026-06-19T02:00:00Z', is_active: true },
+    { id: 101, version: '1.0.0', created_at: '2026-06-19T01:00:00Z', is_active: false },
+  ]),
 }))
 
 describe('PersonaWorkshopPanel', () => {
@@ -833,5 +841,156 @@ describe('PersonaWorkshopPanel', () => {
     expect(wrapper.find('[aria-label="人格编辑卡片"]').exists()).toBe(false)
     expect(wrapper.find('[aria-label="角色卡舞台"]').exists()).toBe(true)
     expect(wrapper.find('.persona-workshop__layout--inspector-open').exists()).toBe(false)
+  })
+
+  test('lists snapshot history and restores an older snapshot', async () => {
+    const wrapper = mount(PersonaWorkshopPanel, {
+      props: { isActive: true },
+      global: {
+        stubs: {
+          ElButton: {
+            template:
+              '<button :disabled="$attrs.disabled" @click="$emit(`click`)"><slot /></button>',
+          },
+          ElInput: { template: '<input />' },
+          ElSlider: { template: '<input type="range" />' },
+          ElTag: { template: '<span><slot /></span>' },
+          ElIcon: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const activeCard = wrapper.findAll('button').find((button) => button.text().includes('默默'))
+    await activeCard?.trigger('dblclick')
+    await flushPromises()
+
+    const historyTab = wrapper.findAll('button').find((button) => button.text() === '历史')
+    expect(historyTab).toBeTruthy()
+    await historyTab?.trigger('click')
+    await flushPromises()
+
+    // 历史 tab 拉取并倒序渲染快照，标记当前 active。
+    expect(listPersonaSnapshots).toHaveBeenCalledWith('momo')
+    expect(wrapper.text()).toContain('v1.0.1')
+    expect(wrapper.text()).toContain('v1.0.0')
+    expect(wrapper.text()).toContain('当前')
+
+    // 点旧快照「恢复」→ 复用 activate 原语 + 刷新（无未保存修改不弹确认）。
+    const restoreButton = wrapper.findAll('button').find((button) => button.text() === '恢复')
+    expect(restoreButton).toBeTruthy()
+    await restoreButton?.trigger('click')
+    await flushPromises()
+
+    expect(activatePersonaSnapshot).toHaveBeenCalledWith(101)
+    expect(wrapper.text()).toContain('已恢复到 v1.0.0')
+  })
+
+  test('disables both save buttons (and activate) when the draft is unchanged and already active', async () => {
+    const wrapper = mount(PersonaWorkshopPanel, {
+      props: { isActive: true },
+      global: {
+        stubs: {
+          ElButton: {
+            template:
+              '<button :disabled="$attrs.disabled" @click="$emit(`click`)"><slot /></button>',
+          },
+          ElInput: { template: '<input />' },
+          ElSlider: { template: '<input type="range" />' },
+          ElTag: { template: '<span><slot /></span>' },
+          ElIcon: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    // 默认 momo：clean（无改动）且已激活。
+    const activeCard = wrapper.findAll('button').find((button) => button.text().includes('默默'))
+    await activeCard?.trigger('dblclick')
+    await flushPromises()
+
+    const saveBtn = wrapper.findAll('button').find((button) => button.text() === '保存快照')
+    const saveActivateBtn = wrapper
+      .findAll('button')
+      .find((button) => button.text() === '保存并激活')
+    const activateBtn = wrapper.findAll('button').find((button) => button.text() === '激活')
+
+    // 无改动 → 两个保存键置灰（不再强制 bump 版本）；已激活 → 激活键也置灰。
+    expect(saveBtn?.attributes('disabled')).toBeDefined()
+    expect(saveActivateBtn?.attributes('disabled')).toBeDefined()
+    expect(activateBtn?.attributes('disabled')).toBeDefined()
+  })
+
+  test('activates an unchanged, inactive persona via the dedicated button without saving a version', async () => {
+    vi.mocked(loadPersona).mockResolvedValueOnce({
+      id: 'joker',
+      snapshot_id: '301',
+      name: '阿吉',
+      version: '1.0.0',
+      source: 'builtin',
+      raw_markdown: [
+        '# 身份',
+        '你叫阿吉。',
+        '',
+        '# 性格',
+        '- 机灵',
+        '',
+        '# 能力',
+        '- 讲冷笑话',
+        '',
+        '# 行为规则',
+        '## Do',
+        '- 逗用户开心',
+        "## Don't",
+        '- 不冷场',
+      ].join('\n'),
+    })
+    const wrapper = mount(PersonaWorkshopPanel, {
+      props: { isActive: true },
+      global: {
+        stubs: {
+          ElButton: {
+            template:
+              '<button :disabled="$attrs.disabled" @click="$emit(`click`)"><slot /></button>',
+          },
+          ElInput: { template: '<input />' },
+          ElSlider: { template: '<input type="range" />' },
+          ElTag: { template: '<span><slot /></span>' },
+          ElIcon: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    // 阿吉 inactive：双击直接选中并开抽屉（clean·未激活）。
+    const jokerCard = wrapper.findAll('button').find((button) => button.text().includes('阿吉'))
+    expect(jokerCard).toBeTruthy()
+    await jokerCard?.trigger('dblclick')
+    await flushPromises()
+
+    const activateBtn = wrapper.findAll('button').find((button) => button.text() === '激活')
+    expect(activateBtn).toBeTruthy()
+    // clean·未激活 → 激活键可用；两个保存键置灰。
+    expect(activateBtn?.attributes('disabled')).toBeUndefined()
+    expect(
+      wrapper.findAll('button').find((button) => button.text() === '保存快照')?.attributes('disabled'),
+    ).toBeDefined()
+
+    // 清掉前序用例累积的 mock 调用，隔离「点激活」这一动作。
+    vi.mocked(activatePersonaSnapshot).mockClear()
+    vi.mocked(savePersonaDraft).mockClear()
+    vi.mocked(saveAndActivatePersonaDraft).mockClear()
+
+    await activateBtn?.trigger('click')
+    await flushPromises()
+
+    // 复用 activate 原语（不新建版本），不走任何 save。
+    expect(activatePersonaSnapshot).toHaveBeenCalledWith(301)
+    expect(saveAndActivatePersonaDraft).not.toHaveBeenCalled()
+    expect(savePersonaDraft).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('已激活')
   })
 })

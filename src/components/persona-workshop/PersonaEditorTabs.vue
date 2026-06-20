@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { ElButton, ElInput, ElSlider } from 'element-plus'
 import PersonaExampleEditor from './PersonaExampleEditor.vue'
+import PersonaSnapshotHistory from './PersonaSnapshotHistory.vue'
 import TrialChatPanel from './TrialChatPanel.vue'
 import {
   getDraftExamplePairs,
@@ -18,11 +19,13 @@ import type {
 const props = defineProps<{
   draft: PersonaSourceDraft
   mode: PersonaWorkshopMode
+  activeSnapshotId?: string | null
 }>()
 
 const emit = defineEmits<{
   'update:mode': [mode: PersonaWorkshopMode]
   'update:draft': [draft: PersonaSourceDraft]
+  restore: [snapshotId: number]
 }>()
 
 const modeItems: Array<{ id: PersonaWorkshopMode; label: string }> = [
@@ -30,6 +33,7 @@ const modeItems: Array<{ id: PersonaWorkshopMode; label: string }> = [
   { id: 'structured', label: '结构' },
   { id: 'examples', label: '示例' },
   { id: 'trial', label: '试聊' },
+  { id: 'history', label: '历史' },
   { id: 'source', label: '源码' },
 ]
 
@@ -202,6 +206,14 @@ function updateExamples(pairs: PersonaExamplePair[]) {
 
     <div v-else-if="props.mode === 'trial'" class="persona-editor__body">
       <TrialChatPanel :draft="props.draft" />
+    </div>
+
+    <div v-else-if="props.mode === 'history'" class="persona-editor__body">
+      <PersonaSnapshotHistory
+        :persona-id="props.draft.personaId"
+        :active-snapshot-id="props.activeSnapshotId ?? null"
+        @restore="emit('restore', $event)"
+      />
     </div>
 
     <div v-else class="persona-editor__body">

@@ -58,6 +58,9 @@ const sortedPersonas = computed(() => [
   min-width: 0;
   min-height: 0;
   height: 100%;
+  /* overflow:auto 滚动容器裁剪到 padding box：留出内边距，让卡片 hover 抬升
+     (transform: translateY(-1px)) 与选中描边 (box-shadow 外环) 在首行/边列不被裁掉。 */
+  padding: var(--aipet-space-1);
   overflow: auto;
 }
 

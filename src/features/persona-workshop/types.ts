@@ -1,4 +1,10 @@
-export type PersonaWorkshopMode = 'simple' | 'structured' | 'examples' | 'trial' | 'source'
+export type PersonaWorkshopMode =
+  | 'simple'
+  | 'structured'
+  | 'examples'
+  | 'trial'
+  | 'history'
+  | 'source'
 
 export type PersonaDiagnosticSeverity = 'error' | 'warning' | 'info'
 

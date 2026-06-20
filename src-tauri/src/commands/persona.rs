@@ -7,10 +7,11 @@
 
 use crate::services::persona::{
     activate_persona, activate_snapshot, delete_persona, export_persona_snapshot_to_path,
-    get_snapshot_profile, import_persona_from_path, list_personas, load_active_persona,
-    load_persona, save_draft, validate_draft, PersonaDraftValidationResult, PersonaError,
-    PersonaExportResult, PersonaImportResult, PersonaListItem, PersonaLookupError,
-    PersonaSaveResult, PersonaSourceDraft, PersonaSummary, SoulRuntimeProfile,
+    get_snapshot_profile, import_persona_from_path, list_personas, list_snapshots,
+    load_active_persona, load_persona, save_draft, validate_draft, PersonaDraftValidationResult,
+    PersonaError, PersonaExportResult, PersonaImportResult, PersonaListItem, PersonaLookupError,
+    PersonaSaveResult, PersonaSnapshotSummary, PersonaSourceDraft, PersonaSummary,
+    SoulRuntimeProfile,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -188,6 +189,19 @@ pub async fn persona_get_snapshot_profile(
     #[allow(non_snake_case)] snapshotId: i64,
 ) -> Result<SoulRuntimeProfile, String> {
     get_snapshot_profile(&app, snapshotId)
+        .await
+        .map_err(|e: PersonaError| e.to_string())
+}
+
+/// #51 列出某 persona 的全部快照（倒序，标记 active）。工坊「历史」tab 渲染用；
+/// 恢复另走 `persona_activate_snapshot`（复用既有激活原语 + 事件联动）。
+#[tauri::command]
+pub async fn persona_list_snapshots(
+    app: AppHandle,
+    id: String,
+) -> Result<Vec<PersonaSnapshotSummary>, String> {
+    let id = validate_persona_id(&id)?;
+    list_snapshots(&app, id)
         .await
         .map_err(|e: PersonaError| e.to_string())
 }

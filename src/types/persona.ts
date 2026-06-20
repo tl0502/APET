@@ -85,3 +85,16 @@ export interface PersonaSnapshotActivatedPayload {
   personaId: string
   snapshotId: string
 }
+
+/**
+ * 单条快照摘要（#51 工坊「历史」tab 用）。
+ *
+ * 与 src-tauri/src/services/persona.rs::PersonaSnapshotSummary 对齐（裸 snake_case）。
+ * 后端按 id DESC 返回（时间倒序）；`id` 直接回传 activatePersonaSnapshot 做恢复。
+ */
+export interface PersonaSnapshotSummary {
+  id: number
+  version: string
+  created_at: string
+  is_active: boolean
+}

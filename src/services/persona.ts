@@ -9,6 +9,7 @@ import type {
   PersonaImportResult,
   PersonaListItem,
   PersonaSaveResult,
+  PersonaSnapshotSummary,
   PersonaSummary,
   SoulRuntimeProfile,
 } from '@/types/persona'
@@ -51,6 +52,11 @@ export function saveAndActivatePersonaDraft(
 
 export function activatePersonaSnapshot(snapshotId: number): Promise<void> {
   return invoke<void>('persona_activate_snapshot', { snapshotId })
+}
+
+/** 列出某 persona 的全部快照（倒序，标记 active）。工坊「历史」tab 用；恢复走 activatePersonaSnapshot。 */
+export function listPersonaSnapshots(personaId: string): Promise<PersonaSnapshotSummary[]> {
+  return invoke<PersonaSnapshotSummary[]>('persona_list_snapshots', { id: personaId })
 }
 
 export function getPersonaSnapshotProfile(snapshotId: number): Promise<SoulRuntimeProfile> {

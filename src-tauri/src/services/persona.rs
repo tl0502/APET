@@ -160,6 +160,18 @@ pub struct PersonaListItem {
     pub is_active: bool,
 }
 
+/// PersonaService 快照历史契约（#51 / A2-C3 工坊「历史」tab 用）。
+///
+/// 裸 snake_case 序列化，与 `PersonaListItem` 一致（事件 payload 才用 camelCase）。
+/// `id` 为 number，便于直接回传 `persona_activate_snapshot(snapshotId)` 做恢复。
+#[derive(Debug, Serialize)]
+pub struct PersonaSnapshotSummary {
+    pub id: i64,
+    pub version: String,
+    pub created_at: String,
+    pub is_active: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonaSimpleDraft {
@@ -1148,6 +1160,46 @@ pub(crate) async fn list_personas_with_conn(
             name,
             version,
             source,
+            is_active: is_active != 0,
+        })
+        .collect())
+}
+
+/// #51 列出某 persona 的全部快照（按 id 倒序 = 时间倒序，标记当前 active）。
+///
+/// 供人格工坊「历史」tab 渲染 + 恢复。恢复本身复用既有 `activate_snapshot`，此处只读。
+pub async fn list_snapshots<R: Runtime>(
+    app: &AppHandle<R>,
+    persona_id: &str,
+) -> Result<Vec<PersonaSnapshotSummary>, PersonaError> {
+    let mut conn = open_app_db(app).await?;
+    let items = list_snapshots_with_conn(&mut conn, persona_id).await?;
+    conn.close().await?;
+    Ok(items)
+}
+
+pub(crate) async fn list_snapshots_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    persona_id: &str,
+) -> Result<Vec<PersonaSnapshotSummary>, PersonaError> {
+    // 未知 persona_id（如未保存的新建/复制草稿）→ WHERE 自然为空 → 返回空 Vec，不报错。
+    let rows: Vec<(i64, String, String, i64)> = sqlx::query_as(
+        "SELECT s.id, s.version, s.created_at, \
+                CASE WHEN s.id = p.active_snapshot_id THEN 1 ELSE 0 END AS is_active \
+         FROM persona_snapshots s \
+         JOIN personas p ON p.id = s.persona_id \
+         WHERE s.persona_id = ? \
+         ORDER BY s.id DESC",
+    )
+    .bind(persona_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, version, created_at, is_active)| PersonaSnapshotSummary {
+            id,
+            version,
+            created_at,
             is_active: is_active != 0,
         })
         .collect())
@@ -2463,6 +2515,42 @@ mod tests {
 
         assert_ne!(first.snapshot_id, second.snapshot_id);
         assert_eq!(active_snapshot_id.to_string(), first.snapshot_id);
+    }
+
+    #[tokio::test]
+    async fn list_snapshots_returns_versions_newest_first_with_active_flag() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        let first = save_draft_with_conn(&mut conn, draft.clone(), true)
+            .await
+            .unwrap();
+        let second = save_draft_with_conn(&mut conn, draft, true).await.unwrap();
+
+        // 最后一次 save+activate 让 second 成为 active；恢复到 first，断言 active 标记随之移动。
+        activate_snapshot_with_conn(&mut conn, first.snapshot_id.parse::<i64>().unwrap())
+            .await
+            .unwrap();
+
+        let rows = list_snapshots_with_conn(&mut conn, "momo").await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        // id DESC：second（1.0.1）在前，first（1.0.0）在后。
+        assert_eq!(rows[0].id.to_string(), second.snapshot_id);
+        assert_eq!(rows[0].version, "1.0.1");
+        assert!(!rows[0].is_active);
+        assert_eq!(rows[1].id.to_string(), first.snapshot_id);
+        assert_eq!(rows[1].version, "1.0.0");
+        assert!(rows[1].is_active);
+        assert!(!rows[0].created_at.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_snapshots_unknown_persona_returns_empty() {
+        let (_dir, mut conn) = fresh_db().await;
+        let rows = list_snapshots_with_conn(&mut conn, "does-not-exist")
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
     }
 
     #[tokio::test]

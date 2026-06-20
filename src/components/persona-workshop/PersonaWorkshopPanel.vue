@@ -18,6 +18,7 @@ import type {
   PersonaWorkshopMode,
 } from '@/features/persona-workshop/types'
 import {
+  activatePersonaSnapshot,
   deletePersona,
   exportPersonaSnapshot,
   getActivePersona,
@@ -28,7 +29,7 @@ import {
   savePersonaDraft,
   validatePersonaDraft as validatePersonaDraftRemote,
 } from '@/services/persona'
-import type { PersonaListItem, PersonaSaveResult } from '@/types/persona'
+import type { PersonaListItem, PersonaSaveResult, PersonaSummary } from '@/types/persona'
 
 defineProps<{
   isActive?: boolean
@@ -48,6 +49,7 @@ const saving = shallowRef(false)
 const importing = shallowRef(false)
 const exporting = shallowRef(false)
 const deleting = shallowRef(false)
+const restoring = shallowRef(false)
 const serverDiagnostics = ref<PersonaDiagnostic[] | null>(null)
 const saveResult = shallowRef<PersonaSaveResult | null>(null)
 const draftOrigin = shallowRef<'saved' | 'new' | 'copy'>('saved')
@@ -60,6 +62,14 @@ const personaName = computed(() => draft.value?.simple.name ?? '未选择人格'
 const selectedPersona = computed(() =>
   selectedId.value ? personas.value.find((persona) => persona.id === selectedId.value) : null,
 )
+// 有未保存修改：新建/复制草稿，或 draft 与上次保存的指纹不一致。两个「保存」键以此为准启用。
+const isDirty = computed(
+  () =>
+    draftOrigin.value !== 'saved' ||
+    (draft.value ? draftFingerprint(draft.value) !== savedDraftFingerprint.value : false),
+)
+// 当前选中的人格是否已是全局 active（决定「激活」键是否还有意义）。
+const isSelectedActive = computed(() => selectedPersona.value?.is_active === true)
 const canExportSnapshot = computed(() => {
   if (!selectedSnapshotId.value || !draft.value || draftOrigin.value !== 'saved') return false
   const snapshotId = Number(selectedSnapshotId.value)
@@ -314,6 +324,61 @@ async function deleteCurrentPersona() {
   }
 }
 
+// 复用既有 activate 原语：把某快照设为 active，再走与 delete 同款的刷新序列（不新建版本）。
+// successMsg 在 reload 后用最新 persona 构造（恢复要带版本号）。
+async function activateSnapshotAndRefresh(
+  snapshotId: number,
+  successMsg: (persona: PersonaSummary) => string,
+) {
+  if (!selectedId.value || restoring.value) return
+  const personaId = selectedId.value
+  restoring.value = true
+  try {
+    await activatePersonaSnapshot(snapshotId)
+    const [nextList, persona] = await Promise.all([listPersonas(), loadPersona(personaId)])
+    personas.value = nextList
+    selectedId.value = persona.id
+    selectedSnapshotId.value = persona.snapshot_id
+    draft.value = createPersonaDraft(persona)
+    rememberSavedDraft(draft.value)
+    resetTransientState()
+    statusMsg.value = successMsg(persona)
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    restoring.value = false
+  }
+}
+
+// 历史 tab「恢复」：把旧快照设为 active。draft 会切回旧快照内容；有未保存修改先确认避免静默丢弃。
+async function restoreSnapshot(snapshotId: number) {
+  if (!selectedId.value || restoring.value) return
+  if (isDirty.value) {
+    try {
+      await ElMessageBox.confirm(
+        '当前有未保存的修改，恢复旧快照会丢弃它们。继续？',
+        '确认恢复快照',
+        {
+          confirmButtonText: '恢复',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return
+    }
+  }
+  await activateSnapshotAndRefresh(snapshotId, (persona) => `已恢复到 v${persona.version}`)
+}
+
+// footer「激活」：把未改动、当前未激活的人格设为当前（复用现有快照，不 bump 版本）。
+async function activateSelectedPersona() {
+  if (isDirty.value || isSelectedActive.value || restoring.value) return
+  const snapshotId = Number(selectedSnapshotId.value)
+  if (!Number.isFinite(snapshotId) || snapshotId <= 0) return
+  await activateSnapshotAndRefresh(snapshotId, () => '已激活')
+}
+
 onMounted(() => {
   void loadInitial()
 })
@@ -402,12 +467,17 @@ onMounted(() => {
         :saving="saving"
         :save-result="saveResult"
         :draft-state-label="draftStateLabel"
+        :active-snapshot-id="selectedSnapshotId"
+        :dirty="isDirty"
+        :active-persona="isSelectedActive"
         @close="inspectorOpen = false"
         @validate="validateCurrentDraft"
         @save="persistCurrentDraft(false)"
         @save-and-activate="persistCurrentDraft(true)"
         @update:mode="mode = $event"
         @update:draft="updateDraft"
+        @restore="restoreSnapshot"
+        @activate="activateSelectedPersona"
       />
     </div>
   </section>

@@ -26,6 +26,9 @@ const props = defineProps<{
   saving: boolean
   saveResult: PersonaSaveResult | null
   draftStateLabel: string
+  activeSnapshotId: string | null
+  dirty: boolean
+  activePersona: boolean
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +38,8 @@ const emit = defineEmits<{
   'save-and-activate': []
   'update:mode': [mode: PersonaWorkshopMode]
   'update:draft': [draft: PersonaSourceDraft]
+  restore: [snapshotId: number]
+  activate: []
 }>()
 
 const hasDiagnostics = computed(() => props.diagnostics.length > 0)
@@ -52,7 +57,15 @@ const diagnosticStateLabel = computed(() => {
   if (warningCount.value > 0) return `${warningCount.value} 条建议，不影响保存`
   return '可保存'
 })
-const saveDisabled = computed(() => !props.draft || hasBlockingDiagnostics.value || props.saving)
+// 两个「保存」键只在有未保存修改时可用——无改动不再强制 bump 出重复版本。
+const saveDisabled = computed(
+  () => !props.draft || hasBlockingDiagnostics.value || props.saving || !props.dirty,
+)
+// 「激活」键专管「把未改动、当前未激活的人格设为当前」（复用现有快照，不新建版本）。
+// 有改动时走「保存并激活」；已是当前人格时无事可做。
+const activateDisabled = computed(
+  () => !props.draft || props.saving || props.dirty || props.activePersona,
+)
 const titleId = 'persona-inspector-title'
 </script>
 
@@ -98,8 +111,10 @@ const titleId = 'persona-inspector-title'
             v-if="props.draft"
             :draft="props.draft"
             :mode="props.mode"
+            :active-snapshot-id="props.activeSnapshotId"
             @update:mode="emit('update:mode', $event)"
             @update:draft="emit('update:draft', $event)"
+            @restore="emit('restore', $event)"
           />
           <p v-else class="persona-inspector__empty">选择一张角色卡开始编辑</p>
         </div>
@@ -168,6 +183,12 @@ const titleId = 'persona-inspector-title'
               @click="emit('save-and-activate')"
             >
               保存并激活
+            </ElButton>
+            <ElButton
+              :disabled="activateDisabled"
+              @click="emit('activate')"
+            >
+              激活
             </ElButton>
           </div>
         </footer>
