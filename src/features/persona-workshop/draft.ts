@@ -285,11 +285,17 @@ export function estimateDraftTokens(draft: PersonaSourceDraft): number {
 export function validatePersonaDraft(draft: PersonaSourceDraft): PersonaDiagnostic[] {
   const diagnostics: PersonaDiagnostic[] = []
 
+  if (!draft.simple.name.trim()) {
+    diagnostics.push({ code: 'name.empty', severity: 'error', message: '名字不能为空' })
+  }
   if (!draft.structured.identity.trim()) {
     diagnostics.push({ code: 'identity.empty', severity: 'error', message: '身份不能为空' })
   }
   if (!draft.structured.personality.trim()) {
     diagnostics.push({ code: 'personality.empty', severity: 'error', message: '性格不能为空' })
+  }
+  if (!draft.structured.capabilities.trim()) {
+    diagnostics.push({ code: 'capabilities.empty', severity: 'error', message: '能力不能为空' })
   }
   if (draft.structured.rulesDo.length === 0) {
     diagnostics.push({ code: 'rules.do.empty', severity: 'error', message: '至少需要 1 条 Do 规则' })

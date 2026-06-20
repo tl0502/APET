@@ -92,6 +92,34 @@ describe('persona workshop draft helpers', () => {
     )
   })
 
+  test('validates name and capabilities as frontend errors', () => {
+    const draft = createPersonaDraft(persona)
+    const broken = {
+      ...draft,
+      simple: {
+        ...draft.simple,
+        name: '   ',
+      },
+      structured: {
+        ...draft.structured,
+        capabilities: '   ',
+      },
+    }
+
+    const diagnostics = validatePersonaDraft(broken)
+
+    expect(diagnostics).toContainEqual({
+      code: 'name.empty',
+      severity: 'error',
+      message: '名字不能为空',
+    })
+    expect(diagnostics).toContainEqual({
+      code: 'capabilities.empty',
+      severity: 'error',
+      message: '能力不能为空',
+    })
+  })
+
   test('estimates tokens from source length with a stable rounded value', () => {
     const draft = createPersonaDraft(persona)
 
