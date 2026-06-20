@@ -2156,6 +2156,31 @@ mod tests {
         assert_eq!(coach.frontmatter.name, "教官");
     }
 
+    #[test]
+    fn builtin_personas_compile_runtime_examples() {
+        for (id, raw) in [
+            ("momo", MOMO_RAW),
+            ("joker", JOKER_RAW),
+            ("coach", COACH_RAW),
+        ] {
+            let parsed = parse_persona(raw).expect("builtin persona should parse");
+            let compiled = compile_parsed_persona(&parsed, "builtin");
+
+            assert!(
+                !compiled.runtime_profile.examples.is_empty(),
+                "{id} should include runtime examples"
+            );
+            assert!(
+                compiled
+                    .runtime_profile
+                    .examples
+                    .iter()
+                    .all(|example| example.contains("用户：")),
+                "{id} examples should include user turns"
+            );
+        }
+    }
+
     /// 模拟 seed_builtin 在 fresh_db 上的语义。同 prod 路径,不依赖 AppHandle。
     async fn seed_all_builtins(conn: &mut sqlx::SqliteConnection) {
         for (raw, file_path, set_active) in BUILTIN_SEEDS {
