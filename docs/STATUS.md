@@ -21,9 +21,9 @@ related:
 ## 当前状态
 
 - **当前 milestone**：Companion Agent Runtime v3 Phase A0（Safety & Secrets）✅ 完成；M2 W3 [#23] 物理交互仍待开始
-- **当前 session 在做**：A2-C2 新建 / 复制内置 / 草稿状态已完成：工坊支持空白新建、复制当前人格为新人格、草稿状态标签；保存已有内置人格时覆盖同一 `persona_id` 并生成新 snapshot/version，不自动 fork；内置 seed 不再覆盖工坊用户修改后的内置人格 metadata。
-- **下一步**：继续人格工坊 A2-C3 快照历史与恢复；随后补试聊沙盒、导入导出。
-- **阻塞**：无
+- **当前 session 在做**：人格工坊「试聊沙盒」+「导入/导出/删除」两特性合并后做 review 收口：(1) **导入改为「= 新建」语义** —— `import_persona_source_with_conn` 先经新 helper `next_available_persona_id_with_conn`（镜像前端 `nextPersonaId`：撞了落 `-2`/`-3`）解析唯一 id 再普通 INSERT，删掉 `ON CONFLICT DO UPDATE`；根治"导入撞 id 时侵占 active/builtin/同名既有人格"（旧实现会把内置人格 source 翻成 imported）。(2) **角色卡交互拆分**：单击只选中、双击进编辑抽屉（`PersonaCardStage` 加 `@dblclick`→`edit`，`PersonaWorkshopPanel` 拆 `selectPersona`/`editPersona`）。(3) **全局 `pnpm lint` 修绿**：eslint 忽略 `.codex/.worktrees` 嵌套检出 + `scripts/**` 配 Node 全局 + 清 4 处既有死代码（均非本次合并引入）。`.soul.zip` 资源包导入导出仍延后到 source format / assets 归属明确后处理。
+- **下一步**：继续人格工坊 A2-C3 快照历史与恢复；随后再做 A2-D 后续 `.soul.zip` / assets 归属。
+- **阻塞**：无。cargo test --lib 419 / 前端 vitest（persona-workshop + trial）47 / `pnpm typecheck` / `pnpm lint` 全绿。
 - **展示窗口**：~10 天后产品展示。M2 三件套 + 磁吸全套 + workspace 三栏壳 + L 型 chrome 框 + 5+3 panel 内嵌 + chat 主床/磁吸双形态 + Profile popup 全套就位
 
 ---
