@@ -161,6 +161,15 @@ function updateExamples(pairs: PersonaExamplePair[]) {
         />
       </label>
       <label class="persona-field">
+        <span class="persona-field__label">能力</span>
+        <ElInput
+          type="textarea"
+          :rows="3"
+          :model-value="props.draft.structured.capabilities"
+          @update:model-value="updateStructured('capabilities', String($event))"
+        />
+      </label>
+      <label class="persona-field">
         <span class="persona-field__label">Do</span>
         <ElInput
           type="textarea"

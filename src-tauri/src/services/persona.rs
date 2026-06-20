@@ -222,6 +222,8 @@ pub struct PersonaSaveResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoulRuntimeProfile {
     pub identity_prompt: String,
+    #[serde(default)]
+    pub capabilities_prompt: String,
     pub style_prompt: String,
     pub examples: Vec<String>,
     pub initiative_config: serde_json::Value,
@@ -941,6 +943,7 @@ fn compile_persona_draft(draft: &PersonaSourceDraft) -> CompiledPersonaDraft {
 
     let runtime_profile = SoulRuntimeProfile {
         identity_prompt: draft.structured.identity.trim().to_string(),
+        capabilities_prompt: draft.structured.capabilities.trim().to_string(),
         style_prompt,
         examples,
         initiative_config: json!({ "mode": shaping_prompt.initiative_mode.as_str() }),
@@ -1902,6 +1905,44 @@ mod tests {
         assert!(style.contains("回复长度 detailed：可以展开说明"));
         assert!(!style.contains("warmth=4"));
         assert_eq!(compiled.runtime_profile.initiative_config["mode"], "often");
+    }
+
+    #[test]
+    fn compile_draft_includes_capabilities_as_runtime_contract() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.structured.capabilities = "- 帮用户拆任务\n- 提醒用户休息".to_string();
+
+        let compiled = compile_persona_draft(&draft);
+
+        assert_eq!(
+            compiled.runtime_profile.capabilities_prompt,
+            "- 帮用户拆任务\n- 提醒用户休息"
+        );
+        assert!(
+            !compiled
+                .runtime_profile
+                .style_prompt
+                .contains("帮用户拆任务"),
+            "capabilities should stay separate from style/rules"
+        );
+    }
+
+    #[test]
+    fn runtime_profile_deserializes_legacy_snapshot_without_capabilities_prompt() {
+        let raw = serde_json::json!({
+            "identity_prompt": "你叫默默。",
+            "style_prompt": "# 风格\n- 短句",
+            "examples": [],
+            "initiative_config": { "mode": "sometimes" },
+            "memory_policy": { "mode": "default" },
+            "ui_metadata": { "name": "默默" },
+            "source_kind": "legacy_soul_md",
+            "source_hash": "sha256:old"
+        });
+
+        let profile: SoulRuntimeProfile = serde_json::from_value(raw).unwrap();
+
+        assert_eq!(profile.capabilities_prompt, "");
     }
 
     #[test]

@@ -210,6 +210,57 @@ describe('PersonaWorkshopPanel', () => {
     expect(sourceText).toContain('默默：先慢一点。')
   })
 
+  test('edits capabilities in the structured tab and keeps source preview in sync', async () => {
+    const wrapper = mount(PersonaWorkshopPanel, {
+      props: { isActive: true },
+      global: {
+        stubs: {
+          ElButton: {
+            template: '<button :aria-label="$attrs[`aria-label`]" @click="$emit(`click`)"><slot /></button>',
+          },
+          ElInput: defineComponent({
+            props: { modelValue: { type: String, default: '' } },
+            emits: ['update:modelValue'],
+            setup(props, { emit }) {
+              return () =>
+                h('textarea', {
+                  value: props.modelValue,
+                  onInput: (event: Event) =>
+                    emit('update:modelValue', (event.target as HTMLTextAreaElement).value),
+                })
+            },
+          }),
+          ElSlider: { template: '<input type="range" />' },
+          ElTag: { template: '<span><slot /></span>' },
+          ElIcon: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const activeCard = wrapper.findAll('button').find((button) => button.text().includes('默默'))
+    await activeCard?.trigger('click')
+
+    const structuredTab = wrapper.findAll('button').find((button) => button.text() === '结构')
+    await structuredTab?.trigger('click')
+    await flushPromises()
+
+    const structuredTextareas = wrapper.findAll('textarea')
+    expect(structuredTextareas).toHaveLength(5)
+    expect((structuredTextareas[2].element as HTMLTextAreaElement).value).toContain('- 陪伴')
+
+    await structuredTextareas[2].setValue('- 帮用户拆任务\n- 提醒用户休息')
+
+    const sourceTab = wrapper.findAll('button').find((button) => button.text() === '源码')
+    await sourceTab?.trigger('click')
+    await flushPromises()
+
+    const sourceText = (wrapper.findAll('textarea').at(-1)?.element as HTMLTextAreaElement).value
+    expect(sourceText).toContain('# 能力')
+    expect(sourceText).toContain('- 帮用户拆任务\n- 提醒用户休息')
+  })
+
   test('adds the first example from an empty example state', async () => {
     vi.mocked(getActivePersona).mockResolvedValueOnce(personaWithoutExamples)
     const wrapper = mount(PersonaWorkshopPanel, {

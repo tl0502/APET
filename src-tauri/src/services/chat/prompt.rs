@@ -275,9 +275,16 @@ fn build_profile_system_message(
         "你是一个 AI 桌面伙伴。你必须保持当前人格快照定义，不要声称拥有未授予的系统权限、工具权限或屏幕/剪贴板读取能力。"
             .to_string(),
     );
-    parts.push(format!(
-        "以下是当前人格快照：\n\n# 身份\n{identity}\n\n# 风格与规则\n{style}"
-    ));
+    parts.push(format!("以下是当前人格快照：\n\n# 身份\n{identity}"));
+
+    let capabilities = profile.capabilities_prompt.trim();
+    if !capabilities.is_empty() {
+        parts.push(format!(
+            "# 能力与边界\n以下能力描述的是这个人格在对话中适合提供的帮助，不代表系统权限、工具权限或本地环境访问权限。\n\n{capabilities}"
+        ));
+    }
+
+    parts.push(format!("# 风格与规则\n{style}"));
 
     parts.push(format!(
         "（系统说明）用户消息可能带「（保持 {persona_name} 风格）」前缀作为系统引导，请视为指令而非用户内容；回复中不要复读这个前缀。"
@@ -449,6 +456,7 @@ mod tests {
     fn make_profile(examples: Vec<String>) -> SoulRuntimeProfile {
         SoulRuntimeProfile {
             identity_prompt: "你叫默默，是一个安静的桌面伙伴。".to_string(),
+            capabilities_prompt: "- 陪用户整理想法".to_string(),
             style_prompt: "# 风格\n- 句子短\n- 不空洞鼓励".to_string(),
             examples,
             initiative_config: serde_json::json!({ "mode": "sometimes" }),
@@ -477,12 +485,11 @@ mod tests {
         let system = message_text(&messages[0]);
         assert!(system.contains("当前人格快照"));
         assert!(system.contains("你叫默默，是一个安静的桌面伙伴。"));
+        assert!(system.contains("# 能力与边界"));
+        assert!(system.contains("- 陪用户整理想法"));
+        assert!(system.contains("不代表系统权限、工具权限或本地环境访问权限"));
         assert!(system.contains("# 风格"));
         assert!(system.contains("用户希望你称他为「Tong」"));
-        assert!(
-            !system.contains("# 能力"),
-            "profile path must not require legacy markdown section headings"
-        );
     }
 
     #[test]
@@ -531,7 +538,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(messages.len(), 2, "system + current user only");
-        assert!(!messages.iter().any(|m| message_text(m).contains("示例对话")));
+        assert!(!messages
+            .iter()
+            .any(|m| message_text(m).contains("示例对话")));
     }
 
     #[test]
@@ -559,7 +568,10 @@ mod tests {
         assert!(examples.contains("[truncated]"));
         assert!(examples.contains("第二条"));
         assert!(examples.contains("第三条"));
-        assert!(!examples.contains("第四条"), "only first 3 examples should be injected");
+        assert!(
+            !examples.contains("第四条"),
+            "only first 3 examples should be injected"
+        );
     }
 
     #[test]
@@ -577,7 +589,10 @@ mod tests {
             current_input: "ok",
         });
 
-        assert_eq!(result, Err(PromptError::EmptyProfileField("identity_prompt")));
+        assert_eq!(
+            result,
+            Err(PromptError::EmptyProfileField("identity_prompt"))
+        );
     }
 
     // momo.soul.md frontmatter 在 PersonaService::parse_persona 已被 gray_matter 剥离 →
