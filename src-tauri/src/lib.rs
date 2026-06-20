@@ -67,6 +67,33 @@ pub fn run() {
     }));
 
     tauri::Builder::default()
+        // 防多开：必须是第一个 plugin。打包后双击多次会起多个进程争同一 SQLite(WAL)/全局
+        // 快捷键/托盘 → 卡死。第二个实例在此把启动参数交给已运行的首实例并立即退出（不建窗、
+        // 不开库、不注册快捷键）；下面的回调在「首实例」里执行，把现有入口窗拉到前台。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let bring_to_front = |label: &str| -> bool {
+                if let Some(win) = app.get_webview_window(label) {
+                    if win.is_visible().unwrap_or(false) {
+                        let _ = win.unminimize();
+                        let _ = win.set_focus();
+                        return true;
+                    }
+                }
+                false
+            };
+            // 当前可见的入口窗优先（onboarding 未完成同意 / workspace / chat）；
+            // 都不可见（pet 已 hide 到托盘）则显示并聚焦 pet 主窗。
+            if !(bring_to_front(ONBOARDING_WINDOW_LABEL)
+                || bring_to_front(WORKSPACE_WINDOW_LABEL)
+                || bring_to_front(CHAT_WINDOW_LABEL))
+            {
+                if let Some(pet) = app.get_webview_window(PET_WINDOW_LABEL) {
+                    let _ = pet.unminimize();
+                    let _ = pet.show();
+                    let _ = pet.set_focus();
+                }
+            }
+        }))
         .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations(DB_URL, migrations())

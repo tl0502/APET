@@ -72,6 +72,11 @@ base64 = "0.22"
 # #22 ReminderService：Tauri 2 OS 通知（前端 sendNotification + Rust 端 NotificationExt 双通道）。
 # capability 须显式 allow `notification:default`（lesson #1 显式 allow 原则）。
 tauri-plugin-notification = "2"
+
+# 防多开（single instance）：实测打包后双击多次 → 多进程争同一 SQLite(WAL)/全局快捷键/
+# 托盘 → 卡死。必须注册为第一个 plugin（见 lib.rs run()）；第二实例在开库/注册快捷键前
+# 就把参数交给已运行的首实例并自行退出。桌面端纯 Rust 侧 init，无需 capability 权限项。
+tauri-plugin-single-instance = "2"
 zeroize = { version = "1.8.2", features = ["derive"] }
 windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 
