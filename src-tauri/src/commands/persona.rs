@@ -6,10 +6,11 @@
 // - 错误类型映射 thiserror enum → 前端拿到的 IpcError.message 含语义前缀
 
 use crate::services::persona::{
-    activate_persona, activate_snapshot, get_snapshot_profile, list_personas, load_active_persona,
+    activate_persona, activate_snapshot, delete_persona, export_persona_snapshot_to_path,
+    get_snapshot_profile, import_persona_from_path, list_personas, load_active_persona,
     load_persona, save_draft, validate_draft, PersonaDraftValidationResult, PersonaError,
-    PersonaListItem, PersonaLookupError, PersonaSaveResult, PersonaSourceDraft, PersonaSummary,
-    SoulRuntimeProfile,
+    PersonaExportResult, PersonaImportResult, PersonaListItem, PersonaLookupError,
+    PersonaSaveResult, PersonaSourceDraft, PersonaSummary, SoulRuntimeProfile,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -44,6 +45,14 @@ fn lookup_err_to_string(e: PersonaLookupError) -> String {
         PersonaLookupError::NotFound(id) => format!("persona not found: {id}"),
         PersonaLookupError::Db(inner) => inner.to_string(),
     }
+}
+
+fn validate_file_path(path: &str) -> Result<&str, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("文件路径不能为空".to_string());
+    }
+    Ok(trimmed)
 }
 
 #[tauri::command]
@@ -117,6 +126,45 @@ pub async fn persona_save_and_activate_draft(
         .map_err(|e: PersonaError| e.to_string())?;
     emit_persona_activation_events(&app, &result.persona_id, &result.snapshot_id);
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn persona_import(
+    app: AppHandle,
+    path: String,
+    activate: bool,
+) -> Result<PersonaImportResult, String> {
+    let path = validate_file_path(&path)?.to_string();
+    let result = import_persona_from_path(&app, path, activate)
+        .await
+        .map_err(|e: PersonaError| e.to_string())?;
+    if result.activated {
+        emit_persona_activation_events(&app, &result.persona_id, &result.snapshot_id);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn persona_export_snapshot(
+    app: AppHandle,
+    #[allow(non_snake_case)] snapshotId: i64,
+    path: String,
+) -> Result<PersonaExportResult, String> {
+    if snapshotId <= 0 {
+        return Err("snapshot id 必须为正数".to_string());
+    }
+    let path = validate_file_path(&path)?.to_string();
+    export_persona_snapshot_to_path(&app, snapshotId, path)
+        .await
+        .map_err(|e: PersonaError| e.to_string())
+}
+
+#[tauri::command]
+pub async fn persona_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let id = validate_persona_id(&id)?.to_string();
+    delete_persona(&app, &id)
+        .await
+        .map_err(|e: PersonaError| e.to_string())
 }
 
 #[tauri::command]

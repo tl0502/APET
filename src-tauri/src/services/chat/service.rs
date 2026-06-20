@@ -56,8 +56,9 @@ use crate::services::memory::{
 };
 use crate::services::nickname::get_user_nickname_with_conn;
 use crate::services::persona::{
-    get_snapshot_profile_with_conn, load_active_persona_with_conn,
-    load_persona_for_conversation_with_conn, PersonaSummary, SoulRuntimeProfile,
+    compile_draft_for_trial, get_snapshot_profile_with_conn, load_active_persona_with_conn,
+    load_persona_for_conversation_with_conn, PersonaDiagnosticSeverity, PersonaSourceDraft,
+    PersonaSummary, SoulRuntimeProfile,
 };
 
 // === 业务常量 ===
@@ -65,6 +66,8 @@ use crate::services::persona::{
 const HISTORY_LIMIT: u32 = 10;
 /// 全局兜底拒答（persona-design.md §7.5 降级链末端）。
 const FALLBACK_REFUSAL: &str = "这个我现在没法陪你聊，要不我们换个话题？";
+/// 试聊（A2-D）后端防御性上限：history 最多保留最近 N 条 message（前端另有 UX 软上限 round 数）。
+const MAX_TRIAL_HISTORY: usize = 24;
 
 #[derive(Debug, Clone, Default)]
 struct StreamSafetyState {
@@ -200,6 +203,32 @@ pub struct PreparedSend {
     pub user_id: String,
     pub conv_id: String,
     pub persona: PersonaSummary,
+    pub messages: Vec<ChatMessage>,
+    pub provider: OpenAIProvider,
+    pub cancel_token: CancellationToken,
+}
+
+/// 试聊（A2-D）history 单条。前端持 ephemeral thread，每轮把已累积 turns + 新 input 传后端；
+/// 后端无状态（不存 session），杜绝泄漏。role: "user" | "assistant"。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrialTurn {
+    pub role: String,
+    pub content: String,
+}
+
+/// 试聊 IPC 同步返回。只含 assistant 临时 id（cancel + ReplaceMessage 寻址用）；
+/// 不落库，故无 conversationId / userMessageId。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrialSendResult {
+    pub message_id: String,
+}
+
+/// trial_prepare 产出，run_trial_stream 消费。与 PreparedSend 的区别：无 conv_id / user_id /
+/// persona —— 试聊不落库、不绑 conversation。
+pub struct TrialPrepared {
+    pub assistant_id: String,
     pub messages: Vec<ChatMessage>,
     pub provider: OpenAIProvider,
     pub cancel_token: CancellationToken,
@@ -772,6 +801,166 @@ impl ChatService {
         let records = list_messages_by_conversation(app, conversation_id, Some(limit)).await?;
         Ok(records)
     }
+
+    /// 试聊（A2-D）同步阶段：编译 draft → 内存 profile → scan 输入 → 拼 prompt → 现建 provider →
+    /// 注册 cancel token。**不写任何 DB 行**（仅只读 provider 配置 + 昵称）。blocking / scan Blocked
+    /// 明确失败、不静默（与正式 chat 同原则）。
+    pub async fn trial_prepare<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        draft: PersonaSourceDraft,
+        history: Vec<TrialTurn>,
+        input: String,
+    ) -> Result<TrialPrepared, ChatError> {
+        // 1. 编译 draft（blocking → 明确失败）。与保存同源 compile，保证"所感即所存"。
+        let profile = compile_draft_for_trial(&draft).map_err(|diags| {
+            let summary = diags
+                .iter()
+                .filter(|d| d.severity == PersonaDiagnosticSeverity::Error)
+                .map(|d| d.message.clone())
+                .collect::<Vec<_>>()
+                .join("；");
+            ChatError::Persona(format!("人格定义未完成，无法试聊：{summary}"))
+        })?;
+
+        // 2. 输入安全（与正式聊天同位；试聊也打真 LLM，必须拦危险输入）。
+        let input = match self.safety_guard.scan_user_input(&input) {
+            ScanFinalResult::Ok => input,
+            ScanFinalResult::Redacted { redacted_text, .. } => redacted_text,
+            ScanFinalResult::Blocked { rule_ids, .. } => {
+                return Err(ChatError::UnsafeInput(format!(
+                    "blocked by rules: {:?}",
+                    rule_ids
+                )));
+            }
+            ScanFinalResult::ScanFailed { reason, .. } => {
+                return Err(ChatError::SafetyScanFailed(format!(
+                    "trial input scan failed: {reason}"
+                )));
+            }
+        };
+
+        // 3. 合成 history（dummy 元信息；build_messages_from_profile 只读 role+content）。
+        let synth_history = build_trial_history(&history);
+
+        // 4. 只读 DB：provider 配置（含 DPAPI key）+ 用户昵称。无写。
+        let mut conn = open_app_db(app).await?;
+        let user_nick = get_user_nickname_with_conn(&mut conn).await?;
+        let secret_repo = app
+            .try_state::<crate::kernel::Kernel>()
+            .map(|kernel| std::sync::Arc::clone(&kernel.secret_repo));
+        let provider = build_provider_with_conn(&mut conn, secret_repo.as_ref()).await?;
+        conn.close().await?;
+
+        // 5. 拼 prompt（复用 A2-A hot path）+ safety prefix 同位注入。
+        let persona_name = draft.simple.name.trim();
+        let messages = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &profile,
+            persona_name,
+            user_nickname: user_nick.as_deref(),
+            pet_nickname: persona_name,
+            history: &synth_history,
+            current_input: &input,
+        })?;
+        let messages = self
+            .safety_guard
+            .wrap_messages(messages, crate::kernel::safety_guard::Locale::ZhCn);
+
+        // 6. 注册 cancel token（复用同一 active_streams map；id 唯一，与正式流互不干扰）。
+        let assistant_id = Ulid::new().to_string();
+        let cancel = CancellationToken::new();
+        self.active_streams
+            .lock()
+            .insert(assistant_id.clone(), cancel.clone());
+
+        Ok(TrialPrepared {
+            assistant_id,
+            messages,
+            provider,
+            cancel_token: cancel,
+        })
+    }
+
+    /// 试聊（A2-D）异步阶段：跑流式 + 收尾。与 run_stream 的根本区别：**任何分支都不碰 DB**
+    /// （无 insert/update/delete message，无 last_activity，无 safety_scan_status 落库）。
+    /// mid-stream scan_token 不接（spec §7：A0 该 scope 默认关，trial 无 DB 落点）。
+    pub async fn run_trial_stream(&self, prepared: TrialPrepared, channel: Channel<StreamEvent>) {
+        let TrialPrepared {
+            assistant_id,
+            messages,
+            provider,
+            cancel_token,
+        } = prepared;
+
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let buffer_for_cb = buffer.clone();
+        let channel_for_cb = channel.clone();
+        let on_delta: Box<dyn Fn(StreamDelta) + Send + Sync> = Box::new(move |delta| {
+            if let StreamDelta::TextDelta(text) = &delta {
+                buffer_for_cb.lock().push_str(text);
+                let _ = channel_for_cb.send(StreamEvent::Delta {
+                    token: text.clone(),
+                });
+            }
+            // ToolCallDelta / Finish：M1 不接 tools，忽略
+        });
+
+        let stream_result = provider
+            .chat_stream(messages, ChatOptions::default(), cancel_token, on_delta)
+            .await;
+        self.active_streams.lock().remove(&assistant_id);
+        let collected = buffer.lock().clone();
+
+        match stream_result {
+            Ok(finish) => {
+                // 输出终扫（FinalOutput scope 开启时）；redact/block → ReplaceMessage 覆盖临时气泡。
+                // sentinel snapshot id "trial"：scan_final 当前实现忽略该参数且不写 context_access_log，
+                // 故试聊不产生审计记录（已确认跳过试聊审计）。
+                let final_output_enabled = self.safety_guard.is_enabled(SafetyScope::FinalOutput);
+                let scan = if final_output_enabled {
+                    self.safety_guard.scan_final(&collected, "trial")
+                } else {
+                    ScanFinalResult::Ok
+                };
+                let (final_text, replace_reason): (String, Option<ReplaceReason>) = match scan {
+                    ScanFinalResult::Ok => (collected, None),
+                    ScanFinalResult::Redacted { redacted_text, .. } => {
+                        (redacted_text, Some(ReplaceReason::FinalRedacted))
+                    }
+                    ScanFinalResult::Blocked { fallback, .. } => {
+                        (fallback, Some(ReplaceReason::FinalBlocked))
+                    }
+                    ScanFinalResult::ScanFailed { fallback, .. } => {
+                        (fallback, Some(ReplaceReason::ScanFailed))
+                    }
+                };
+                if let Some(reason) = replace_reason {
+                    let _ = channel.send(StreamEvent::ReplaceMessage {
+                        message_id: assistant_id.clone(),
+                        new_content: final_text,
+                        reason,
+                    });
+                }
+                let _ = channel.send(StreamEvent::Done {
+                    total_tokens: finish.usage.map(|u| u.total_tokens).unwrap_or(0),
+                    finish_reason: finish_reason_to_str(&finish.reason),
+                });
+            }
+            Err(LLMError::Cancelled { partial_usage }) => {
+                let _ = channel.send(StreamEvent::Done {
+                    total_tokens: partial_usage.map(|u: Usage| u.total_tokens).unwrap_or(0),
+                    finish_reason: "cancelled".to_string(),
+                });
+            }
+            Err(e) => {
+                // 试聊不走 offline 模板回退（fidelity 增强留后续，spec §11）；统一报 Error。
+                let _ = channel.send(StreamEvent::Error {
+                    error_kind: trial_error_kind(&e).to_string(),
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
 }
 
 // === Helper functions ===
@@ -840,6 +1029,39 @@ async fn delete_assistant_msg<R: Runtime>(app: &AppHandle<R>, id: &str) -> Resul
     delete_message_with_conn(&mut conn, id).await?;
     conn.close().await?;
     Ok(())
+}
+
+/// 把试聊（A2-D）TrialTurn 列表合成为 build_messages_from_profile 可消费的 MessageRecord。
+/// dummy 元信息（id/conv_id/created_at 留空）—— builder 只读 role + content；未知 role 由 builder 跳过。
+/// 防御性截断到最近 MAX_TRIAL_HISTORY 条（前端另有 UX round 上限，这里是兜底）。
+fn build_trial_history(history: &[TrialTurn]) -> Vec<MessageRecord> {
+    let start = history.len().saturating_sub(MAX_TRIAL_HISTORY);
+    history[start..]
+        .iter()
+        .map(|t| MessageRecord {
+            id: String::new(),
+            conversation_id: String::new(),
+            role: t.role.clone(),
+            content: t.content.clone(),
+            mode: "online".to_string(),
+            created_at: String::new(),
+        })
+        .collect()
+}
+
+/// 试聊错误映射。与 error_kind_str 不同：试聊不走 offline 降级，Network/ServerError 也会到
+/// run_trial_stream 的 Err 分支，故这里映射全部变体（不 panic）。
+fn trial_error_kind(e: &LLMError) -> &'static str {
+    match e {
+        LLMError::AuthFailed(_) => "AuthFailed",
+        LLMError::RateLimit(_) => "RateLimit",
+        LLMError::BadRequest(_) => "BadRequest",
+        LLMError::ParseError(_) => "ParseError",
+        LLMError::Network(_) => "Network",
+        LLMError::ServerError(_) => "ServerError",
+        // Cancelled 由上游专门分支处理，不会到这；防御性映射。
+        LLMError::Cancelled { .. } => "Cancelled",
+    }
 }
 
 async fn load_runtime_profile_for_persona(
@@ -987,6 +1209,108 @@ mod tests {
         let guard: Arc<dyn SafetyGuard> =
             Arc::new(SafetyGuardImpl::from_text("TEST_GUARD_PREFIX").unwrap());
         ChatService::new(guard)
+    }
+
+    fn trial_draft() -> PersonaSourceDraft {
+        use crate::services::persona::{PersonaSimpleDraft, PersonaStructuredDraft};
+        PersonaSourceDraft {
+            persona_id: "momo".to_string(),
+            version: "1.0.0".to_string(),
+            source: "user".to_string(),
+            simple: PersonaSimpleDraft {
+                name: "默默".to_string(),
+                tagline: "安静陪伴".to_string(),
+                relationship_style: "companion".to_string(),
+                warmth: 3,
+                playfulness: 2,
+                formality: 2,
+                proactivity: 3,
+                brevity: 4,
+                speech_length: "short".to_string(),
+                initiative: "sometimes".to_string(),
+                dislikes: vec!["空洞鼓励".to_string()],
+                examples: vec![],
+            },
+            structured: PersonaStructuredDraft {
+                identity: "你叫默默，是一个安静的桌面伙伴。".to_string(),
+                personality: "- 温和\n- 克制".to_string(),
+                capabilities: "- 陪伴".to_string(),
+                rules_do: vec!["短句回应".to_string()],
+                rules_dont: vec!["不空洞鼓励".to_string()],
+                offline_templates: "## 拒答 / Refusal\n- 这个我现在不适合处理。".to_string(),
+                reactions: "- click.head: 轻声回应".to_string(),
+                examples: String::new(),
+            },
+            source_text: String::new(),
+            preserved_unknown_text: String::new(),
+        }
+    }
+
+    fn text_of(msg: &ChatMessage) -> String {
+        msg.content
+            .iter()
+            .filter_map(|p| match p {
+                crate::services::llm::ContentPart::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn build_trial_history_maps_roles_and_truncates_to_recent() {
+        let turns: Vec<TrialTurn> = (0..30)
+            .map(|i| TrialTurn {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("m{i}"),
+            })
+            .collect();
+        let synth = build_trial_history(&turns);
+        assert_eq!(
+            synth.len(),
+            MAX_TRIAL_HISTORY,
+            "应截断到最近 MAX_TRIAL_HISTORY 条"
+        );
+        assert_eq!(synth.last().unwrap().content, "m29", "保留最近一条");
+        assert_eq!(
+            synth[0].content,
+            format!("m{}", 30 - MAX_TRIAL_HISTORY),
+            "丢弃最早的多余条"
+        );
+    }
+
+    #[test]
+    fn trial_prompt_assembly_uses_profile_identity_and_wraps_current_input() {
+        let draft = trial_draft();
+        let profile = crate::services::persona::compile_draft_for_trial(&draft)
+            .expect("valid draft compiles");
+        let history = build_trial_history(&[TrialTurn {
+            role: "user".to_string(),
+            content: "之前的话".to_string(),
+        }]);
+        let messages = build_messages_from_profile(PromptBuildInput {
+            runtime_profile: &profile,
+            persona_name: "默默",
+            user_nickname: None,
+            pet_nickname: "默默",
+            history: &history,
+            current_input: "你好",
+        })
+        .unwrap();
+
+        assert!(
+            text_of(&messages[0]).contains("当前人格快照"),
+            "system 首条应是 profile 拼出的人格块"
+        );
+        assert!(
+            messages.iter().any(|m| text_of(m) == "之前的话"),
+            "合成 history 应进 prompt"
+        );
+        assert_eq!(
+            text_of(messages.last().unwrap()),
+            "（保持 默默 风格）你好",
+            "当前 user 输入须带 re-anchor wrap"
+        );
     }
 
     #[test]
@@ -1205,8 +1529,7 @@ mod tests {
                     capabilities: "- 陪伴".to_string(),
                     rules_do: vec!["短句回应".to_string()],
                     rules_dont: vec!["不空洞鼓励".to_string()],
-                    offline_templates: "## 拒答 / Refusal\n- 这个我现在不适合处理。"
-                        .to_string(),
+                    offline_templates: "## 拒答 / Refusal\n- 这个我现在不适合处理。".to_string(),
                     reactions: "- click.head: 轻声回应".to_string(),
                     examples: "- 用户：你好\n  默默：我在。".to_string(),
                 },
@@ -1240,7 +1563,9 @@ mod tests {
         let persona = load_persona_for_conversation_with_conn(&mut conn, conv_id)
             .await
             .unwrap();
-        let profile = load_runtime_profile_for_persona(&mut conn, &persona).await.unwrap();
+        let profile = load_runtime_profile_for_persona(&mut conn, &persona)
+            .await
+            .unwrap();
 
         assert_eq!(persona.snapshot_id, first.snapshot_id);
         assert_eq!(profile.identity_prompt, "第一版身份");

@@ -86,6 +86,15 @@ export type StreamEvent =
   | { type: 'delta'; token: string }
   | { type: 'done'; totalTokens: number; finishReason: ChatFinishReason }
   | { type: 'error'; errorKind: LLMErrorKind | 'DbError'; message: string }
+  | {
+      // SafetyGuard 命中后覆盖累积内容（mirror service.rs::StreamEvent::ReplaceMessage，
+      // 枚举级 camelCase → tag 'replaceMessage'）。主 chat store 当前不消费；试聊 store 消费它
+      // 以在临时气泡上应用 redact/block 结果。reason mirror ReplaceReason（snake_case）。
+      type: 'replaceMessage'
+      messageId: string
+      newContent: string
+      reason: 'soft_block_token' | 'final_redacted' | 'final_blocked' | 'scan_failed'
+    }
 
 /**
  * 单条 conversation summary（侧边栏列表用，与 services/chat/conversation.rs::ConversationSummary 对齐）。

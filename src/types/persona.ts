@@ -53,6 +53,22 @@ export interface PersonaSaveResult {
   diagnostics: PersonaDiagnostic[]
 }
 
+export interface PersonaImportResult {
+  persona_id: string
+  snapshot_id: string
+  version: string
+  activated: boolean
+  diagnostics: PersonaDiagnostic[]
+}
+
+export interface PersonaExportResult {
+  persona_id: string
+  snapshot_id: string
+  version: string
+  filename: string
+  path: string
+}
+
 export interface SoulRuntimeProfile {
   identity_prompt: string
   capabilities_prompt: string

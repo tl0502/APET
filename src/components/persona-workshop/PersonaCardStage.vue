@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [id: string]
+  edit: [id: string]
 }>()
 
 const sortedPersonas = computed(() => [
@@ -34,7 +35,9 @@ const sortedPersonas = computed(() => [
         class="persona-card"
         :class="{ 'persona-card--selected': persona.id === props.selectedId }"
         :aria-pressed="persona.id === props.selectedId"
+        title="单击选择 · 双击编辑"
         @click="emit('select', persona.id)"
+        @dblclick="emit('edit', persona.id)"
       >
         <span class="persona-card__label">角色卡</span>
         <strong class="persona-card__name">{{ persona.name }}</strong>

@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{Connection, Transaction};
+use std::fs;
 use tauri::{AppHandle, Runtime};
 use thiserror::Error;
 
@@ -56,6 +57,8 @@ const PERSONA_DANGEROUS_FIELDS: &[&str] = &[
     "system_prefix",
     "clipboard",
     "screen_capture",
+    "<script",
+    "{{env",
 ];
 
 #[derive(Debug, Deserialize, Default)]
@@ -93,10 +96,16 @@ pub enum PersonaError {
     AppConfigDir(String),
     #[error("validation failed: {0}")]
     Validation(String),
+    #[error("persona not found: {0}")]
+    PersonaNotFound(String),
+    #[error("cannot delete persona: {0}")]
+    CannotDelete(String),
     #[error("snapshot not found: {0}")]
     SnapshotNotFound(i64),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("file io error: {0}")]
+    FileIo(String),
 }
 
 impl From<sqlx::Error> for PersonaError {
@@ -117,6 +126,12 @@ impl From<DbError> for PersonaError {
 impl From<serde_json::Error> for PersonaError {
     fn from(e: serde_json::Error) -> Self {
         PersonaError::Serialization(e.to_string())
+    }
+}
+
+impl From<std::io::Error> for PersonaError {
+    fn from(e: std::io::Error) -> Self {
+        PersonaError::FileIo(e.to_string())
     }
 }
 
@@ -217,6 +232,32 @@ pub struct PersonaSaveResult {
     pub version: String,
     pub activated: bool,
     pub diagnostics: Vec<PersonaDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonaImportResult {
+    pub persona_id: String,
+    pub snapshot_id: String,
+    pub version: String,
+    pub activated: bool,
+    pub diagnostics: Vec<PersonaDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonaExportResult {
+    pub persona_id: String,
+    pub snapshot_id: String,
+    pub version: String,
+    pub filename: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone)]
+struct PersonaExportSource {
+    persona_id: String,
+    version: String,
+    filename: String,
+    content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,6 +413,33 @@ fn project_draft_to_source(draft: &PersonaSourceDraft) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn build_export_source(persona_id: &str, name: &str, version: &str, content: &str) -> String {
+    let body = content.trim();
+    if body.starts_with("---") && parse_persona(body).is_ok() {
+        return body.to_string();
+    }
+    format!(
+        "---\nschema_version: 2\nid: {persona_id}\nname: {name}\nversion: {version}\n---\n\n{body}\n"
+    )
+}
+
+fn safe_filename_part(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches([' ', '.']).trim();
+    if trimmed.is_empty() {
+        "persona".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn source_hash(source_text: &str) -> String {
@@ -769,12 +837,21 @@ fn split_markdown_rules(rules: &str) -> (Vec<String>, Vec<String>) {
 }
 
 fn compile_parsed_persona(parsed: &ParsedPersona, source: &str) -> CompiledPersonaDraft {
+    let draft = draft_from_parsed_persona(parsed, source, &parsed.frontmatter.version);
+    compile_persona_draft(&draft)
+}
+
+fn draft_from_parsed_persona(
+    parsed: &ParsedPersona,
+    source: &str,
+    version: &str,
+) -> PersonaSourceDraft {
     let rules = extract_markdown_section(&parsed.raw_markdown, "行为规则");
     let (rules_do, rules_dont) = split_markdown_rules(&rules);
     let examples = extract_markdown_section(&parsed.raw_markdown, "例对话");
-    let draft = PersonaSourceDraft {
+    PersonaSourceDraft {
         persona_id: parsed.frontmatter.id.clone(),
-        version: parsed.frontmatter.version.clone(),
+        version: version.to_string(),
         source: source.to_string(),
         simple: PersonaSimpleDraft {
             name: parsed.frontmatter.name.clone(),
@@ -807,8 +884,18 @@ fn compile_parsed_persona(parsed: &ParsedPersona, source: &str) -> CompiledPerso
         },
         source_text: parsed.raw_markdown.clone(),
         preserved_unknown_text: String::new(),
-    };
-    compile_persona_draft(&draft)
+    }
+}
+
+fn validation_error_from_diagnostics(diagnostics: &[PersonaDiagnostic]) -> PersonaError {
+    PersonaError::Validation(
+        diagnostics
+            .iter()
+            .filter(|d| d.severity == PersonaDiagnosticSeverity::Error)
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
 }
 
 fn compile_persona_draft(draft: &PersonaSourceDraft) -> CompiledPersonaDraft {
@@ -976,6 +1063,20 @@ pub fn validate_draft(draft: &PersonaSourceDraft) -> PersonaDraftValidationResul
         diagnostics: compiled.diagnostics,
         token_estimate: compiled.token_estimate,
     }
+}
+
+/// 编译 draft 为内存态 runtime profile，供试聊（A2-D 沙盒）用。
+///
+/// blocking 诊断时不产出 profile —— 与 save 路径同款 blocking 判定（`compile_persona_draft`
+/// + `has_blocking_diagnostics`），保证"所感即所存"：试聊跑的人格与保存后正式运行的字节同源。
+pub(crate) fn compile_draft_for_trial(
+    draft: &PersonaSourceDraft,
+) -> Result<SoulRuntimeProfile, Vec<PersonaDiagnostic>> {
+    let compiled = compile_persona_draft(draft);
+    if has_blocking_diagnostics(&compiled.diagnostics) {
+        return Err(compiled.diagnostics);
+    }
+    Ok(compiled.runtime_profile)
 }
 
 /// 启动入口:解析所有内置人格 → 依次 UPSERT personas + idempotent INSERT persona_snapshots。
@@ -1217,6 +1318,73 @@ pub(crate) async fn activate_persona_with_conn(
     Ok(())
 }
 
+pub async fn delete_persona<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), PersonaError> {
+    let mut conn = open_app_db(app).await?;
+    delete_persona_with_conn(&mut conn, id).await?;
+    conn.close().await?;
+    Ok(())
+}
+
+pub(crate) async fn delete_persona_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+) -> Result<(), PersonaError> {
+    let persona_id = id.trim();
+    if persona_id.is_empty() {
+        return Err(PersonaError::Validation("persona id 不能为空".to_string()));
+    }
+
+    let row: Option<(String, i64)> =
+        sqlx::query_as("SELECT source, is_active FROM personas WHERE id = ?")
+            .bind(persona_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let (source, is_active) =
+        row.ok_or_else(|| PersonaError::PersonaNotFound(persona_id.to_string()))?;
+
+    if source == "builtin" {
+        return Err(PersonaError::CannotDelete(
+            "内置人格不能删除；请复制为新人格后编辑".to_string(),
+        ));
+    }
+    if is_active != 0 {
+        return Err(PersonaError::CannotDelete(
+            "不能删除当前激活人格；请先切换到其他人格".to_string(),
+        ));
+    }
+
+    let conversation_refs: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM conversations
+        WHERE persona_id = ?
+           OR persona_snapshot_id IN (
+                SELECT id FROM persona_snapshots WHERE persona_id = ?
+           )
+        "#,
+    )
+    .bind(persona_id)
+    .bind(persona_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    if conversation_refs > 0 {
+        return Err(PersonaError::CannotDelete(
+            "该人格已有对话引用，不能删除；请先删除相关对话".to_string(),
+        ));
+    }
+
+    let mut tx = conn.begin().await?;
+    let result = sqlx::query("DELETE FROM personas WHERE id = ?")
+        .bind(persona_id)
+        .execute(&mut *tx)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(PersonaError::PersonaNotFound(persona_id.to_string()));
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn save_draft<R: Runtime>(
     app: &AppHandle<R>,
     draft: PersonaSourceDraft,
@@ -1235,15 +1403,7 @@ pub(crate) async fn save_draft_with_conn(
 ) -> Result<PersonaSaveResult, PersonaError> {
     let compiled = compile_persona_draft(&draft);
     if has_blocking_diagnostics(&compiled.diagnostics) {
-        return Err(PersonaError::Validation(
-            compiled
-                .diagnostics
-                .iter()
-                .filter(|d| d.severity == PersonaDiagnosticSeverity::Error)
-                .map(|d| d.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; "),
-        ));
+        return Err(validation_error_from_diagnostics(&compiled.diagnostics));
     }
 
     let persona_id = draft.persona_id.trim();
@@ -1305,6 +1465,146 @@ pub(crate) async fn save_draft_with_conn(
     })
 }
 
+pub async fn import_persona_from_path<R: Runtime>(
+    app: &AppHandle<R>,
+    path: String,
+    activate: bool,
+) -> Result<PersonaImportResult, PersonaError> {
+    let content = fs::read_to_string(&path)?;
+    let mut conn = open_app_db(app).await?;
+    let result = import_persona_source_with_conn(&mut conn, &content, &path, activate).await?;
+    conn.close().await?;
+    Ok(result)
+}
+
+pub(crate) async fn import_persona_source_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    source_text: &str,
+    file_path: &str,
+    activate: bool,
+) -> Result<PersonaImportResult, PersonaError> {
+    let parsed = parse_persona(source_text)?;
+    let requested_id = parsed.frontmatter.id.trim();
+    if requested_id.is_empty() {
+        return Err(PersonaError::Validation("persona id 不能为空".to_string()));
+    }
+    // 导入 == 新建：解析一个不撞库的新 persona id（镜像前端 draft.ts::nextPersonaId）。
+    // 撞 builtin / active / 同名既有人格时落到 `<id>-2` / `-3`…，绝不 UPDATE 覆盖既有行。
+    let persona_id = next_available_persona_id_with_conn(conn, requested_id).await?;
+    // 新 id 名下无快照 → next_available_version 直接返回文件版本（空则回落 1.0.0）。
+    let version =
+        next_available_version_with_conn(conn, &persona_id, parsed.frontmatter.version.trim())
+            .await?;
+    let draft = draft_from_parsed_persona(&parsed, "imported", &version);
+    let compiled = compile_persona_draft(&draft);
+    if has_blocking_diagnostics(&compiled.diagnostics) {
+        return Err(validation_error_from_diagnostics(&compiled.diagnostics));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let runtime_profile_json = serde_json::to_string(&compiled.runtime_profile)?;
+
+    let mut tx = conn.begin().await?;
+    // id 已保证唯一 → 普通 INSERT；不再 ON CONFLICT DO UPDATE（导入永不改写既有人格，
+    // 万一并发撞 id 也宁可 INSERT 报错暴露，也不静默覆盖）。
+    sqlx::query(
+        r#"
+        INSERT INTO personas
+            (id, name, version, source, file_path, is_active, created_at, updated_at, active_snapshot_id)
+        VALUES (?, ?, ?, 'imported', ?, 0, ?, ?, NULL)
+        "#,
+    )
+    .bind(&persona_id)
+    .bind(parsed.frontmatter.name.trim())
+    .bind(&version)
+    .bind(file_path)
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+
+    let snapshot_id = insert_snapshot(
+        &mut tx,
+        &persona_id,
+        &version,
+        parsed.raw_markdown.trim(),
+        &now,
+    )
+    .await?;
+    insert_snapshot_profile(
+        &mut tx,
+        snapshot_id,
+        &persona_id,
+        &runtime_profile_json,
+        &compiled.source_hash,
+        &now,
+    )
+    .await?;
+
+    if activate {
+        activate_snapshot_in_tx(&mut tx, snapshot_id, &now).await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(PersonaImportResult {
+        persona_id,
+        snapshot_id: snapshot_id.to_string(),
+        version,
+        activated: activate,
+        diagnostics: compiled.diagnostics,
+    })
+}
+
+pub async fn export_persona_snapshot_to_path<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot_id: i64,
+    path: String,
+) -> Result<PersonaExportResult, PersonaError> {
+    let mut conn = open_app_db(app).await?;
+    let source = export_persona_snapshot_source_with_conn(&mut conn, snapshot_id).await?;
+    conn.close().await?;
+    fs::write(&path, &source.content)?;
+    Ok(PersonaExportResult {
+        persona_id: source.persona_id,
+        snapshot_id: snapshot_id.to_string(),
+        version: source.version,
+        filename: source.filename,
+        path,
+    })
+}
+
+async fn export_persona_snapshot_source_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    snapshot_id: i64,
+) -> Result<PersonaExportSource, PersonaError> {
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        r#"
+        SELECT p.id, p.name, s.version, s.content
+        FROM persona_snapshots s
+        INNER JOIN personas p ON p.id = s.persona_id
+        WHERE s.id = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(snapshot_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (persona_id, name, version, content) =
+        row.ok_or(PersonaError::SnapshotNotFound(snapshot_id))?;
+    let filename = format!(
+        "{}-{}.soul.md",
+        safe_filename_part(&persona_id),
+        safe_filename_part(&version)
+    );
+    Ok(PersonaExportSource {
+        content: build_export_source(&persona_id, &name, &version, &content),
+        persona_id,
+        version,
+        filename,
+    })
+}
+
 pub async fn activate_snapshot<R: Runtime>(
     app: &AppHandle<R>,
     snapshot_id: i64,
@@ -1350,6 +1650,34 @@ pub(crate) async fn get_snapshot_profile_with_conn(
         .map(|(json,)| json)
         .ok_or(PersonaError::SnapshotNotFound(snapshot_id))?;
     Ok(serde_json::from_str(&json)?)
+}
+
+/// 解析一个不与既有 personas 冲突的 persona id（镜像前端 draft.ts::nextPersonaId）。
+/// base 空闲就用 base；撞了就依次试 `base-2` / `base-3`…。导入用它保证"导入 == 新建"：
+/// 绝不复用既有 id 走 ON CONFLICT 覆盖既有（含 builtin / active / 同名）人格行。
+async fn next_available_persona_id_with_conn(
+    conn: &mut sqlx::SqliteConnection,
+    base: &str,
+) -> Result<String, PersonaError> {
+    let trimmed = base.trim();
+    let base = if trimmed.is_empty() {
+        "imported-persona"
+    } else {
+        trimmed
+    };
+    let mut candidate = base.to_string();
+    let mut index = 2;
+    loop {
+        let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM personas WHERE id = ? LIMIT 1")
+            .bind(&candidate)
+            .fetch_optional(&mut *conn)
+            .await?;
+        if exists.is_none() {
+            return Ok(candidate);
+        }
+        candidate = format!("{base}-{index}");
+        index += 1;
+    }
 }
 
 async fn next_available_version_with_conn(
@@ -1608,6 +1936,35 @@ mod tests {
             source_text: String::new(),
             preserved_unknown_text: String::new(),
         }
+    }
+
+    #[test]
+    fn compile_draft_for_trial_returns_profile_when_valid() {
+        let draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        let profile = compile_draft_for_trial(&draft).expect("valid draft compiles");
+        assert_eq!(profile.identity_prompt, draft.structured.identity.trim());
+        assert_eq!(
+            profile.capabilities_prompt,
+            draft.structured.capabilities.trim()
+        );
+        assert!(
+            profile.style_prompt.contains("温和"),
+            "性格内容应进 style_prompt（试聊与保存同源）；got {}",
+            profile.style_prompt
+        );
+    }
+
+    #[test]
+    fn compile_draft_for_trial_errs_on_blocking() {
+        let mut draft = valid_workshop_draft("momo", "默默", "1.0.0");
+        draft.structured.identity = "   ".to_string();
+        let err = compile_draft_for_trial(&draft).expect_err("blocking draft must error");
+        assert!(
+            err.iter()
+                .any(|d| d.code == "identity.empty"
+                    && d.severity == PersonaDiagnosticSeverity::Error),
+            "应携带 identity.empty 阻塞诊断；got {err:?}"
+        );
     }
 
     #[test]
@@ -2177,6 +2534,265 @@ mod tests {
             snap_count.0, 2,
             "snapshots accumulate per-version history (audit trail)"
         );
+    }
+
+    #[tokio::test]
+    async fn export_snapshot_source_restores_frontmatter_for_round_trip() {
+        let (_dir, mut conn) = fresh_db().await;
+        let parsed = parse_persona(MOMO_RAW).unwrap();
+        seed_persona_with_conn(&mut conn, &parsed, "builtin", MOMO_BUNDLED_PATH, true)
+            .await
+            .unwrap();
+
+        let snapshot_id: i64 =
+            sqlx::query_scalar("SELECT active_snapshot_id FROM personas WHERE id = 'momo'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let exported = export_persona_snapshot_source_with_conn(&mut conn, snapshot_id)
+            .await
+            .unwrap();
+
+        assert_eq!(exported.persona_id, "momo");
+        assert_eq!(exported.version, "1.0.0");
+        assert_eq!(exported.filename, "momo-1.0.0.soul.md");
+        assert!(
+            exported
+                .content
+                .starts_with("---\nschema_version: 2\nid: momo\n"),
+            "exported content must include reconstructable frontmatter; got {}",
+            exported.content
+        );
+
+        let reparsed = parse_persona(&exported.content).expect("export must be importable");
+        assert_eq!(reparsed.frontmatter.id, "momo");
+        assert!(reparsed.raw_markdown.contains("# 身份"));
+    }
+
+    #[tokio::test]
+    async fn import_persona_source_mints_unique_id_on_collision_without_clobbering() {
+        let (_dir, mut conn) = fresh_db().await;
+        let source = [
+            "---",
+            "schema_version: 2",
+            "id: imported",
+            "name: 导入人格",
+            "version: 1.0.0",
+            "---",
+            "# 身份",
+            "你叫导入人格，是一个测试用桌面伙伴。",
+            "",
+            "# 性格",
+            "- 稳定",
+            "",
+            "# 能力",
+            "- 帮用户检查人格导入导出",
+            "",
+            "# 行为规则",
+            "## Do",
+            "- 明确说明当前动作",
+            "",
+            "## Don't",
+            "- 不声称能读取屏幕",
+        ]
+        .join("\n");
+
+        let first =
+            import_persona_source_with_conn(&mut conn, &source, "C:\\tmp\\imported.soul.md", false)
+                .await
+                .unwrap();
+        let second =
+            import_persona_source_with_conn(&mut conn, &source, "C:\\tmp\\imported.soul.md", false)
+                .await
+                .unwrap();
+
+        // 导入 == 新建：第二次导入同 id 不覆盖第一次，而是落到派生的 `imported-2`。
+        assert_eq!(first.persona_id, "imported");
+        assert_eq!(first.version, "1.0.0");
+        assert_eq!(second.persona_id, "imported-2");
+        assert_eq!(second.version, "1.0.0");
+
+        // 两个独立人格，各持 1 个快照（无版本堆叠、无 UPDATE 覆盖）。
+        let first_snapshots: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM persona_snapshots WHERE persona_id = 'imported'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        let second_snapshots: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM persona_snapshots WHERE persona_id = 'imported-2'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(first_snapshots, 1);
+        assert_eq!(second_snapshots, 1);
+
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, source FROM personas WHERE id IN ('imported', 'imported-2') ORDER BY id",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("imported".to_string(), "imported".to_string()),
+                ("imported-2".to_string(), "imported".to_string()),
+            ]
+        );
+
+        let profile =
+            get_snapshot_profile_with_conn(&mut conn, second.snapshot_id.parse::<i64>().unwrap())
+                .await
+                .unwrap();
+        assert_eq!(profile.ui_metadata["version"], "1.0.0");
+        assert!(profile.capabilities_prompt.contains("人格导入导出"));
+    }
+
+    #[tokio::test]
+    async fn import_persona_source_does_not_clobber_builtin_on_id_collision() {
+        let (_dir, mut conn) = fresh_db().await;
+        seed_all_builtins(&mut conn).await;
+
+        // frontmatter id 故意撞内置 momo —— 旧实现会 ON CONFLICT 把 momo 翻成 imported。
+        let source = [
+            "---",
+            "schema_version: 2",
+            "id: momo",
+            "name: 冒牌默默",
+            "version: 9.9.9",
+            "---",
+            "# 身份",
+            "你叫冒牌默默，是一个测试用桌面伙伴。",
+            "",
+            "# 性格",
+            "- 稳定",
+            "",
+            "# 能力",
+            "- 验证导入不覆盖内置人格",
+            "",
+            "# 行为规则",
+            "## Do",
+            "- 明确说明当前动作",
+            "",
+            "## Don't",
+            "- 不声称能读取屏幕",
+        ]
+        .join("\n");
+
+        let result =
+            import_persona_source_with_conn(&mut conn, &source, "C:\\tmp\\momo.soul.md", false)
+                .await
+                .unwrap();
+
+        // 内置 momo 一字未动：source 仍 builtin、name 未被覆盖。
+        let (momo_source, momo_name): (String, String) =
+            sqlx::query_as("SELECT source, name FROM personas WHERE id = 'momo'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(momo_source, "builtin", "内置 momo 的 source 不能被导入翻成 imported");
+        assert_ne!(momo_name, "冒牌默默", "内置 momo 的 name 不能被导入覆盖");
+
+        // 导入落到派生的新 id，且为独立 imported 人格。
+        assert_eq!(result.persona_id, "momo-2");
+        let new_source: String =
+            sqlx::query_scalar("SELECT source FROM personas WHERE id = 'momo-2'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(new_source, "imported");
+    }
+
+    #[tokio::test]
+    async fn delete_user_persona_removes_snapshots_and_profiles() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("custom", "自定义人格", "1.0.0");
+        let saved = save_draft_with_conn(&mut conn, draft, false).await.unwrap();
+        let snapshot_id = saved.snapshot_id.parse::<i64>().unwrap();
+
+        delete_persona_with_conn(&mut conn, "custom").await.unwrap();
+
+        let persona_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE id = 'custom'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let snapshot_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM persona_snapshots WHERE persona_id = 'custom'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        let profile_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM persona_snapshot_profiles WHERE snapshot_id = ?",
+        )
+        .bind(snapshot_id)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+
+        assert_eq!(persona_count, 0);
+        assert_eq!(snapshot_count, 0);
+        assert_eq!(profile_count, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_persona_blocks_builtin_personas() {
+        let (_dir, mut conn) = fresh_db().await;
+        seed_all_builtins(&mut conn).await;
+
+        let err = delete_persona_with_conn(&mut conn, "joker")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("内置人格不能删除"));
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE id = 'joker'")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(exists, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_persona_blocks_active_persona() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("custom", "自定义人格", "1.0.0");
+        save_draft_with_conn(&mut conn, draft, true).await.unwrap();
+
+        let err = delete_persona_with_conn(&mut conn, "custom")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("不能删除当前激活人格"));
+    }
+
+    #[tokio::test]
+    async fn delete_persona_blocks_conversation_bound_persona() {
+        let (_dir, mut conn) = fresh_db().await;
+        let draft = valid_workshop_draft("custom", "自定义人格", "1.0.0");
+        let saved = save_draft_with_conn(&mut conn, draft, false).await.unwrap();
+        sqlx::query(
+            "INSERT INTO conversations \
+             (id, persona_id, persona_snapshot_id, started_at, last_activity_at) \
+             VALUES ('01J0PERSONADELETEBLOCK000000', 'custom', ?, '2026-06-20T00:00:00Z', '2026-06-20T00:00:00Z')",
+        )
+        .bind(saved.snapshot_id.parse::<i64>().unwrap())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let err = delete_persona_with_conn(&mut conn, "custom")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("已有对话引用"));
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE id = 'custom'")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(exists, 1);
     }
 
     // ===== 3 内置人格 seed 语义（ADR-009 / #21 Step 2 前置）=====

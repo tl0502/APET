@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef } from 'vue'
-import { ElButton } from 'element-plus'
+import { open, save as saveFileDialog } from '@tauri-apps/plugin-dialog'
+import { ElButton, ElMessageBox } from 'element-plus'
+import { CopyDocument, Delete, Download, Upload } from '@element-plus/icons-vue'
 import PersonaCardStage from './PersonaCardStage.vue'
 import PersonaInspectorDrawer from './PersonaInspectorDrawer.vue'
 import {
@@ -16,7 +18,10 @@ import type {
   PersonaWorkshopMode,
 } from '@/features/persona-workshop/types'
 import {
+  deletePersona,
+  exportPersonaSnapshot,
   getActivePersona,
+  importPersonaFromPath,
   listPersonas,
   loadPersona,
   saveAndActivatePersonaDraft,
@@ -31,13 +36,18 @@ defineProps<{
 
 const loading = shallowRef(true)
 const errorMsg = shallowRef<string | null>(null)
+const statusMsg = shallowRef<string | null>(null)
 const personas = ref<PersonaListItem[]>([])
 const selectedId = shallowRef<string | null>(null)
+const selectedSnapshotId = shallowRef<string | null>(null)
 const mode = shallowRef<PersonaWorkshopMode>('simple')
 const draft = ref<PersonaSourceDraft | null>(null)
 const inspectorOpen = shallowRef(false)
 const validating = shallowRef(false)
 const saving = shallowRef(false)
+const importing = shallowRef(false)
+const exporting = shallowRef(false)
+const deleting = shallowRef(false)
 const serverDiagnostics = ref<PersonaDiagnostic[] | null>(null)
 const saveResult = shallowRef<PersonaSaveResult | null>(null)
 const draftOrigin = shallowRef<'saved' | 'new' | 'copy'>('saved')
@@ -47,6 +57,21 @@ const localDiagnostics = computed(() => (draft.value ? validatePersonaDraft(draf
 const diagnostics = computed(() => serverDiagnostics.value ?? localDiagnostics.value)
 const tokenEstimate = computed(() => (draft.value ? estimateDraftTokens(draft.value) : 0))
 const personaName = computed(() => draft.value?.simple.name ?? '未选择人格')
+const selectedPersona = computed(() =>
+  selectedId.value ? personas.value.find((persona) => persona.id === selectedId.value) : null,
+)
+const canExportSnapshot = computed(() => {
+  if (!selectedSnapshotId.value || !draft.value || draftOrigin.value !== 'saved') return false
+  const snapshotId = Number(selectedSnapshotId.value)
+  if (!Number.isFinite(snapshotId) || snapshotId <= 0) return false
+  return draftFingerprint(draft.value) === savedDraftFingerprint.value
+})
+const canDeleteSelected = computed(() => {
+  if (!draft.value || draftOrigin.value !== 'saved') return false
+  if (!selectedPersona.value) return false
+  if (selectedPersona.value.source === 'builtin' || selectedPersona.value.is_active) return false
+  return !saving.value && !exporting.value && !deleting.value
+})
 const draftStateLabel = computed(() => {
   if (!draft.value) return '未选择'
   if (draftOrigin.value === 'new') return '新建未保存'
@@ -69,6 +94,7 @@ function resetTransientState() {
   serverDiagnostics.value = null
   saveResult.value = null
   errorMsg.value = null
+  statusMsg.value = null
 }
 
 async function loadInitial() {
@@ -77,6 +103,7 @@ async function loadInitial() {
     const [list, active] = await Promise.all([listPersonas(), getActivePersona()])
     personas.value = list
     selectedId.value = active.id
+    selectedSnapshotId.value = active.snapshot_id
     draft.value = createPersonaDraft(active)
     rememberSavedDraft(draft.value)
     resetTransientState()
@@ -88,12 +115,12 @@ async function loadInitial() {
 }
 
 async function selectPersona(id: string) {
-  inspectorOpen.value = true
   if (selectedId.value === id) return
   selectedId.value = id
   try {
     const persona = await loadPersona(id)
     draft.value = createPersonaDraft(persona)
+    selectedSnapshotId.value = persona.snapshot_id
     rememberSavedDraft(draft.value)
     mode.value = 'simple'
     resetTransientState()
@@ -102,11 +129,18 @@ async function selectPersona(id: string) {
   }
 }
 
+// 双击进编辑：先确保选中（含拉取 draft），再开抽屉。单击只选中（见 selectPersona）。
+async function editPersona(id: string) {
+  if (selectedId.value !== id) await selectPersona(id)
+  inspectorOpen.value = true
+}
+
 function createNewPersona() {
   const existingIds = personas.value.map((persona) => persona.id)
   const nextDraft = createBlankPersonaDraft(existingIds)
   draft.value = nextDraft
   selectedId.value = nextDraft.personaId
+  selectedSnapshotId.value = null
   draftOrigin.value = 'new'
   savedDraftFingerprint.value = ''
   inspectorOpen.value = true
@@ -120,6 +154,7 @@ function duplicateCurrentPersona() {
   const nextDraft = duplicatePersonaDraft(draft.value, existingIds)
   draft.value = nextDraft
   selectedId.value = nextDraft.personaId
+  selectedSnapshotId.value = null
   draftOrigin.value = 'copy'
   savedDraftFingerprint.value = ''
   inspectorOpen.value = true
@@ -131,6 +166,7 @@ function updateDraft(nextDraft: PersonaSourceDraft) {
   draft.value = nextDraft
   serverDiagnostics.value = null
   saveResult.value = null
+  statusMsg.value = null
 }
 
 async function validateCurrentDraft() {
@@ -162,14 +198,119 @@ async function persistCurrentDraft(activate: boolean) {
       source: 'user',
     }
     draft.value = savedDraft
+    selectedSnapshotId.value = result.snapshot_id
     rememberSavedDraft(savedDraft)
     personas.value = await listPersonas()
     selectedId.value = result.persona_id
+    statusMsg.value = activate ? '已保存并激活' : '已保存快照'
     errorMsg.value = null
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     saving.value = false
+  }
+}
+
+async function importSoulMarkdown() {
+  importing.value = true
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Soul Markdown', extensions: ['md'] }],
+    })
+    if (typeof selected !== 'string') return
+
+    const result = await importPersonaFromPath(selected, false)
+    const [nextList, imported] = await Promise.all([
+      listPersonas(),
+      loadPersona(result.persona_id),
+    ])
+    personas.value = nextList
+    selectedId.value = result.persona_id
+    selectedSnapshotId.value = result.snapshot_id
+    draft.value = createPersonaDraft(imported)
+    rememberSavedDraft(draft.value)
+    inspectorOpen.value = true
+    mode.value = 'source'
+    serverDiagnostics.value = result.diagnostics
+    saveResult.value = {
+      persona_id: result.persona_id,
+      snapshot_id: result.snapshot_id,
+      version: result.version,
+      activated: result.activated,
+      diagnostics: result.diagnostics,
+    }
+    statusMsg.value = `已导入 ${imported.name} v${result.version}`
+    errorMsg.value = null
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    importing.value = false
+  }
+}
+
+async function exportSoulMarkdown() {
+  if (!selectedSnapshotId.value) return
+  const snapshotId = Number(selectedSnapshotId.value)
+  if (!Number.isFinite(snapshotId) || snapshotId <= 0) {
+    errorMsg.value = '当前人格没有可导出的有效快照'
+    return
+  }
+  exporting.value = true
+  try {
+    const defaultPath = `${draft.value?.personaId ?? 'persona'}-${draft.value?.version ?? '1.0.0'}.soul.md`
+    const target = await saveFileDialog({
+      defaultPath,
+      filters: [{ name: 'Soul Markdown', extensions: ['md'] }],
+    })
+    if (!target) return
+
+    const result = await exportPersonaSnapshot(snapshotId, target)
+    statusMsg.value = `已导出 ${result.filename}`
+    errorMsg.value = null
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    exporting.value = false
+  }
+}
+
+async function deleteCurrentPersona() {
+  if (!draft.value || !selectedId.value || !canDeleteSelected.value) return
+  const personaId = selectedId.value
+  const label = personaName.value
+  try {
+    await ElMessageBox.confirm(
+      `删除「${label}」？关联快照会一并清除，此操作不可撤销。`,
+      '确认删除人格',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  deleting.value = true
+  try {
+    await deletePersona(personaId)
+    const [nextList, active] = await Promise.all([listPersonas(), getActivePersona()])
+    personas.value = nextList
+    selectedId.value = active.id
+    selectedSnapshotId.value = active.snapshot_id
+    draft.value = createPersonaDraft(active)
+    rememberSavedDraft(draft.value)
+    inspectorOpen.value = false
+    mode.value = 'simple'
+    resetTransientState()
+    statusMsg.value = `已删除 ${label}`
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -186,12 +327,55 @@ onMounted(() => {
         <h2 class="persona-workshop__title">人格工坊</h2>
       </div>
       <div class="persona-workshop__actions">
+        <div
+          v-if="draft"
+          class="persona-workshop__context-actions"
+          aria-label="当前人格操作"
+        >
+          <ElButton
+            size="small"
+            :icon="CopyDocument"
+            :disabled="saving || deleting"
+            @click="duplicateCurrentPersona"
+          >
+            复制为新人格
+          </ElButton>
+          <ElButton
+            size="small"
+            :icon="Download"
+            :disabled="!canExportSnapshot || exporting || saving || deleting"
+            :loading="exporting"
+            @click="exportSoulMarkdown"
+          >
+            导出 .soul.md
+          </ElButton>
+          <ElButton
+            size="small"
+            type="danger"
+            plain
+            :icon="Delete"
+            :disabled="!canDeleteSelected"
+            :loading="deleting"
+            @click="deleteCurrentPersona"
+          >
+            删除人格
+          </ElButton>
+        </div>
+        <ElButton
+          size="small"
+          :icon="Upload"
+          :loading="importing"
+          @click="importSoulMarkdown"
+        >
+          导入 .soul.md
+        </ElButton>
         <ElButton size="small" type="primary" @click="createNewPersona">新建人格</ElButton>
         <ElButton size="small" @click="loadInitial">刷新</ElButton>
       </div>
     </header>
 
-    <p v-if="errorMsg" class="persona-workshop__error">读取失败：{{ errorMsg }}</p>
+    <p v-if="errorMsg" class="persona-workshop__error">操作失败：{{ errorMsg }}</p>
+    <p v-else-if="statusMsg" class="persona-workshop__status">{{ statusMsg }}</p>
 
     <div class="persona-workshop__layout">
       <main
@@ -203,6 +387,7 @@ onMounted(() => {
           :selected-id="selectedId"
           :loading="loading"
           @select="selectPersona"
+          @edit="editPersona"
         />
       </main>
 
@@ -219,7 +404,6 @@ onMounted(() => {
         :draft-state-label="draftStateLabel"
         @close="inspectorOpen = false"
         @validate="validateCurrentDraft"
-        @duplicate="duplicateCurrentPersona"
         @save="persistCurrentDraft(false)"
         @save-and-activate="persistCurrentDraft(true)"
         @update:mode="mode = $event"
@@ -266,11 +450,31 @@ onMounted(() => {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--aipet-space-2);
+  min-width: 0;
+}
+
+.persona-workshop__context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--aipet-space-2);
+  min-width: 0;
+  padding-right: var(--aipet-space-2);
+  border-right: 1px solid var(--aipet-color-border-faint);
+}
+
+.persona-workshop__actions :deep(.el-button) {
+  margin-left: 0;
 }
 
 .persona-workshop__error {
   margin: 0;
   color: var(--aipet-color-danger);
+}
+
+.persona-workshop__status {
+  margin: 0;
+  color: var(--aipet-color-success);
 }
 
 .persona-workshop__layout {

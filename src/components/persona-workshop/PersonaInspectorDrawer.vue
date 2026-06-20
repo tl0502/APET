@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ElButton, ElIcon, ElTag } from 'element-plus'
-import { Check, CircleCheckFilled, Close, WarningFilled } from '@element-plus/icons-vue'
+import {
+  Check,
+  CircleCheckFilled,
+  Close,
+  WarningFilled,
+} from '@element-plus/icons-vue'
 import PersonaEditorTabs from './PersonaEditorTabs.vue'
 import type {
   PersonaDiagnostic,
@@ -26,7 +31,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   validate: []
-  duplicate: []
   save: []
   'save-and-activate': []
   'update:mode': [mode: PersonaWorkshopMode]
@@ -143,12 +147,6 @@ const titleId = 'persona-inspector-title'
 
           <div class="persona-inspector__actions">
             <ElButton
-              :disabled="!props.draft || props.saving"
-              @click="emit('duplicate')"
-            >
-              复制为新人格
-            </ElButton>
-            <ElButton
               :disabled="!props.draft || props.validating || props.saving"
               :loading="props.validating"
               :icon="Check"
@@ -242,6 +240,7 @@ const titleId = 'persona-inspector-title'
 }
 
 .persona-inspector__identity {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -270,6 +269,7 @@ const titleId = 'persona-inspector-title'
 
 .persona-inspector__close {
   flex: 0 0 auto;
+  align-self: flex-start;
 }
 
 .persona-inspector__editor {
@@ -419,8 +419,14 @@ const titleId = 'persona-inspector-title'
   }
 
   .persona-inspector__header {
+    flex-direction: column;
+    align-items: stretch;
     min-height: 74px;
     padding: var(--aipet-space-4) var(--aipet-space-4) var(--aipet-space-3);
+  }
+
+  .persona-inspector__close {
+    align-self: flex-end;
   }
 
   .persona-inspector__editor {

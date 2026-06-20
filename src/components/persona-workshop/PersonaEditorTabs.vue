@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { ElButton, ElInput, ElSlider } from 'element-plus'
 import PersonaExampleEditor from './PersonaExampleEditor.vue'
+import TrialChatPanel from './TrialChatPanel.vue'
 import {
   getDraftExamplePairs,
   MAX_PERSONA_EXAMPLES,
@@ -28,6 +29,7 @@ const modeItems: Array<{ id: PersonaWorkshopMode; label: string }> = [
   { id: 'simple', label: '塑形' },
   { id: 'structured', label: '结构' },
   { id: 'examples', label: '示例' },
+  { id: 'trial', label: '试聊' },
   { id: 'source', label: '源码' },
 ]
 
@@ -196,6 +198,10 @@ function updateExamples(pairs: PersonaExamplePair[]) {
         :max-examples="MAX_PERSONA_EXAMPLES"
         @update:pairs="updateExamples"
       />
+    </div>
+
+    <div v-else-if="props.mode === 'trial'" class="persona-editor__body">
+      <TrialChatPanel :draft="props.draft" />
     </div>
 
     <div v-else class="persona-editor__body">

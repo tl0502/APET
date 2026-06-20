@@ -1,7 +1,12 @@
+import { Channel } from '@tauri-apps/api/core'
+
 import { invoke } from './ipc'
 import type { PersonaSourceDraft } from '@/features/persona-workshop/types'
+import type { StreamEvent } from '@/types/chat'
 import type {
   PersonaDraftValidationResult,
+  PersonaExportResult,
+  PersonaImportResult,
   PersonaListItem,
   PersonaSaveResult,
   PersonaSummary,
@@ -50,4 +55,47 @@ export function activatePersonaSnapshot(snapshotId: number): Promise<void> {
 
 export function getPersonaSnapshotProfile(snapshotId: number): Promise<SoulRuntimeProfile> {
   return invoke<SoulRuntimeProfile>('persona_get_snapshot_profile', { snapshotId })
+}
+
+export function importPersonaFromPath(
+  path: string,
+  activate = false,
+): Promise<PersonaImportResult> {
+  return invoke<PersonaImportResult>('persona_import', { path, activate })
+}
+
+export function exportPersonaSnapshot(
+  snapshotId: number,
+  path: string,
+): Promise<PersonaExportResult> {
+  return invoke<PersonaExportResult>('persona_export_snapshot', { snapshotId, path })
+}
+
+export function deletePersona(id: string): Promise<void> {
+  return invoke<void>('persona_delete', { id })
+}
+
+/** 试聊（A2-D）history 单条；与 Rust service.rs::TrialTurn 对齐（camelCase）。 */
+export interface TrialTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/** 试聊同步返回；只含 assistant 临时 id（不落库，故无 conversationId）。 */
+export interface TrialSendResult {
+  messageId: string
+}
+
+/**
+ * 人格工坊试聊：用未保存 draft 跑流式，**零持久副作用**（不建 conversation/message/snapshot）。
+ * 流式事件走 onStream channel（delta/done/error/replaceMessage）；IPC 立即返 messageId。
+ * 取消复用 chat 的 cancelChat(messageId)（后端同一 active_streams map）。
+ */
+export function trialSend(
+  draft: PersonaSourceDraft,
+  history: TrialTurn[],
+  input: string,
+  onStream: Channel<StreamEvent>,
+): Promise<TrialSendResult> {
+  return invoke<TrialSendResult>('persona_trial_send', { draft, history, input, onStream })
 }

@@ -40,10 +40,12 @@ use crate::services::chat::conversation::{
     archive_conversation, create_conversation_for_snapshot, delete_conversation,
     list_conversations, rename_conversation, set_active_conversation, ConversationSummary,
 };
-use crate::services::chat::service::{ChatService, SendResult, StreamEvent};
+use crate::services::chat::service::{
+    ChatService, SendResult, StreamEvent, TrialSendResult, TrialTurn,
+};
 use crate::services::config;
 use crate::services::memory::MessageRecord;
-use crate::services::persona::{load_active_persona, load_persona};
+use crate::services::persona::{load_active_persona, load_persona, PersonaSourceDraft};
 
 const INPUT_MAX_LEN: usize = 8000;
 const HISTORY_LIMIT_MAX: u32 = 1000;
@@ -111,6 +113,33 @@ pub async fn chat_send(
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
         svc.run_stream(&app_clone, prepared, onStream).await;
+    });
+    Ok(result)
+}
+
+/// 人格工坊试聊（A2-D 沙盒）：用未保存 draft 跑流式，**零持久副作用**（不建 conversation /
+/// message / snapshot，不写 memory）。镜像 chat_send 的"同步返 IDs + spawn 流式"契约；
+/// 取消复用 chat_cancel（同一 active_streams map，message_id 唯一）。
+#[tauri::command]
+pub async fn persona_trial_send(
+    app: AppHandle,
+    service: State<'_, ChatService>,
+    draft: PersonaSourceDraft,
+    history: Vec<TrialTurn>,
+    input: String,
+    #[allow(non_snake_case)] onStream: Channel<StreamEvent>,
+) -> Result<TrialSendResult, String> {
+    let input = validate_input(&input)?;
+    let prepared = service
+        .trial_prepare(&app, draft, history, input)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    let result = TrialSendResult {
+        message_id: prepared.assistant_id.clone(),
+    };
+    let svc = service.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        svc.run_trial_stream(prepared, onStream).await;
     });
     Ok(result)
 }

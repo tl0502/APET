@@ -564,8 +564,13 @@ pub fn run() {
             commands::persona::persona_validate_draft,
             commands::persona::persona_save_draft,
             commands::persona::persona_save_and_activate_draft,
+            commands::persona::persona_import,
+            commands::persona::persona_export_snapshot,
+            commands::persona::persona_delete,
             commands::persona::persona_activate_snapshot,
             commands::persona::persona_get_snapshot_profile,
+            // A2-D 试聊沙盒（未保存 draft → 内存 profile → 流式，零落库；定义在 commands::chat）
+            commands::chat::persona_trial_send,
             // #5 nickname（2026-05-09：删 pet 系列，加 announce 开关）
             commands::nickname::nickname_get_user,
             commands::nickname::nickname_set_user,
