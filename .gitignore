@@ -53,26 +53,19 @@ public/avatar/*.vrm
 # Issue / commit 草稿（私人 review 用，不入库）
 docs/_drafts/
 
-# Claude Code 本地状态（按需保留 commands/ 提交）
-.claude/settings.local.json
-.claude/cache/
-.claude/.last_session
-CLAUDE.md
-
 # Python（验证脚本用）
 __pycache__/
 *.pyc
 .venv/
 
-# 本地隔离 worktree
-.worktrees/
-
-# Superpowers 瞬态状态（PID / server marker），content/ HTML 设计资产正常入库
-.superpowers/
-docs/superpowers/
-
-
-codex文件
+# 内部文档 / 协作入口（仅本地保留，不对外展示）
+docs/
 AGENTS.md
-docs\agent-memory.md
+CLAUDE.md
+GEMINI.md
+
+# Agent / IDE 本地状态
 .codex/
+.claude/
+.superpowers/
+.worktrees/
